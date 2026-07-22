@@ -1,95 +1,45 @@
-import { lstat, readFile, realpath } from "node:fs/promises";
-import path from "node:path";
+import { readFile } from "node:fs/promises";
 import {
-  createAgentSession,
-  DefaultResourceLoader,
-  getAgentDir,
   ModelRuntime,
   resolveCliModel,
-  SessionManager,
-  type AgentSession,
   type AgentSessionEvent,
   type ResolveCliModelResult
 } from "@earendil-works/pi-coding-agent";
-import type { ExtensionFactory, ToolCallEvent } from "@earendil-works/pi-coding-agent";
+import {
+  AgentCancelledError,
+  AgentIncompleteResponseError,
+  AgentTimeoutError,
+  type AgentExecutor,
+  type AgentRunOptions,
+  type AgentSessionLike,
+  type PiSdkAgentExecutorDependencies,
+  type ResolvedAgent
+} from "./agent-runner-contracts.js";
+import { createSdkSession, resolvePromptPath } from "./agent-session.js";
+import { normalizeAgentTranscript, updateTranscriptMessages } from "./agent-transcript.js";
 import type {
   AgentConfig,
   AgentName,
   AgentResult,
+  AgentTranscript,
   AgentUsage,
-  OrchestratorConfig,
-  ThinkingLevel
+  OrchestratorConfig
 } from "./types.js";
-import { intersectRoleTools, ROLE_MUTATION_KINDS } from "./role-capabilities.js";
-import { normalizeRepositoryPath } from "./path-validation.js";
 
-export interface AgentEventMetadata {
-  type: string;
-  toolName?: string;
-  isError?: boolean;
-  attempt?: number;
-  maxAttempts?: number;
-  errorMessage?: string;
-  text?: string;
-  args?: string;
-}
-
-export interface AgentRunOptions {
-  name: AgentName;
-  task: string;
-  cwd: string;
-  extensionRoot: string;
-  config: AgentConfig;
-  timeoutMs: number;
-  signal: AbortSignal;
-  onEvent?: (event: AgentEventMetadata) => void;
-  allowedWritePaths?: readonly string[];
-  readRoots?: readonly string[];
-}
-
-export interface AgentExecutor {
-  preflight(
-    config: OrchestratorConfig,
-    cwd: string,
-    extensionRoot: string,
-    signal?: AbortSignal,
-    timeoutMs?: number
-  ): Promise<void>;
-  run(options: AgentRunOptions): Promise<AgentResult>;
-}
-
-export interface ResolvedAgent {
-  model: ResolveCliModelResult["model"];
-  thinkingLevel?: ThinkingLevel;
-  promptPath: string;
-}
-
-type AgentSessionLike = Pick<AgentSession, "subscribe" | "prompt" | "abort" | "dispose" | "isStreaming">;
-
-export interface PiSdkAgentExecutorDependencies {
-  runtime?: () => Promise<ModelRuntime>;
-  resolveModel?: (config: AgentConfig, runtime: ModelRuntime) => ResolveCliModelResult;
-  createSession?: (options: {
-    run: AgentRunOptions;
-    rolePrompt: string;
-    resolved: ResolvedAgent;
-    runtime: ModelRuntime;
-  }) => Promise<AgentSessionLike>;
-}
-
-export class AgentTimeoutError extends Error {
-  constructor(agent: AgentName, timeoutMs: number) {
-    super(`${agent} timed out after ${timeoutMs}ms`);
-    this.name = "AgentTimeoutError";
-  }
-}
-
-export class AgentCancelledError extends Error {
-  constructor(agent: AgentName) {
-    super(`${agent} cancelled`);
-    this.name = "AgentCancelledError";
-  }
-}
+export {
+  AgentCancelledError,
+  AgentIncompleteResponseError,
+  AgentTimeoutError
+} from "./agent-runner-contracts.js";
+export type {
+  AgentEventMetadata,
+  AgentExecutor,
+  AgentIncompleteStopReason,
+  AgentRunOptions,
+  PiSdkAgentExecutorDependencies,
+  ResolvedAgent
+} from "./agent-runner-contracts.js";
+export { normalizeAgentTranscript } from "./agent-transcript.js";
 
 export class PiSdkAgentExecutor implements AgentExecutor {
   private runtimePromise?: Promise<ModelRuntime>;
@@ -186,6 +136,12 @@ export class PiSdkAgentExecutor implements AgentExecutor {
 
     let finalText = "";
     let finalStopReason: string | undefined;
+    let finalErrorMessage: string | undefined;
+    let finalProvider: string | undefined;
+    let finalModel: string | undefined;
+    let transcript: AgentTranscript | undefined;
+    let transcriptMessages: unknown[] = [];
+    let lastTranscriptEmitAt = 0;
     const usage: AgentUsage = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0 };
 
     try {
@@ -203,6 +159,17 @@ export class PiSdkAgentExecutor implements AgentExecutor {
       session = await withinDeadline(creation);
       if (options.signal.aborted) throw new AgentCancelledError(options.name);
       unsubscribe = session.subscribe(event => {
+        const nextTranscriptMessages = updateTranscriptMessages(transcriptMessages, event);
+        const transcriptChanged = nextTranscriptMessages !== transcriptMessages;
+        transcriptMessages = nextTranscriptMessages;
+        const now = Date.now();
+        const shouldEmitTranscript = transcriptChanged
+          && (event.type !== "message_update" || now - lastTranscriptEmitAt >= 100);
+        if (shouldEmitTranscript && transcriptMessages.length > 0) {
+          transcript = normalizeAgentTranscript(transcriptMessages);
+          lastTranscriptEmitAt = now;
+          try { options.onTranscript?.(transcript); } catch { /* observers must not interrupt execution */ }
+        }
         const metadata = sanitizeEvent(event);
         if (metadata) options.onEvent?.(metadata);
         if (event.type !== "message_end" || event.message.role !== "assistant") return;
@@ -213,6 +180,9 @@ export class PiSdkAgentExecutor implements AgentExecutor {
           .trim();
         finalText = text;
         finalStopReason = event.message.stopReason;
+        finalErrorMessage = sanitizeDiagnostic(event.message.errorMessage, 1_000);
+        finalProvider = event.message.provider;
+        finalModel = event.message.responseModel ?? event.message.model;
         usage.input += event.message.usage.input;
         usage.output += event.message.usage.output;
         usage.cacheRead += event.message.usage.cacheRead;
@@ -223,13 +193,21 @@ export class PiSdkAgentExecutor implements AgentExecutor {
       await withinDeadline(session.prompt(options.task, { expandPromptTemplates: false, source: "interactive" }));
       if (callerAborted || options.signal.aborted) throw new AgentCancelledError(options.name);
       if (timedOut) throw new AgentTimeoutError(options.name, options.timeoutMs);
-      if (finalStopReason === "length") throw new Error(`${options.name} returned an incomplete response (output limit)`);
-      if (finalStopReason === "error" || finalStopReason === "aborted") {
-        throw new Error(`${options.name} returned an incomplete response (${finalStopReason})`);
+      if (finalStopReason === "length" || finalStopReason === "error" || finalStopReason === "aborted") {
+        throw new AgentIncompleteResponseError({
+          agent: options.name,
+          stopReason: finalStopReason,
+          provider: finalProvider,
+          model: finalModel,
+          providerError: finalErrorMessage,
+          partialText: truncate(finalText, 2_000),
+          usage,
+          transcript
+        });
       }
       if (!finalText.trim()) throw new Error(`${options.name} returned no final assistant text`);
       succeeded = true;
-      return { text: finalText, usage };
+      return { text: finalText, usage, transcript };
     } catch (error) {
       if (callerAborted || options.signal.aborted) throw new AgentCancelledError(options.name);
       if (timedOut && !(error instanceof AgentTimeoutError)) throw new AgentTimeoutError(options.name, options.timeoutMs);
@@ -267,110 +245,7 @@ export class PiSdkAgentExecutor implements AgentExecutor {
   }
 }
 
-async function createSdkSession(options: {
-  run: AgentRunOptions;
-  rolePrompt: string;
-  resolved: ResolvedAgent;
-  runtime: ModelRuntime;
-}): Promise<AgentSessionLike> {
-  if (!options.resolved.model) throw new Error(`Model was not resolved for ${options.run.name}`);
-  const tools = intersectRoleTools(options.run.name, options.run.config.tools);
-  if (tools.length === 0) throw new Error(`${options.run.name} has no tools permitted by its role policy`);
-  const policyPrompt = rolePolicyPrompt(options.run.name, options.run.allowedWritePaths ?? []);
-  const loader = new DefaultResourceLoader({
-    cwd: options.run.cwd,
-    agentDir: getAgentDir(),
-    noExtensions: true,
-    noSkills: true,
-    noPromptTemplates: true,
-    noThemes: true,
-    appendSystemPromptOverride: () => [options.rolePrompt, policyPrompt],
-    extensionFactories: [createCapabilityGuard(options.run, tools)]
-  });
-  await loader.reload();
-  const { session } = await createAgentSession({
-    cwd: options.run.cwd,
-    model: options.resolved.model,
-    thinkingLevel: options.resolved.thinkingLevel,
-    tools,
-    resourceLoader: loader,
-    sessionManager: SessionManager.inMemory(options.run.cwd),
-    modelRuntime: options.runtime
-  });
-  return session;
-}
-
-function rolePolicyPrompt(name: AgentName, allowedWritePaths: readonly string[]): string {
-  const mutation = ROLE_MUTATION_KINDS[name];
-  const scope = mutation === "none"
-    ? "You are read-only. Any repository mutation is a policy violation."
-    : `You may write only these exact repository-relative paths: ${allowedWritePaths.length ? allowedWritePaths.join(", ") : "(none)"}.`;
-  return `Runtime capability policy (authoritative): shell execution is disabled. ${scope}`;
-}
-
-function createCapabilityGuard(run: AgentRunOptions, tools: readonly string[]): ExtensionFactory {
-  const allowedTools = new Set(tools);
-  const writePaths = new Set((run.allowedWritePaths ?? []).map(file => normalizeRepositoryPath(file)));
-  const readRoots = [run.cwd, ...(run.readRoots ?? [])].map(root => path.resolve(root));
-  return pi => {
-    pi.on("tool_call", async event => {
-      if (!allowedTools.has(event.toolName) || event.toolName === "bash") {
-        return { block: true, reason: `${run.name} is not permitted to use ${event.toolName}` };
-      }
-      const inputPath = toolPath(event);
-      if (!inputPath) return;
-      if (event.toolName === "write" || event.toolName === "edit") {
-        if (path.isAbsolute(inputPath)) return { block: true, reason: "Mutation paths must be repository-relative" };
-        let normalized: string;
-        try { normalized = normalizeRepositoryPath(inputPath); }
-        catch (error) { return { block: true, reason: messageOf(error) }; }
-        if (!writePaths.has(normalized)) return { block: true, reason: `${run.name} may not modify ${normalized}` };
-        const safe = await resolvesWithin(path.resolve(run.cwd), inputPath, [path.resolve(run.cwd)]);
-        if (!safe) return { block: true, reason: `Mutation path escapes the workspace: ${inputPath}` };
-        return;
-      }
-      const candidate = path.isAbsolute(inputPath) ? inputPath : path.resolve(run.cwd, inputPath);
-      if (!await resolvesWithin(path.dirname(candidate), path.basename(candidate), readRoots)) {
-        return { block: true, reason: `Read path escapes permitted roots: ${inputPath}` };
-      }
-    });
-  };
-}
-
-function toolPath(event: ToolCallEvent): string | undefined {
-  if (!["read", "write", "edit", "grep", "find", "ls"].includes(event.toolName)) return undefined;
-  const value = (event.input as { path?: unknown }).path;
-  return typeof value === "string" && value.length > 0 ? value : undefined;
-}
-
-async function resolvesWithin(base: string, inputPath: string, roots: readonly string[]): Promise<boolean> {
-  const candidate = path.resolve(base, inputPath);
-  if (!roots.some(root => isWithin(root, candidate))) return false;
-  let existing = candidate;
-  while (true) {
-    try {
-      await lstat(existing);
-      const resolved = await realpath(existing);
-      return roots.some(root => isWithin(root, resolved));
-    } catch (error) {
-      if (!(error instanceof Error && "code" in error && error.code === "ENOENT")) return false;
-      const parent = path.dirname(existing);
-      if (parent === existing) return false;
-      existing = parent;
-    }
-  }
-}
-
-function isWithin(root: string, candidate: string): boolean {
-  const relative = path.relative(root, candidate);
-  return relative === "" || (!relative.startsWith(`..${path.sep}`) && relative !== ".." && !path.isAbsolute(relative));
-}
-
-function messageOf(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
-}
-
-function sanitizeEvent(event: AgentSessionEvent): AgentEventMetadata | undefined {
+function sanitizeEvent(event: AgentSessionEvent): import("./agent-runner-contracts.js").AgentEventMetadata | undefined {
   switch (event.type) {
     case "agent_start":
     case "agent_settled":
@@ -398,6 +273,17 @@ function sanitizeEvent(event: AgentSessionEvent): AgentEventMetadata | undefined
         type: event.type,
         text: extractLatestText(event)
       };
+    case "message_end":
+      if (event.message.role !== "assistant" || event.message.stopReason === "stop" || event.message.stopReason === "toolUse") {
+        return undefined;
+      }
+      return {
+        type: event.type,
+        stopReason: event.message.stopReason,
+        provider: event.message.provider,
+        model: event.message.responseModel ?? event.message.model,
+        errorMessage: sanitizeDiagnostic(event.message.errorMessage, 500)
+      };
     default:
       return undefined;
   }
@@ -411,19 +297,14 @@ function extractLatestText(event: AgentSessionEvent): string | undefined {
   return String(assistantEvent.delta.text).slice(0, 200);
 }
 
-async function resolvePromptPath(extensionRoot: string, promptFile: string): Promise<string> {
-  const promptRoot = await realpath(path.join(extensionRoot, "prompts"));
-  const candidate = await realpath(path.resolve(promptRoot, promptFile));
-  const relative = path.relative(promptRoot, candidate);
-  if (!relative || relative.startsWith("..") || path.isAbsolute(relative)) {
-    throw new Error(`Prompt file must remain under ${promptRoot}: ${promptFile}`);
-  }
-  return candidate;
-}
-
 function truncate(value: string | undefined, max: number): string | undefined {
   if (!value) return value;
   return value.length <= max ? value : `${value.slice(0, max)}…`;
+}
+
+function sanitizeDiagnostic(value: string | undefined, max: number): string | undefined {
+  if (!value) return undefined;
+  return truncate(value.replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]/g, "").trim(), max);
 }
 
 function delay(ms: number): Promise<void> {

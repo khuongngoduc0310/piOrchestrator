@@ -71,7 +71,10 @@ export function buildRunViewModel(
       model: agentStatus.model,
       status: agentStatus.status,
       summary: agentStatus.summary,
-      error: agentStatus.error
+      error: agentStatus.error,
+      invocationCount: state.steps
+        .filter(step => step.agent === name)
+        .reduce((count, step) => count + (step.invocations?.length ?? 0), 0)
     };
   });
 

@@ -1,16 +1,18 @@
 import { createServer, type Server, type ServerResponse } from "node:http";
 import path from "node:path";
-import type { AgentInspection, AgentName, ArtifactContent, OrchestratorViewModel } from "./types.js";
+import type { AgentInspection, AgentName, AgentTranscript, ArtifactContent, OrchestratorViewModel } from "./types.js";
 import { DASHBOARD_HTML } from "./dashboard-page.js";
 
 export interface DashboardDataProvider {
   getViewModel(): OrchestratorViewModel | undefined;
   getAgentInspection(name: AgentName): Promise<AgentInspection | undefined>;
+  getAgentTranscript?(stepId: string, invocation: number): Promise<AgentTranscript | undefined>;
   readArtifact(name: string): Promise<ArtifactContent | undefined>;
 }
 
 const ARTIFACT_PATH_RE = /^\/api\/artifacts\/(.+)$/;
 const AGENT_PATH_RE = /^\/api\/agents\/([a-z]+)$/;
+const TRANSCRIPT_PATH_RE = /^\/api\/steps\/(step-\d+)\/invocations\/(\d+)\/transcript$/;
 
 export class DashboardServer {
   private clients = new Set<ServerResponse>();
@@ -27,6 +29,11 @@ export class DashboardServer {
     const server = createServer(async (req, res) => {
       res.setHeader("x-content-type-options", "nosniff");
       res.setHeader("cache-control", "no-store");
+      if (!isLocalDashboardRequest(req.headers.host, req.headers.origin)) {
+        res.statusCode = 403;
+        res.end("Forbidden");
+        return;
+      }
       const method = req.method;
       const url = req.url ?? "/";
       try {
@@ -59,6 +66,18 @@ export class DashboardServer {
           return;
         }
         if (method === "GET") {
+          const transcriptMatch = url.match(TRANSCRIPT_PATH_RE);
+          if (transcriptMatch) {
+            const data = await this.provider.getAgentTranscript?.(transcriptMatch[1], Number(transcriptMatch[2]));
+            if (!data) {
+              res.statusCode = 404;
+              res.end("Not found");
+              return;
+            }
+            res.setHeader("content-type", "application/json; charset=utf-8");
+            res.end(JSON.stringify(data));
+            return;
+          }
           const agentMatch = url.match(AGENT_PATH_RE);
           if (agentMatch) {
             res.setHeader("content-type", "application/json; charset=utf-8");
@@ -150,4 +169,17 @@ export class DashboardServer {
       }
     }
   }
+}
+
+function isLocalDashboardRequest(host: string | undefined, origin: string | undefined): boolean {
+  try {
+    if (!host || !isLoopbackHostname(new URL(`http://${host}`).hostname)) return false;
+    return !origin || isLoopbackHostname(new URL(origin).hostname);
+  } catch {
+    return false;
+  }
+}
+
+function isLoopbackHostname(hostname: string): boolean {
+  return hostname === "127.0.0.1" || hostname === "localhost" || hostname === "[::1]";
 }

@@ -148,7 +148,7 @@ Custom project/global extension tool names are rejected with a migration error. 
 
 ## SDK execution
 
-Roles run as fresh in-memory Pi SDK sessions, not nested `pi` subprocesses. Models are pre-resolved before mutation, events are reduced to bounded lifecycle/tool metadata, and every session is aborted/disposed on timeout, cancellation, or completion. Project checks reuse `ExtensionAPI.exec` with per-command timeout and bounded stdout/stderr.
+Roles run as fresh in-memory Pi SDK sessions, not nested `pi` subprocesses. Models are pre-resolved before mutation, events are reduced to bounded lifecycle/tool metadata, and every session is aborted/disposed on timeout, cancellation, or completion. Each invocation also records its Pi conversation transcript (user, assistant, collapsed reasoning, tool calls, and tool results) without retaining system prompts or sharing conversation memory between invocations. Project checks reuse `ExtensionAPI.exec` with per-command timeout and bounded stdout/stderr.
 
 ## Run artifacts
 
@@ -163,6 +163,7 @@ Important files include:
 - `state.json` and `manifest.json`: versioned current state and ordered step records
 - `events.jsonl`: serialized monotonic transition/event metadata
 - numbered role/check artifacts containing stage, revision, and attempt
+- `*-invocation-*-transcript.json`: versioned per-invocation Pi conversation history, including partial history for failed sessions when available
 - `*-invalid-output-attempt-*.txt`: raw malformed assistant output from the initial or correction attempt
 - `baseline.json`, `baseline-diff.patch`, and `baseline-staged.patch`: pre-workflow state and full patches available to code review when present
 - `plan.json`, `proposed-lessons.json`, and lesson review status
@@ -182,7 +183,7 @@ Key areas:
 - **Status header** — workflow mode, connection indicator (Live/Reconnecting/Disconnected), elapsed time, run ID, and request.
 - **Current activity callout** — most important state first: waiting-for-input (amber), failure (red), completed (green), or normal progress.
 - **Workflow phases** — eight canonical phases with complete/current/pending visual state. Review-fix and final checks map to the correct phase without regression.
-- **Agent grid and inspector** — per-agent status, model, and summary. Click any agent to inspect its full detail (tools, output, steps, artifacts). The active agent is auto-followed until you manually select or close the inspector.
+- **Agent grid and inspector** — per-agent status, model, and summary. Click any agent to select an individual invocation and inspect its live or persisted Pi-style conversation. Reasoning is collapsed by default, and tool results are displayed with their matching tool calls. The active agent is auto-followed until you manually select or close the inspector.
 - **Recent timeline** — keyed step updates that preserve DOM state. Each entry shows time, status, label, agent, attempt, message, and artifact controls.
 - **Artifact viewer** — recent artifact list with size and truncation metadata. The viewer supports line wrapping and persistent content across workflow updates.
 

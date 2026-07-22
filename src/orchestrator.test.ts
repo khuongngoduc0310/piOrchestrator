@@ -4,7 +4,12 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
-import { AgentCancelledError, type AgentExecutor, type AgentRunOptions } from "./agent-runner.js";
+import {
+  AgentCancelledError,
+  AgentIncompleteResponseError,
+  type AgentExecutor,
+  type AgentRunOptions
+} from "./agent-runner.js";
 import type { CheckRunner, OrchestratorDependencies } from "./orchestrator.js";
 import { Orchestrator } from "./orchestrator.js";
 import { DEFAULT_CONFIG, loadConfig, saveConfig } from "./config.js";
@@ -93,7 +98,16 @@ class QueueAgent implements AgentExecutor {
     const output = this.outputs.shift();
     if (!output) throw new Error(`Missing fake output for ${options.name}`);
     if (output instanceof Error) throw output;
-    return { text: output };
+    const transcript = {
+      schemaVersion: 1 as const,
+      messages: [
+        { role: "user" as const, content: [{ type: "text" as const, text: options.task }] },
+        { role: "assistant" as const, content: [{ type: "text" as const, text: output }], stopReason: "stop" }
+      ],
+      truncated: false
+    };
+    options.onTranscript?.(transcript);
+    return { text: output, transcript };
   }
 }
 
@@ -528,6 +542,22 @@ describe("Orchestrator", () => {
     });
     expect(correctionCall.task).not.toContain("previousOutput");
     expect(correctionCall.task).not.toContain("not json");
+    const plannerStep = state.steps[1];
+    expect(plannerStep.invocations).toMatchObject([
+      { sequence: 1, mode: "execute", status: "succeeded", messageCount: 2 },
+      { sequence: 2, mode: "correct_output", status: "succeeded", messageCount: 2 }
+    ]);
+    const correctionTranscript = JSON.parse(await readFile(
+      path.join(state.runDir, plannerStep.invocations![1].transcriptArtifact!),
+      "utf8"
+    ));
+    expect(correctionTranscript).toMatchObject({
+      stepId: plannerStep.id,
+      agent: "planner",
+      invocation: 2,
+      mode: "correct_output",
+      status: "succeeded"
+    });
   });
 
   it("strips bash from a reviewer output-correction retry", async () => {
@@ -577,6 +607,64 @@ describe("Orchestrator", () => {
     expect(state.status).toBe("failed");
     expect(state.agents.explorer.status).toBe("failed");
     expect(state.steps[0]).toMatchObject({ stage: "exploring", status: "failed" });
+  });
+
+  it("persists structured diagnostics for an incomplete agent response", async () => {
+    const failure = new AgentIncompleteResponseError({
+      agent: "explorer",
+      stopReason: "error",
+      provider: "test-provider",
+      model: "test-model",
+      providerError: "quota exhausted",
+      partialText: "partial response",
+      usage: { input: 10, output: 2, cacheRead: 0, cacheWrite: 0, cost: 0.1 }
+    });
+    const { engine } = await scenario([failure], []);
+    const state = engine.getState()!;
+    const artifact = JSON.parse(await readFile(path.join(state.runDir, state.steps[0].artifact!), "utf8"));
+
+    expect(artifact).toEqual({
+      kind: "agent_incomplete_response",
+      error: "explorer returned an incomplete response (error): quota exhausted",
+      agent: "explorer",
+      stopReason: "error",
+      provider: "test-provider",
+      model: "test-model",
+      providerError: "quota exhausted",
+      partialText: "partial response",
+      usage: { input: 10, output: 2, cacheRead: 0, cacheWrite: 0, cost: 0.1 }
+    });
+  });
+
+  it("persists the partial conversation when an agent invocation fails", async () => {
+    const partialTranscript = {
+      schemaVersion: 1 as const,
+      messages: [
+        { role: "user" as const, content: [{ type: "text" as const, text: "task" }] },
+        { role: "assistant" as const, content: [{ type: "thinking" as const, text: "working" }] }
+      ],
+      truncated: false
+    };
+    const failingAgent: AgentExecutor = {
+      preflight: async () => undefined,
+      run: async options => {
+        options.onTranscript?.(partialTranscript);
+        throw new Error("provider disconnected");
+      }
+    };
+    const { engine } = await scenario([], [], undefined, { agentExecutor: failingAgent });
+    const state = engine.getState()!;
+    const invocation = state.steps[0].invocations![0];
+    const transcript = JSON.parse(await readFile(path.join(state.runDir, invocation.transcriptArtifact!), "utf8"));
+
+    expect(invocation).toMatchObject({ status: "failed", messageCount: 2, truncated: false });
+    expect(transcript).toMatchObject({
+      stepId: "step-001",
+      agent: "explorer",
+      invocation: 1,
+      status: "failed",
+      messages: partialTranscript.messages
+    });
   });
 
   it("rejects concurrent starts before either can replace shared state", async () => {

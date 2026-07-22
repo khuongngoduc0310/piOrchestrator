@@ -1,4 +1,4 @@
-import type { AgentName } from "./types.js";
+import type { AgentName } from "./agent-types.js";
 
 export const MEMORY_SCHEMA_VERSION = 1;
 

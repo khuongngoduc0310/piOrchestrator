@@ -1,14 +1,17 @@
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import type { AgentSessionEvent, ModelRuntime } from "@earendil-works/pi-coding-agent";
-import { AgentTimeoutError, PiSdkAgentExecutor } from "./agent-runner.js";
+import { AgentIncompleteResponseError, AgentTimeoutError, normalizeAgentTranscript, PiSdkAgentExecutor } from "./agent-runner.js";
 import { DEFAULT_CONFIG } from "./config.js";
 
 const model = { provider: "test", id: "model" } as never;
 const runtime = { getAvailable: async () => [model] } as unknown as ModelRuntime;
 const resolved = { model, thinkingLevel: "low" as const, warning: undefined, error: undefined };
 
-function assistantEvent(text: string): AgentSessionEvent {
+function assistantEvent(
+  text: string,
+  options: { stopReason?: "stop" | "length" | "error" | "aborted"; errorMessage?: string } = {}
+): AgentSessionEvent {
   return {
     type: "message_end",
     message: {
@@ -25,13 +28,150 @@ function assistantEvent(text: string): AgentSessionEvent {
         totalTokens: 6,
         cost: { input: 0.1, output: 0.2, cacheRead: 0, cacheWrite: 0, total: 0.3 }
       },
-      stopReason: "stop",
+      stopReason: options.stopReason ?? "stop",
+      errorMessage: options.errorMessage,
       timestamp: Date.now()
     }
   } as AgentSessionEvent;
 }
 
 describe("PiSdkAgentExecutor", () => {
+  it("normalizes Pi user, assistant, reasoning, tool call, and tool result messages", () => {
+    const transcript = normalizeAgentTranscript([
+      { role: "user", content: "Find the issue", timestamp: 1 },
+      {
+        role: "assistant",
+        content: [
+          { type: "thinking", thinking: "Inspect the source" },
+          { type: "text", text: "I will inspect it." },
+          { type: "toolCall", id: "call-1", name: "read", arguments: { path: "src/index.ts" } }
+        ],
+        stopReason: "toolUse",
+        timestamp: 2
+      },
+      {
+        role: "toolResult",
+        toolCallId: "call-1",
+        toolName: "read",
+        content: [{ type: "text", text: "file contents" }],
+        isError: false,
+        timestamp: 3
+      }
+    ]);
+
+    expect(transcript).toEqual({
+      schemaVersion: 1,
+      truncated: false,
+      messages: [
+        { role: "user", content: [{ type: "text", text: "Find the issue" }], timestamp: 1 },
+        {
+          role: "assistant",
+          content: [
+            { type: "thinking", text: "Inspect the source" },
+            { type: "text", text: "I will inspect it." },
+            { type: "toolCall", toolCallId: "call-1", toolName: "read", arguments: '{"path":"src/index.ts"}' }
+          ],
+          timestamp: 2,
+          stopReason: "toolUse"
+        },
+        {
+          role: "toolResult",
+          content: [{ type: "text", text: "file contents" }],
+          timestamp: 3,
+          toolCallId: "call-1",
+          toolName: "read",
+          isError: false
+        }
+      ]
+    });
+  });
+
+  it("uses the final agent message list as the authoritative transcript", async () => {
+    let listener: ((event: AgentSessionEvent) => void) | undefined;
+    const snapshots: unknown[] = [];
+    const finalAssistant = (assistantEvent("final answer") as Extract<AgentSessionEvent, { type: "message_end" }>).message;
+    const executor = new PiSdkAgentExecutor({
+      runtime: async () => runtime,
+      resolveModel: () => resolved,
+      createSession: async () => ({
+        isStreaming: false,
+        subscribe: callback => { listener = callback; return () => undefined; },
+        prompt: async () => {
+          listener?.(assistantEvent("final answer"));
+          listener?.({
+            type: "agent_end",
+            messages: [
+              { role: "user", content: "original task", timestamp: 1 },
+              finalAssistant
+            ],
+            willRetry: false
+          } as AgentSessionEvent);
+        },
+        abort: async () => undefined,
+        dispose: () => undefined
+      })
+    });
+    await executor.preflight(DEFAULT_CONFIG, process.cwd(), path.resolve("."));
+    const result = await executor.run({
+      name: "explorer",
+      task: "task",
+      cwd: process.cwd(),
+      extensionRoot: path.resolve("."),
+      config: DEFAULT_CONFIG.agents.explorer,
+      timeoutMs: 100,
+      signal: new AbortController().signal,
+      onTranscript: transcript => snapshots.push(transcript)
+    });
+
+    expect(result.transcript?.messages.map(message => message.role)).toEqual(["user", "assistant"]);
+    expect(result.transcript?.messages[0].content).toEqual([{ type: "text", text: "original task" }]);
+    expect(snapshots.at(-1)).toEqual(result.transcript);
+  });
+
+  it("preserves the original conversation across an SDK continuation retry", async () => {
+    let listener: ((event: AgentSessionEvent) => void) | undefined;
+    const failed = assistantEvent("first attempt", { stopReason: "error", errorMessage: "temporary outage" });
+    const succeeded = assistantEvent("second attempt");
+    const failedMessage = (failed as Extract<AgentSessionEvent, { type: "message_end" }>).message;
+    const succeededMessage = (succeeded as Extract<AgentSessionEvent, { type: "message_end" }>).message;
+    failedMessage.timestamp = 2;
+    succeededMessage.timestamp = 3;
+    const executor = new PiSdkAgentExecutor({
+      runtime: async () => runtime,
+      resolveModel: () => resolved,
+      createSession: async () => ({
+        isStreaming: false,
+        subscribe: callback => { listener = callback; return () => undefined; },
+        prompt: async () => {
+          listener?.(failed);
+          listener?.({
+            type: "agent_end",
+            messages: [{ role: "user", content: "task", timestamp: 1 }, failedMessage],
+            willRetry: true
+          } as AgentSessionEvent);
+          listener?.(succeeded);
+          listener?.({ type: "agent_end", messages: [succeededMessage], willRetry: false } as AgentSessionEvent);
+        },
+        abort: async () => undefined,
+        dispose: () => undefined
+      })
+    });
+    await executor.preflight(DEFAULT_CONFIG, process.cwd(), path.resolve("."));
+    const result = await executor.run({
+      name: "explorer",
+      task: "task",
+      cwd: process.cwd(),
+      extensionRoot: path.resolve("."),
+      config: DEFAULT_CONFIG.agents.explorer,
+      timeoutMs: 100,
+      signal: new AbortController().signal
+    });
+
+    expect(result.transcript?.messages.map(message => message.role)).toEqual(["user", "assistant", "assistant"]);
+    expect(result.transcript?.messages[1].content).toEqual([{ type: "text", text: "first attempt" }]);
+    expect(result.transcript?.messages[2].content).toEqual([{ type: "text", text: "second attempt" }]);
+  });
+
   it("bounds model preflight", async () => {
     const hangingRuntime = { getAvailable: async () => new Promise<never>(() => undefined) } as unknown as ModelRuntime;
     const executor = new PiSdkAgentExecutor({ runtime: async () => hangingRuntime, resolveModel: () => resolved });
@@ -110,6 +250,87 @@ describe("PiSdkAgentExecutor", () => {
       timeoutMs: 100,
       signal: new AbortController().signal
     })).rejects.toThrow("no final assistant text");
+  });
+
+  it("preserves bounded provider diagnostics for an incomplete response", async () => {
+    let listener: ((event: AgentSessionEvent) => void) | undefined;
+    const abort = vi.fn(async () => undefined);
+    const dispose = vi.fn();
+    const events: unknown[] = [];
+    const executor = new PiSdkAgentExecutor({
+      runtime: async () => runtime,
+      resolveModel: () => resolved,
+      createSession: async () => ({
+        isStreaming: false,
+        subscribe: callback => { listener = callback; return () => undefined; },
+        prompt: async () => listener?.(assistantEvent("partial", {
+          stopReason: "error",
+          errorMessage: `provider unavailable\u0000${"x".repeat(1_100)}`
+        })),
+        abort,
+        dispose
+      })
+    });
+    await executor.preflight(DEFAULT_CONFIG, process.cwd(), path.resolve("."));
+    const failure = await executor.run({
+      name: "explorer",
+      task: "task",
+      cwd: process.cwd(),
+      extensionRoot: path.resolve("."),
+      config: DEFAULT_CONFIG.agents.explorer,
+      timeoutMs: 100,
+      signal: new AbortController().signal,
+      onEvent: event => events.push(event)
+    }).catch(error => error);
+
+    expect(failure).toBeInstanceOf(AgentIncompleteResponseError);
+    expect(failure).toMatchObject({
+      agent: "explorer",
+      stopReason: "error",
+      provider: "test",
+      model: "model",
+      partialText: "partial",
+      usage: { input: 2, output: 3, cost: 0.3 }
+    });
+    expect(failure.message).toContain("provider unavailable");
+    expect(failure.providerError).not.toContain("\u0000");
+    expect(failure.providerError.length).toBeLessThanOrEqual(1_001);
+    expect(events).toEqual([expect.objectContaining({
+      type: "message_end",
+      stopReason: "error",
+      errorMessage: expect.stringContaining("provider unavailable")
+    })]);
+    expect(abort).toHaveBeenCalledOnce();
+    expect(dispose).toHaveBeenCalledOnce();
+  });
+
+  it.each([
+    ["error", "provider did not supply error details"],
+    ["length", "output limit"],
+    ["aborted", "(aborted)"]
+  ] as const)("classifies an incomplete %s response", async (stopReason, expectedMessage) => {
+    let listener: ((event: AgentSessionEvent) => void) | undefined;
+    const executor = new PiSdkAgentExecutor({
+      runtime: async () => runtime,
+      resolveModel: () => resolved,
+      createSession: async () => ({
+        isStreaming: false,
+        subscribe: callback => { listener = callback; return () => undefined; },
+        prompt: async () => listener?.(assistantEvent("", { stopReason })),
+        abort: async () => undefined,
+        dispose: () => undefined
+      })
+    });
+    await executor.preflight(DEFAULT_CONFIG, process.cwd(), path.resolve("."));
+    await expect(executor.run({
+      name: "explorer",
+      task: "task",
+      cwd: process.cwd(),
+      extensionRoot: path.resolve("."),
+      config: DEFAULT_CONFIG.agents.explorer,
+      timeoutMs: 100,
+      signal: new AbortController().signal
+    })).rejects.toThrow(expectedMessage);
   });
 
   it("disposes the session when subscription fails", async () => {

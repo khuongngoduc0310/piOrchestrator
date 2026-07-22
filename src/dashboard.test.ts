@@ -1,7 +1,7 @@
 import vm from "node:vm";
 import { describe, expect, it } from "vitest";
 import { DashboardServer } from "./dashboard.js";
-import type { AgentInspection, ArtifactContent, OrchestratorViewModel } from "./types.js";
+import type { AgentInspection, AgentTranscript, ArtifactContent, OrchestratorViewModel } from "./types.js";
 
 const emptyProvider = {
   getViewModel: () => undefined,
@@ -26,6 +26,12 @@ const testArtifact: ArtifactContent = {
   truncated: false,
   isJson: true,
   size: 15,
+};
+
+const testTranscript: AgentTranscript = {
+  schemaVersion: 1,
+  messages: [{ role: "user", content: [{ type: "text", text: "Inspect this repository" }] }],
+  truncated: false
 };
 
 const sampleViewModel: OrchestratorViewModel = {
@@ -60,6 +66,7 @@ function providerWith(vm: OrchestratorViewModel | undefined, agent?: AgentInspec
   return {
     getViewModel: () => vm,
     getAgentInspection: async (_name: string) => agent ?? testAgent,
+    getAgentTranscript: async (_stepId: string, _invocation: number) => testTranscript,
     readArtifact: async (_name: string) => artifact ?? testArtifact,
   };
 }
@@ -83,6 +90,8 @@ describe("DashboardServer", () => {
     expect(htmlResponse.status).toBe(200);
     const html = await htmlResponse.text();
     expect(html).toContain("piOrchestrator");
+    expect(html).toContain("Conversation history");
+    expect(html).toContain("Thinking");
     const stateResponse = await fetch(`${url}/api/state`);
     expect(stateResponse.status).toBe(200);
     const body = await stateResponse.json();
@@ -173,6 +182,13 @@ describe("DashboardServer", () => {
     await dashboard.stop();
   });
 
+  it("rejects non-loopback origins", async () => {
+    const { dashboard, url } = await server();
+    const hostileOrigin = await fetch(url, { headers: { origin: "https://attacker.example" } });
+    expect(hostileOrigin.status).toBe(403);
+    await dashboard.stop();
+  });
+
   it("returns agent inspection at /api/agents/:name", async () => {
     const dashboard = new DashboardServer(providerWith(undefined, testAgent));
     const url = await dashboard.start(0);
@@ -181,6 +197,23 @@ describe("DashboardServer", () => {
     const body: AgentInspection = await response.json();
     expect(body.name).toBe("planner");
     expect(body.status).toBe("succeeded");
+    await dashboard.stop();
+  });
+
+  it("returns a step invocation transcript", async () => {
+    const dashboard = new DashboardServer(providerWith(undefined));
+    const url = await dashboard.start(0);
+    const response = await fetch(`${url}/api/steps/step-001/invocations/1/transcript`);
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual(testTranscript);
+    await dashboard.stop();
+  });
+
+  it("rejects malformed transcript routes", async () => {
+    const dashboard = new DashboardServer(providerWith(undefined));
+    const url = await dashboard.start(0);
+    expect((await fetch(`${url}/api/steps/../invocations/1/transcript`)).status).toBe(404);
+    expect((await fetch(`${url}/api/steps/step-001/invocations/not-a-number/transcript`)).status).toBe(404);
     await dashboard.stop();
   });
 
