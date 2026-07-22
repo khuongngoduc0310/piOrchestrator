@@ -1,0 +1,22 @@
+{
+  "schemaVersion": 1,
+  "checks": ["npm test", "npm run typecheck"],
+  "dashboard": { "enabled": true, "port": 0 },
+  "limits": {
+    "planRevisions": 2,
+    "implementationRetries": 3,
+    "reviewRevisions": 2,
+    "agentTimeoutMs": 1200000,
+    "checkTimeoutMs": 600000,
+    "maxOutputBytes": 262144
+  },
+  "agents": {
+    "explorer": { "model": "anthropic/claude-sonnet-4-5", "thinking": "low", "tools": ["read", "grep", "find", "ls"], "promptFile": "explorer.md" },
+    "planner": { "model": "openai/gpt-5.2", "thinking": "high", "tools": ["read", "grep", "find", "ls"], "promptFile": "planner.md" },
+    "reviewer": { "model": "anthropic/claude-opus-4-5", "thinking": "high", "tools": ["read", "grep", "find", "ls"], "promptFile": "reviewer.md" },
+    "tester": { "model": "openai/gpt-5.2-codex", "thinking": "high", "tools": ["read", "write", "edit", "grep", "find", "ls"], "promptFile": "tester.md" },
+    "builder": { "model": "openai/gpt-5.2-codex", "thinking": "high", "tools": ["read", "write", "edit", "grep", "find", "ls"], "promptFile": "builder.md" },
+    "debugger": { "model": "anthropic/claude-opus-4-5", "thinking": "high", "tools": ["read", "grep", "find", "ls"], "promptFile": "debugger.md" },
+    "documenter": { "model": "google/gemini-2.5-flash", "thinking": "medium", "tools": ["read", "write", "edit", "grep", "find", "ls"], "promptFile": "documenter.md" }
+  }
+}

@@ -1,0 +1,42 @@
+{
+  "name": "pi-orchestrator-extension",
+  "version": "0.1.0",
+  "description": "Deterministic multi-agent orchestration extension for the Pi coding agent",
+  "type": "module",
+  "main": "src/index.ts",
+  "files": [
+    "src",
+    "!src/**/*.test.ts",
+    "prompts",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run"
+  },
+  "engines": {
+    "node": ">=22.19.0"
+  },
+  "keywords": [
+    "pi",
+    "coding-agent",
+    "multi-agent",
+    "orchestration"
+  ],
+  "license": "MIT",
+  "peerDependencies": {
+    "@earendil-works/pi-coding-agent": ">=0.81.1"
+  },
+  "devDependencies": {
+    "@earendil-works/pi-coding-agent": "^0.81.1",
+    "@types/node": "latest",
+    "typescript": "latest",
+    "vitest": "^4.1.9"
+  },
+  "pi": {
+    "extensions": [
+      "./src/index.ts"
+    ]
+  }
+}
