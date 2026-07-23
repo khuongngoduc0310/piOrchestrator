@@ -7,13 +7,20 @@
   "files": [
     "src",
     "!src/**/*.test.ts",
+    "!src/dashboard-client/**/*",
+    "!vite.dashboard.config.ts",
+    "!tsconfig.dashboard.json",
     "prompts",
     "README.md",
     "LICENSE"
   ],
   "scripts": {
-    "typecheck": "tsc --noEmit",
-    "test": "vitest run"
+    "build:dashboard": "vite build --config vite.dashboard.config.ts",
+    "typecheck:server": "tsc --noEmit",
+    "typecheck:dashboard": "tsc -p tsconfig.dashboard.json --noEmit",
+    "typecheck": "npm run typecheck:server && npm run typecheck:dashboard",
+    "test": "vitest run",
+    "prepack": "npm run build:dashboard && npm run typecheck && npm test"
   },
   "engines": {
     "node": ">=22.19.0"
@@ -30,8 +37,17 @@
   },
   "devDependencies": {
     "@earendil-works/pi-coding-agent": "^0.81.1",
+    "@testing-library/jest-dom": "^6.9.1",
+    "@testing-library/react": "^16.3.2",
     "@types/node": "latest",
+    "@types/react": "^19.2.17",
+    "@types/react-dom": "^19.2.3",
+    "@vitejs/plugin-react": "^4.7.0",
+    "jsdom": "^26.1.0",
+    "react": "^19.2.8",
+    "react-dom": "^19.2.8",
     "typescript": "latest",
+    "vite": "^6.4.3",
     "vitest": "^4.1.9"
   },
   "pi": {

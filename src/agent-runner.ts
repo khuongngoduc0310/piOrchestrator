@@ -142,10 +142,21 @@ export class PiSdkAgentExecutor implements AgentExecutor {
     let finalErrorMessage: string | undefined;
     let finalProvider: string | undefined;
     let finalModel: string | undefined;
+    let finalApi: string | undefined;
     let transcript: AgentTranscript | undefined;
     let transcriptMessages: unknown[] = [];
     let lastTranscriptEmitAt = 0;
-    const usage: AgentUsage = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0 };
+    const usage: AgentUsage = {
+      input: 0,
+      output: 0,
+      cacheRead: 0,
+      cacheWrite: 0,
+      cost: 0,
+      totalTokens: 0,
+      costBreakdown: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }
+    };
+    let hasReasoning = false;
+    let hasCacheWrite1h = false;
 
     try {
       const runtime = await withinDeadline(this.runtime());
@@ -186,11 +197,36 @@ export class PiSdkAgentExecutor implements AgentExecutor {
         finalErrorMessage = sanitizeDiagnostic(event.message.errorMessage, 1_000);
         finalProvider = event.message.provider;
         finalModel = event.message.responseModel ?? event.message.model;
+        finalApi = event.message.api;
         usage.input += event.message.usage.input;
         usage.output += event.message.usage.output;
         usage.cacheRead += event.message.usage.cacheRead;
         usage.cacheWrite += event.message.usage.cacheWrite;
+        usage.totalTokens = (usage.totalTokens ?? 0) + event.message.usage.totalTokens;
+        if (event.message.usage.reasoning !== undefined) {
+          usage.reasoning = (usage.reasoning ?? 0) + event.message.usage.reasoning;
+          hasReasoning = true;
+        }
+        if (event.message.usage.cacheWrite1h !== undefined) {
+          usage.cacheWrite1h = (usage.cacheWrite1h ?? 0) + event.message.usage.cacheWrite1h;
+          hasCacheWrite1h = true;
+        }
+        usage.costBreakdown!.input += event.message.usage.cost.input;
+        usage.costBreakdown!.output += event.message.usage.cost.output;
+        usage.costBreakdown!.cacheRead += event.message.usage.cost.cacheRead;
+        usage.costBreakdown!.cacheWrite += event.message.usage.cost.cacheWrite;
         usage.cost += event.message.usage.cost.total;
+        if (!hasReasoning) delete usage.reasoning;
+        if (!hasCacheWrite1h) delete usage.cacheWrite1h;
+        try {
+          options.onUsage?.({
+            usage: cloneUsage(usage),
+            provider: finalProvider,
+            model: finalModel,
+            api: finalApi,
+            stopReason: finalStopReason
+          });
+        } catch { /* observers must not interrupt execution */ }
       });
       if (options.signal.aborted) throw new AgentCancelledError(options.name);
       await withinDeadline(session.prompt(options.task, { expandPromptTemplates: false, source: "interactive" }));
@@ -210,7 +246,14 @@ export class PiSdkAgentExecutor implements AgentExecutor {
       }
       if (!finalText.trim()) throw new Error(`${options.name} returned no final assistant text`);
       succeeded = true;
-      return { text: finalText, usage, transcript };
+      return {
+        text: finalText,
+        usage,
+        transcript,
+        response: finalProvider && finalModel && finalApi && finalStopReason
+          ? { provider: finalProvider, model: finalModel, api: finalApi, stopReason: finalStopReason }
+          : undefined
+      };
     } catch (error) {
       if (callerAborted || options.signal.aborted) throw new AgentCancelledError(options.name);
       if (timedOut && !(error instanceof AgentTimeoutError)) throw new AgentTimeoutError(options.name, options.timeoutMs);
@@ -246,6 +289,13 @@ export class PiSdkAgentExecutor implements AgentExecutor {
     this.resolved.set(options.name, result);
     return result;
   }
+}
+
+function cloneUsage(usage: AgentUsage): AgentUsage {
+  return {
+    ...usage,
+    costBreakdown: usage.costBreakdown ? { ...usage.costBreakdown } : undefined
+  };
 }
 
 function sanitizeEvent(event: AgentSessionEvent): import("./agent-runner-contracts.js").AgentEventMetadata | undefined {

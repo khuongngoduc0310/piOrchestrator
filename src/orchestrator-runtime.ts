@@ -19,6 +19,7 @@ import { messageOf, projectTrusted, transcriptKey } from "./orchestrator-helpers
 import { WorkflowCancelledError } from "./workflow-errors.js";
 import { DashboardRunRepository } from "./dashboard-run-repository.js";
 import { validateInvocationFileDiff, type InvocationFileDiff } from "./git-tree-diff.js";
+import { buildAgentHistory } from "./agent-history.js";
 
 export class OrchestratorRuntime {
   state?: WorkflowState;
@@ -76,6 +77,7 @@ export class OrchestratorRuntime {
       listRuns: () => this.listDashboardRuns(),
       getRunViewModel: runId => this.getRunViewModel(runId),
       getRunAgentInspection: (runId, name) => this.getRunAgentInspection(runId, name),
+      getRunAgentHistory: runId => this.getRunAgentHistory(runId),
       getRunAgentTranscript: (runId, stepId, invocation) => this.getRunAgentTranscript(runId, stepId, invocation),
       getInvocationDiff: (runId, stepId, invocation) => this.getInvocationDiff(runId, stepId, invocation),
       readRunArtifact: (runId, name) => this.readRunArtifact(runId, name)
@@ -157,6 +159,11 @@ export class OrchestratorRuntime {
   async getRunAgentInspection(runId: string, name: AgentName) {
     if (this.state?.runId === runId) return this.getAgentInspection(name);
     return this.historyRepository()?.getAgentInspection(runId, name);
+  }
+
+  async getRunAgentHistory(runId: string) {
+    if (this.state?.runId === runId) return buildAgentHistory(this.state);
+    return this.historyRepository()?.getAgentHistory(runId);
   }
 
   async getRunAgentTranscript(runId: string, stepId: string, invocation: number): Promise<AgentTranscript | undefined> {

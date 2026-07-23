@@ -14,6 +14,8 @@ import { WorkflowCancelledError } from "./workflow-errors.js";
 import { createWorktree } from "./worktree.js";
 import { saveWorkflowCheckpoint } from "./orchestrator-checkpoints.js";
 import { deriveMutationPathScope } from "./workspace-guard.js";
+import { assertBuilderComplete } from "./mutation-completion.js";
+import { deriveRoleMutationPaths } from "./workspace-guard.js";
 
 export async function runPlanningPhase(runtime: OrchestratorRuntime, workflow: WorkflowContext): Promise<PlanningResult> {
   const { request, ctx, cwd, config, store, controller } = workflow;
@@ -106,7 +108,7 @@ export async function prepareImplementationPhase(
   runtime: OrchestratorRuntime,
   workflow: WorkflowContext,
   planning: PlanningResult,
-  options: { agents?: readonly AgentName[]; allowBaselineRepair?: boolean } = {}
+  options: { agents?: readonly AgentName[]; allowBaselineRepair?: boolean; allowAuthorizedTestFailures?: boolean; deferMutation?: boolean } = {}
 ): Promise<ImplementationPlanningResult> {
   const { request, ctx, cwd, store } = workflow;
   await runtime.agents.preflight(
@@ -122,10 +124,34 @@ export async function prepareImplementationPhase(
   workflow.config = configured;
   runtime.config = configured;
   const config = configured;
+  await saveWorkflowCheckpoint(runtime, workflow, "checks_configured", planning, {
+    exploration: planning.exploration,
+    plan: planning.plan
+  });
 
   let baseline = await runCheckStep(runtime, "baseline", "Run green baseline", cwd, ctx, { requireGreen: false });
+  let baselineDiagnosis;
   if (!allGreen(baseline, config.checks.length)) {
-    if (options.allowBaselineRepair === false) throw new Error(`${workflow.route} requires a green baseline before mutation`);
+    if (options.allowAuthorizedTestFailures) {
+      baselineDiagnosis = await runAgentStep(
+        runtime,
+        "debugger",
+        "baseline",
+        "Diagnose tests-only baseline failures",
+        { action: "diagnose_baseline", request, checks: baseline },
+        cwd,
+        ctx,
+        parseDebuggerOutput
+      );
+      const authorized = new Set(deriveRoleMutationPaths("tester", planning.plan));
+      const affected = baselineDiagnosis.affectedFiles;
+      if (["environment_error", "tooling_error", "unknown"].includes(baselineDiagnosis.category)
+        || affected.length === 0
+        || affected.some(file => !authorized.has(file))) {
+        throw new Error(`tests_only baseline failures are not confined to authorized test files: ${baselineDiagnosis.rootCause}`);
+      }
+    } else if (options.allowBaselineRepair === false) throw new Error(`${workflow.route} requires a green baseline before mutation`);
+    else {
     ctx.ui.notify("Baseline checks are not all green. Diagnosing failures...", "warning");
     const baselineDiagnosis = await runAgentStep(
       runtime,
@@ -176,6 +202,7 @@ export async function prepareImplementationPhase(
       parseBuilderOutput,
       { mutationPlan: baselineFixPlan }
     );
+    assertBuilderComplete(repairOutput, "the approved baseline repair");
     await saveWorkflowCheckpoint(runtime, workflow, "builder_completed", {
       mode: "baseline_repair",
       planning,
@@ -187,10 +214,13 @@ export async function prepareImplementationPhase(
     baseline = await runCheckStep(runtime, "baseline", "Verify baseline after repair", workflow.mutationCwd, ctx, { requireGreen: true, kind: "baseline-verify" });
     runtime.baselineRepaired = true;
     publishSessionMessage(runtime, formatBaselineReport(baseline, baselineDiagnosis, baselineFixPlan), { kind: "baseline_repaired" });
+    }
   }
-  await enterMutationPhase(runtime, workflow);
-  const result = { ...planning, baseline };
-  await saveWorkflowCheckpoint(runtime, workflow, "mutation_ready", result, { exploration: planning.exploration, plan: planning.plan, baselineChecks: baseline });
+  const result = { ...planning, baseline, scopeRevisionCount: 0, ...(baselineDiagnosis ? { baselineDiagnosis } : {}) };
+  if (!options.deferMutation) {
+    await enterMutationPhase(runtime, workflow);
+    await saveWorkflowCheckpoint(runtime, workflow, "mutation_ready", result, { exploration: planning.exploration, plan: planning.plan, baselineChecks: baseline, diagnosis: baselineDiagnosis });
+  }
   return result;
 }
 

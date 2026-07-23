@@ -80,10 +80,14 @@ export function validateExplorerOutput(value: unknown, path = "explorer"): Explo
 
 function planTask(value: unknown, path: string): PlanTask {
   const item = record(value, path);
+  const testSupportFiles = item.testSupportFiles === undefined
+    ? undefined
+    : repositoryPaths(item.testSupportFiles, `${path}.testSupportFiles`);
   return {
     id: string(item.id, `${path}.id`),
     description: string(item.description, `${path}.description`),
     files: repositoryPaths(item.files, `${path}.files`),
+    ...(testSupportFiles ? { testSupportFiles } : {}),
     dependencies: strings(item.dependencies, `${path}.dependencies`),
     verification: strings(item.verification, `${path}.verification`)
   };
@@ -126,7 +130,12 @@ export function validatePlannerOutput(value: unknown, path = "plan"): PlannerOut
   const acceptanceCriteria = strings(item.acceptanceCriteria, `${path}.acceptanceCriteria`);
   if (acceptanceCriteria.length === 0) throw new ValidationError(`${path}.acceptanceCriteria`, "must not be empty");
   for (let index = 0; index < tasks.length; index++) {
-    if (tasks[index].files.length === 0) throw new ValidationError(`${path}.tasks[${index}].files`, "must not be empty");
+    if (tasks[index].files.length === 0 && (tasks[index].testSupportFiles?.length ?? 0) === 0) {
+      throw new ValidationError(`${path}.tasks[${index}].files`, "must not be empty unless testSupportFiles is non-empty");
+    }
+    const files = new Set(tasks[index].files);
+    const overlap = (tasks[index].testSupportFiles ?? []).filter(file => files.has(file));
+    if (overlap.length > 0) throw new ValidationError(`${path}.tasks[${index}].testSupportFiles`, `duplicates files: ${overlap.join(", ")}`);
     if (tasks[index].verification.length === 0) throw new ValidationError(`${path}.tasks[${index}].verification`, "must not be empty");
   }
   return {
@@ -157,14 +166,33 @@ export function validateReviewOutput(value: unknown, path = "review"): ReviewOut
   };
 }
 
-function mutationBase(value: unknown, path: string): Omit<BuilderOutput, never> {
+function mutationBlocker(item: Record<string, unknown>, path: string): BuilderOutput["blocker"] {
+  let blocker: BuilderOutput["blocker"];
+  if (item.blocker !== undefined && item.blocker !== null) {
+    const blocked = record(item.blocker, `${path}.blocker`);
+    const kind = enumValue(blocked.kind, `${path}.blocker.kind`, ["scope", "environment", "tooling", "insufficient_evidence"] as const);
+    const requiredFiles = repositoryPaths(blocked.requiredFiles, `${path}.blocker.requiredFiles`);
+    if (kind === "scope" && requiredFiles.length === 0) {
+      throw new ValidationError(`${path}.blocker.requiredFiles`, "must not be empty for a scope blocker");
+    }
+    if (kind !== "scope" && requiredFiles.length > 0) {
+      throw new ValidationError(`${path}.blocker.requiredFiles`, "must be empty unless blocker kind is scope");
+    }
+    blocker = { kind, reason: string(blocked.reason, `${path}.blocker.reason`), requiredFiles };
+  }
+  return blocker;
+}
+
+function mutationBase(value: unknown, path: string): BuilderOutput {
   const item = record(value, path);
+  const blocker = mutationBlocker(item, path);
   return {
     summary: string(item.summary, `${path}.summary`),
     changedFiles: repositoryPaths(item.changedFiles, `${path}.changedFiles`),
     commands: array(item.commands, `${path}.commands`, commandReport),
     assumptions: strings(item.assumptions, `${path}.assumptions`),
-    unresolvedIssues: strings(item.unresolvedIssues, `${path}.unresolvedIssues`)
+    unresolvedIssues: strings(item.unresolvedIssues, `${path}.unresolvedIssues`),
+    ...(blocker ? { blocker } : {})
   };
 }
 
@@ -259,6 +287,7 @@ function proposedLesson(value: unknown, path: string): ProposedLesson {
 
 export function validateDocumenterOutput(value: unknown, path = "documenter"): DocumenterOutput {
   const item = record(value, path);
+  const blocker = mutationBlocker(item, path);
   const proposedLessons = array(item.proposedLessons, `${path}.proposedLessons`, proposedLesson);
   if (proposedLessons.length > MAX_CANDIDATES_PER_RUN) {
     throw new ValidationError(`${path}.proposedLessons`, `must not contain more than ${MAX_CANDIDATES_PER_RUN} items`);
@@ -269,7 +298,8 @@ export function validateDocumenterOutput(value: unknown, path = "documenter"): D
     documentationChanges: strings(item.documentationChanges, `${path}.documentationChanges`),
     proposedLessons,
     commands: array(item.commands, `${path}.commands`, commandReport),
-    unresolvedIssues: strings(item.unresolvedIssues, `${path}.unresolvedIssues`)
+    unresolvedIssues: strings(item.unresolvedIssues, `${path}.unresolvedIssues`),
+    ...(blocker ? { blocker } : {})
   };
 }
 

@@ -81,6 +81,7 @@ export interface MutationPathScope {
   readonly planFiles: readonly string[];
   readonly testFiles: readonly string[];
   readonly documentationFiles: readonly string[];
+  readonly testSupportFiles: readonly string[];
 }
 
 export class WorkspaceGuardError extends Error {
@@ -121,8 +122,10 @@ export function deriveMutationPathScope(plan: PlannerOutput): MutationPathScope 
   if (!["implementation", "bug_fix", "quick_implementation", "tests_only", "documentation_only"].includes(plan.route)) {
     throw new WorkspaceGuardError(`Workflow route ${JSON.stringify(plan.route)} does not authorize mutations`);
   }
-  const planFiles = normalizedUnique(plan.tasks.flatMap(task => task.files));
-  if (plan.route === "tests_only" && planFiles.some(file => !isTestPath(file))) {
+  const testSupportFiles = normalizedUnique(plan.tasks.flatMap(task => task.testSupportFiles ?? []));
+  const planFiles = normalizedUnique(plan.tasks.flatMap(task => [...task.files, ...(task.testSupportFiles ?? [])]));
+  const testSupportSet = new Set(testSupportFiles);
+  if (plan.route === "tests_only" && planFiles.some(file => !isTestPath(file) && !testSupportSet.has(file))) {
     throw new WorkspaceGuardError("tests_only plans may contain only test-classified files");
   }
   if (plan.route === "documentation_only" && planFiles.some(file => !isDocumentationPath(file))) {
@@ -130,8 +133,9 @@ export function deriveMutationPathScope(plan: PlannerOutput): MutationPathScope 
   }
   return Object.freeze({
     planFiles: Object.freeze(planFiles),
-    testFiles: Object.freeze(planFiles.filter(isTestPath)),
-    documentationFiles: Object.freeze(planFiles.filter(isDocumentationPath))
+    testFiles: Object.freeze(planFiles.filter(file => isTestPath(file) || testSupportSet.has(file))),
+    documentationFiles: Object.freeze(planFiles.filter(isDocumentationPath)),
+    testSupportFiles: Object.freeze(testSupportFiles)
   });
 }
 
@@ -186,7 +190,9 @@ async function gitFileList(root: string): Promise<string[] | undefined> {
       maxBuffer: GIT_OUTPUT_LIMIT,
       windowsHide: true
     });
-    return result.stdout.split("\0").filter(Boolean).map(file => normalizeRepositoryPath(file));
+    // Git reports an untracked nested worktree as a directory entry ending in `/`.
+    // Workspace snapshots hash files only; excluded directory trees are handled later.
+    return result.stdout.split("\0").filter(file => file && !/[\\/]$/.test(file)).map(file => normalizeRepositoryPath(file));
   } catch (error) {
     const code = (error as NodeJS.ErrnoException).code;
     if (code === "ENOENT" || (error instanceof Error && /not a git repository/i.test(error.message))) return undefined;

@@ -155,8 +155,8 @@ export async function fail(runtime: OrchestratorRuntime, error: unknown, ctx: Ex
   }
   try {
     const formatted = cancelled
-      ? formatCancelledRun(state.stoppedStage ?? state.stage, message, state.runDir)
-      : formatFailedRun(state.stoppedStage ?? state.stage, message, state.runDir);
+      ? formatCancelledRun(state.stoppedStage ?? state.stage, message, state.runDir, state)
+      : formatFailedRun(state.stoppedStage ?? state.stage, message, state.runDir, state);
     publishSessionMessage(runtime, formatted, { kind: cancelled ? "cancelled" : "failed" });
   } catch {
     // Session messaging is supplementary.

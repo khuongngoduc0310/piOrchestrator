@@ -1,7 +1,8 @@
 import { createServer, type Server, type ServerResponse } from "node:http";
 import path from "node:path";
-import type { AgentInspection, AgentName, AgentTranscript, ArtifactContent, DashboardRunHistoryItem, InvocationDiffView, OrchestratorViewModel } from "./types.js";
-import { DASHBOARD_HTML } from "./dashboard-page.js";
+import fs from "node:fs";
+import { fileURLToPath } from "node:url";
+import type { AgentHistoryResponse, AgentInspection, AgentName, AgentTranscript, ArtifactContent, DashboardRunHistoryItem, InvocationDiffView, OrchestratorViewModel } from "./types.js";
 
 export interface DashboardDataProvider {
   getViewModel(): OrchestratorViewModel | undefined;
@@ -11,9 +12,59 @@ export interface DashboardDataProvider {
   listRuns?(): Promise<DashboardRunHistoryItem[]>;
   getRunViewModel?(runId: string): Promise<OrchestratorViewModel | undefined>;
   getRunAgentInspection?(runId: string, name: AgentName): Promise<AgentInspection | undefined>;
+  getRunAgentHistory?(runId: string): Promise<AgentHistoryResponse | undefined>;
   getRunAgentTranscript?(runId: string, stepId: string, invocation: number): Promise<AgentTranscript | undefined>;
   getInvocationDiff?(runId: string, stepId: string, invocation: number): Promise<InvocationDiffView | undefined>;
   readRunArtifact?(runId: string, name: string): Promise<ArtifactContent | undefined>;
+}
+
+const DASHBOARD_DIR = path.resolve(
+  path.dirname(fileURLToPath(import.meta.url)),
+  "dashboard-dist",
+);
+const DASHBOARD_ASSET_MAP: Record<string, string> = {
+  "/dashboard.js": "dashboard.js",
+  "/dashboard.css": "dashboard.css",
+};
+
+function serveStaticAsset(res: ServerResponse, urlPath: string): boolean {
+  const relative = DASHBOARD_ASSET_MAP[urlPath];
+  if (!relative) return false;
+  const filePath = path.resolve(DASHBOARD_DIR, relative);
+  if (!filePath.startsWith(DASHBOARD_DIR)) return false;
+  let content: string | undefined;
+  try {
+    content = fs.readFileSync(filePath, "utf-8");
+  } catch {
+    return false;
+  }
+  const ext = path.extname(relative);
+  const mime =
+    ext === ".js"
+      ? "text/javascript; charset=utf-8"
+      : ext === ".css"
+        ? "text/css; charset=utf-8"
+        : "text/plain; charset=utf-8";
+  res.setHeader("content-type", mime);
+  res.end(content);
+  return true;
+}
+
+function serveDashboardHtml(res: ServerResponse): void {
+  const filePath = path.resolve(DASHBOARD_DIR, "index.html");
+  if (!filePath.startsWith(DASHBOARD_DIR)) {
+    res.statusCode = 500;
+    res.end("Internal error");
+    return;
+  }
+  try {
+    const html = fs.readFileSync(filePath, "utf-8");
+    res.setHeader("content-type", "text/html; charset=utf-8");
+    res.end(html);
+  } catch {
+    res.statusCode = 500;
+    res.end("Internal error");
+  }
 }
 
 const ARTIFACT_PATH_RE = /^\/api\/artifacts\/(.+)$/;
@@ -21,6 +72,7 @@ const AGENT_PATH_RE = /^\/api\/agents\/([a-z]+)$/;
 const TRANSCRIPT_PATH_RE = /^\/api\/steps\/(step-\d+)\/invocations\/(\d+)\/transcript$/;
 const RUN_STATE_RE = /^\/api\/runs\/([^/]+)\/state$/;
 const RUN_AGENT_RE = /^\/api\/runs\/([^/]+)\/agents\/([a-z]+)$/;
+const RUN_AGENT_HISTORY_RE = /^\/api\/runs\/([^/]+)\/agent-history$/;
 const RUN_TRANSCRIPT_RE = /^\/api\/runs\/([^/]+)\/steps\/(step-\d+)\/invocations\/(\d+)\/transcript$/;
 const RUN_DIFF_RE = /^\/api\/runs\/([^/]+)\/steps\/(step-\d+)\/invocations\/(\d+)\/diff$/;
 const RUN_ARTIFACT_RE = /^\/api\/runs\/([^/]+)\/artifacts\/([^/]+)$/;
@@ -72,9 +124,11 @@ export class DashboardServer {
           return;
         }
         if (method === "GET" && (pathname === "/" || pathname === "/index.html")) {
-          res.setHeader("content-type", "text/html; charset=utf-8");
-          res.setHeader("content-security-policy", "default-src 'self'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; connect-src 'self'");
-          res.end(DASHBOARD_HTML);
+          res.setHeader("content-security-policy", "default-src 'self'; script-src 'self'; style-src 'self'; connect-src 'self'; img-src 'self' data:; object-src 'none'; base-uri 'none'; frame-ancestors 'none'");
+          serveDashboardHtml(res);
+          return;
+        }
+        if (method === "GET" && serveStaticAsset(res, pathname)) {
           return;
         }
         if (method === "GET") {
@@ -94,6 +148,14 @@ export class DashboardServer {
           const runTranscriptMatch = pathname.match(RUN_TRANSCRIPT_RE);
           if (runTranscriptMatch) {
             const data = await this.provider.getRunAgentTranscript?.(decodeURIComponent(runTranscriptMatch[1]), runTranscriptMatch[2], Number(runTranscriptMatch[3]));
+            if (!data) return notFound(res);
+            res.setHeader("content-type", "application/json; charset=utf-8");
+            res.end(JSON.stringify(data));
+            return;
+          }
+          const runAgentHistoryMatch = pathname.match(RUN_AGENT_HISTORY_RE);
+          if (runAgentHistoryMatch) {
+            const data = await this.provider.getRunAgentHistory?.(decodeURIComponent(runAgentHistoryMatch[1]));
             if (!data) return notFound(res);
             res.setHeader("content-type", "application/json; charset=utf-8");
             res.end(JSON.stringify(data));

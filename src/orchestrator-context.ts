@@ -37,6 +37,8 @@ export interface PlanningResult {
 
 export interface ImplementationPlanningResult extends PlanningResult {
   baseline: CheckResult[];
+  scopeRevisionCount: number;
+  baselineDiagnosis?: DebuggerOutput;
 }
 
 export interface ImplementationResult extends ImplementationPlanningResult {

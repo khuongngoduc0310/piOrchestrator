@@ -33,6 +33,7 @@ import { currentWorkspaceDigest, saveWorkflowCheckpoint } from "./orchestrator-c
 import { EXTENSION_VERSION } from "./orchestrator-helpers.js";
 import { allGreen } from "./orchestrator-helpers.js";
 import { computeFinalChecksDigest, validateCandidates } from "./memory-validation.js";
+import { assertBuilderComplete, assertDocumenterComplete, assertTesterComplete } from "./mutation-completion.js";
 
 const MAX_STATE_BYTES = 16 * 1024 * 1024;
 
@@ -50,12 +51,27 @@ export async function resumeWorkflow(
     const checkpoint = await new CheckpointStore(store.runDir, runId).loadLatest();
     if (!checkpoint) throw new Error(`Run ${runId} has no resumable checkpoint`);
     const currentState = validateWorkflowStateForResume(JSON.parse(await readSafeArtifact(store.runDir, "state.json", MAX_STATE_BYTES)));
-    await validateResumeBindings(runtime, cwd, store, checkpoint, currentState, ctx);
-
     runtime.controller = controller;
     runtime.store = store;
     runtime.state = currentState;
     runtime.config = checkpoint.config;
+    try {
+      await validateResumeBindings(runtime, cwd, store, checkpoint, currentState, ctx);
+    } catch (error) {
+      if (isPermanentResumeFailure(error)) {
+        currentState.resumeBlockedReason = error.message;
+        await store.saveJson("resume-precondition-error.json", {
+          checkpointNumber: checkpoint.checkpointNumber,
+          cursor: checkpoint.cursor.kind,
+          error: error.message,
+          blockedAt: runtime.timestamp()
+        }).catch(() => undefined);
+        await store.event("resume_blocked", { checkpointNumber: checkpoint.checkpointNumber, error: error.message }).catch(() => undefined);
+        await persist(runtime, ctx).catch(() => undefined);
+      }
+      throw error;
+    }
+
     runtime.baselineContext = checkpoint.baselineContext;
     runtime.baselineReviewContext = checkpoint.baselineReviewContext;
     runtime.baselineRepaired = checkpoint.baselineRepaired;
@@ -117,6 +133,28 @@ export async function resumeWorkflow(
   }
 }
 
+function isPermanentResumeFailure(error: unknown): error is Error {
+  if (!(error instanceof Error)) return false;
+  return [
+    "cannot be resumed",
+    "identity does not match",
+    "route does not match",
+    "was created by extension",
+    "different project path",
+    "Run directory does not match",
+    "configuration changed",
+    "Project memory changed",
+    "memory content changed",
+    "memory lessons are missing",
+    "Finalization already completed",
+    "Finalization outcome is uncertain",
+    "worktree belongs to a different project",
+    "workspace root does not match",
+    "Workspace differs",
+    "checkpoint"
+  ].some(fragment => error.message.includes(fragment));
+}
+
 async function validateResumeBindings(
   runtime: OrchestratorRuntime,
   cwd: string,
@@ -175,6 +213,7 @@ function validateContinuation(checkpoint: WorkflowCheckpoint): void {
   const value = checkpoint.cursor.continuation;
   switch (checkpoint.cursor.kind) {
     case "plan_approved": planningResult(value); return;
+    case "checks_configured": planningResult(value); return;
     case "mutation_ready": implementationPlanningResult(value); return;
     case "bug_diagnosed": {
       const item = objectValue(value, "bug diagnosis checkpoint");
@@ -185,7 +224,7 @@ function validateContinuation(checkpoint: WorkflowCheckpoint): void {
     case "tester_completed": {
       const item = objectValue(value, "tester checkpoint");
       const planning = implementationPlanningResult(item.planning);
-      validateTesterOutput(item.tester, planning.plan.acceptanceCriteria);
+      assertTesterComplete(validateTesterOutput(item.tester, planning.plan.acceptanceCriteria), planning.plan.route);
       if (item.diagnosis !== undefined) validateDebuggerOutput(item.diagnosis);
       return;
     }
@@ -196,7 +235,7 @@ function validateContinuation(checkpoint: WorkflowCheckpoint): void {
         validateCheckResults(item.failedBaseline);
         validateDebuggerOutput(item.baselineDiagnosis);
         validatePlannerOutput(item.baselineFixPlan);
-        validateBuilderOutput(item.repairOutput);
+        assertBuilderComplete(validateBuilderOutput(item.repairOutput), "the approved baseline repair");
         return;
       }
       const planning = implementationPlanningResult(item.planning);
@@ -209,6 +248,35 @@ function validateContinuation(checkpoint: WorkflowCheckpoint): void {
       if (item.previousChecks !== undefined) validateCheckResults(item.previousChecks);
       if (item.diagnosis !== undefined) validateDebuggerOutput(item.diagnosis);
       positiveInteger(item.completedAttempt, "completedAttempt");
+      if (item.scopeRevisionCount !== undefined) nonNegativeInteger(item.scopeRevisionCount, "scopeRevisionCount");
+      return;
+    }
+    case "scope_revision_approved": {
+      const item = objectValue(value, "scope revision checkpoint");
+      if (item.mode === "implementation") {
+        const planning = implementationPlanningResult(item.planning);
+        if (item.tester === undefined) {
+          if (planning.plan.route !== "quick_implementation") throw new Error("Scope revision checkpoint is missing Tester output");
+        } else {
+          validateTesterOutput(item.tester, planning.plan.acceptanceCriteria);
+        }
+        validateCheckResults(item.checksAfterTests);
+        if (item.previousChecks !== undefined) validateCheckResults(item.previousChecks);
+        if (item.diagnosis !== undefined) validateDebuggerOutput(item.diagnosis);
+        positiveInteger(item.attempt, "attempt");
+      } else if (item.mode === "review") {
+        implementationResult(item.implementation);
+        validateCheckResults(item.finalImplChecks);
+        validateReviewOutput(item.codeReview);
+        arrayValue(item.priorCodeReviews, "priorCodeReviews").forEach((entry, index) => validateReviewOutput(entry, `priorCodeReviews[${index}]`));
+        positiveInteger(item.pendingFix, "pendingFix");
+        nonNegativeInteger(item.allowedReviewFixes, "allowedReviewFixes");
+        if (item.failureChecks !== undefined) validateCheckResults(item.failureChecks);
+        if (item.failureDiagnosis !== undefined) validateDebuggerOutput(item.failureDiagnosis);
+      } else {
+        throw new Error("Unsupported scope revision checkpoint mode");
+      }
+      positiveInteger(item.scopeRevisionCount, "scopeRevisionCount");
       return;
     }
     case "implementation_verified": implementationResult(value); return;
@@ -220,13 +288,14 @@ function validateContinuation(checkpoint: WorkflowCheckpoint): void {
       arrayValue(item.priorCodeReviews, "priorCodeReviews").forEach((entry, index) => validateReviewOutput(entry, `priorCodeReviews[${index}]`));
       positiveInteger(item.completedFix, "completedFix");
       nonNegativeInteger(item.allowedReviewFixes, "allowedReviewFixes");
+      nonNegativeInteger(item.scopeRevisionCount, "scopeRevisionCount");
       return;
     }
     case "review_approved": reviewResult(value); return;
     case "documenter_completed": {
       const item = objectValue(value, "documenter checkpoint");
       reviewResult(item.review);
-      validateDocumenterOutput(item.documentation);
+      assertDocumenterComplete(validateDocumenterOutput(item.documentation));
       return;
     }
     case "lessons_screened": {
@@ -281,6 +350,11 @@ async function continueFromCheckpoint(runtime: OrchestratorRuntime, workflow: Wo
       await runSelectedRoute(runtime, workflow, planning);
       return;
     }
+    case "checks_configured": {
+      const planning = planningResult(continuation);
+      await runSelectedRoute(runtime, workflow, planning);
+      return;
+    }
     case "mutation_ready": {
       const planning = implementationPlanningResult(continuation);
       await runSelectedRoute(runtime, workflow, planning, { prepared: true });
@@ -312,7 +386,7 @@ async function continueFromCheckpoint(runtime: OrchestratorRuntime, workflow: Wo
         const planning = planningResult(value.planning);
         const baseline = await runCheckStep(runtime, "baseline", "Verify baseline after repair", workflow.mutationCwd, workflow.ctx, { requireGreen: true, kind: "baseline-verify" });
         runtime.baselineRepaired = true;
-        const prepared = { ...planning, baseline };
+        const prepared = { ...planning, baseline, scopeRevisionCount: 0 };
         await saveWorkflowCheckpoint(runtime, workflow, "mutation_ready", prepared, { exploration: planning.exploration, plan: planning.plan, baselineChecks: baseline });
         const implementation = await runImplementationPhase(runtime, workflow, prepared);
         const review = await runReviewPhase(runtime, workflow, implementation);
@@ -327,12 +401,48 @@ async function continueFromCheckpoint(runtime: OrchestratorRuntime, workflow: Wo
         checksAfterTests: validateCheckResults(value.checksAfterTests),
         previousChecks: value.previousChecks === undefined ? undefined : validateCheckResults(value.previousChecks),
         diagnosis: value.diagnosis === undefined ? undefined : validateDebuggerOutput(value.diagnosis),
-        completedAttempt: positiveInteger(value.completedAttempt, "completedAttempt")
+        completedAttempt: positiveInteger(value.completedAttempt, "completedAttempt"),
+        scopeRevisionCount: value.scopeRevisionCount === undefined ? undefined : nonNegativeInteger(value.scopeRevisionCount, "scopeRevisionCount")
       };
       const implementation = await runImplementationPhase(runtime, workflow, planning, implementationContinuation, {
         skipTester: workflow.route === "quick_implementation"
       });
       const review = await runReviewPhase(runtime, workflow, implementation);
+      await runFinalizationPhase(runtime, workflow, review);
+      return;
+    }
+    case "scope_revision_approved": {
+      const value = objectValue(continuation, "scope revision checkpoint");
+      let review;
+      if (value.mode === "implementation") {
+        const planning = implementationPlanningResult(value.planning);
+        const tester = value.tester === undefined ? undefined : validateTesterOutput(value.tester, planning.plan.acceptanceCriteria);
+        const implementation = await runImplementationPhase(runtime, workflow, planning, {
+          point: "scope_revision_approved",
+          tester,
+          checksAfterTests: validateCheckResults(value.checksAfterTests),
+          previousChecks: value.previousChecks === undefined ? undefined : validateCheckResults(value.previousChecks),
+          diagnosis: value.diagnosis === undefined ? undefined : validateDebuggerOutput(value.diagnosis),
+          attempt: positiveInteger(value.attempt, "attempt"),
+          scopeRevisionCount: positiveInteger(value.scopeRevisionCount, "scopeRevisionCount")
+        }, { skipTester: workflow.route === "quick_implementation" });
+        review = await runReviewPhase(runtime, workflow, implementation);
+      } else if (value.mode === "review") {
+        const implementation = implementationResult(value.implementation);
+        review = await runReviewPhase(runtime, workflow, implementation, {
+          point: "scope_revision_approved",
+          finalImplChecks: validateCheckResults(value.finalImplChecks),
+          codeReview: validateReviewOutput(value.codeReview),
+          priorCodeReviews: arrayValue(value.priorCodeReviews, "priorCodeReviews").map((entry, index) => validateReviewOutput(entry, `priorCodeReviews[${index}]`)),
+          pendingFix: positiveInteger(value.pendingFix, "pendingFix"),
+          allowedReviewFixes: nonNegativeInteger(value.allowedReviewFixes, "allowedReviewFixes"),
+          scopeRevisionCount: positiveInteger(value.scopeRevisionCount, "scopeRevisionCount")
+          , failureChecks: value.failureChecks === undefined ? undefined : validateCheckResults(value.failureChecks)
+          , failureDiagnosis: value.failureDiagnosis === undefined ? undefined : validateDebuggerOutput(value.failureDiagnosis)
+        });
+      } else {
+        throw new Error("Unsupported scope revision checkpoint mode");
+      }
       await runFinalizationPhase(runtime, workflow, review);
       return;
     }
@@ -351,7 +461,8 @@ async function continueFromCheckpoint(runtime: OrchestratorRuntime, workflow: Wo
         codeReview: validateReviewOutput(value.codeReview),
         priorCodeReviews: arrayValue(value.priorCodeReviews, "priorCodeReviews").map((entry, index) => validateReviewOutput(entry, `priorCodeReviews[${index}]`)),
         completedFix: positiveInteger(value.completedFix, "completedFix"),
-        allowedReviewFixes: nonNegativeInteger(value.allowedReviewFixes, "allowedReviewFixes")
+        allowedReviewFixes: nonNegativeInteger(value.allowedReviewFixes, "allowedReviewFixes"),
+        scopeRevisionCount: nonNegativeInteger(value.scopeRevisionCount, "scopeRevisionCount")
       };
       const review = await runReviewPhase(runtime, workflow, implementation, reviewContinuation);
       await runFinalizationPhase(runtime, workflow, review);
@@ -405,7 +516,13 @@ function planningResult(value: unknown): PlanningResult {
 
 function implementationPlanningResult(value: unknown): ImplementationPlanningResult {
   const planning = planningResult(value);
-  return { ...planning, baseline: validateCheckResults(objectValue(value, "implementation planning").baseline) };
+  const item = objectValue(value, "implementation planning");
+  return {
+    ...planning,
+    baseline: validateCheckResults(item.baseline),
+    scopeRevisionCount: nonNegativeInteger(item.scopeRevisionCount, "scopeRevisionCount"),
+    ...(item.baselineDiagnosis === undefined ? {} : { baselineDiagnosis: validateDebuggerOutput(item.baselineDiagnosis) })
+  };
 }
 
 function implementationResult(value: unknown): ImplementationResult {
@@ -449,10 +566,14 @@ function specializedMutationResult(value: unknown): SpecializedMutationResult {
   const item = objectValue(value, "specialized mutation continuation");
   const planning = implementationPlanningResult(item);
   if (planning.plan.route === "tests_only") {
-    return { ...planning, route: "tests_only", tester: validateTesterOutput(item.tester, planning.plan.acceptanceCriteria) };
+    const tester = validateTesterOutput(item.tester, planning.plan.acceptanceCriteria);
+    assertTesterComplete(tester, "tests_only");
+    return { ...planning, route: "tests_only", tester };
   }
   if (planning.plan.route === "documentation_only") {
-    return { ...planning, route: "documentation_only", documentation: validateDocumenterOutput(item.documentation) };
+    const documentation = validateDocumenterOutput(item.documentation);
+    assertDocumenterComplete(documentation);
+    return { ...planning, route: "documentation_only", documentation };
   }
   throw new Error("Specialized mutation checkpoint has an invalid route");
 }

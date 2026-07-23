@@ -4,12 +4,15 @@ import { createHash } from "node:crypto";
 import { AgentCancelledError, AgentIncompleteResponseError, type AgentRunOptions } from "./agent-runner.js";
 import { AGENT_TASK_SCHEMA_VERSION, type AgentOutputMap, type AgentResult, type AgentTaskEnvelope, type AgentTaskMap, type AgentInvocationRecord, type AgentName, type AgentTranscript, type AgentTranscriptArtifact, type PlannerOutput, type Stage } from "./types.js";
 import { ValidationError } from "./validation.js";
-import { compareWorkspaceSnapshots, createWorkspaceSnapshot, deriveRoleMutationPaths } from "./workspace-guard.js";
+import { compareWorkspaceSnapshots, createWorkspaceSnapshot, deriveRoleMutationPaths, validateReportedFileSet } from "./workspace-guard.js";
 import type { OrchestratorRuntime } from "./orchestrator-runtime.js";
 import { messageOf, projectTrusted, transcriptKey } from "./orchestrator-helpers.js";
 import { beginStep, persist, throttledPersist, throwIfAborted, transition, updateAgentActivity } from "./orchestrator-state.js";
-import { validateAgentMutation, workspaceExclusions } from "./orchestrator-workspace.js";
+import { validateAgentMutation, validateAgentMutationScope, workspaceExclusions } from "./orchestrator-workspace.js";
 import { captureGitTree, compareGitTrees } from "./git-tree-diff.js";
+import { ROLE_MUTATION_KINDS } from "./role-capabilities.js";
+import { refreshCheckpointAfterInterruptedMutation } from "./orchestrator-checkpoints.js";
+import type { WorkspaceSnapshot } from "./workspace-guard.js";
 
 const OUTPUT_CORRECTABLE_AGENTS = new Set<AgentName>(["explorer", "planner", "reviewer", "debugger"]);
 const CORRECTION_TOOLS = new Set(["read", "grep", "find", "ls"]);
@@ -39,11 +42,13 @@ export async function runAgentStep<A extends AgentName>(
   status.startedAt = step.startedAt;
   delete status.error;
   await transition(runtime, stage, agent, `${agent} is running`, ctx);
-  const beforeWorkspace = runtime.enforceWorkspacePolicy
-    ? await createWorkspaceSnapshot(cwd, { excludedRoots: workspaceExclusions(runtime, cwd) })
-    : undefined;
+  let beforeWorkspace: Awaited<ReturnType<typeof createWorkspaceSnapshot>> | undefined;
+  let workspaceAudited = false;
   let rawText: string | undefined;
   try {
+    beforeWorkspace = runtime.enforceWorkspacePolicy
+      ? await createWorkspaceSnapshot(cwd, { excludedRoots: workspaceExclusions(runtime, cwd) })
+      : undefined;
     const onEvent = (event: Parameters<NonNullable<AgentRunOptions["onEvent"]>>[0]): void => {
       void store.event("agent_event", { stepId: step.id, agent, event }).catch(() => undefined);
       updateAgentActivity(runtime, event);
@@ -98,13 +103,34 @@ export async function runAgentStep<A extends AgentName>(
             invocation.truncated = next.truncated;
             runtime.transcriptRevision++;
             throttledPersist(runtime, ctx);
+          },
+          onUsage: snapshot => {
+            invocation.usage = snapshot.usage;
+            invocation.provider = snapshot.provider;
+            invocation.model = snapshot.model;
+            invocation.api = snapshot.api;
+            invocation.stopReason = snapshot.stopReason;
+            throttledPersist(runtime, ctx);
           }
         });
         latestTranscript = result.transcript ?? latestTranscript;
+        if (result.usage) invocation.usage = result.usage;
+        if (result.response) {
+          invocation.provider = result.response.provider;
+          invocation.model = result.response.model;
+          invocation.api = result.response.api;
+          invocation.stopReason = result.response.stopReason;
+        }
         return result;
       } catch (error) {
         invocationError = error;
         invocationStatus = controller.signal.aborted || error instanceof AgentCancelledError ? "cancelled" : "failed";
+        if (error instanceof AgentIncompleteResponseError) {
+          invocation.usage = error.usage;
+          invocation.provider = error.provider;
+          invocation.model = error.model;
+          invocation.stopReason = error.stopReason;
+        }
         throw error;
       } finally {
         invocation.status = invocationStatus;
@@ -210,8 +236,61 @@ export async function runAgentStep<A extends AgentName>(
       }
     }
     if (beforeWorkspace) {
-      const afterWorkspace = await createWorkspaceSnapshot(cwd, { excludedRoots: workspaceExclusions(runtime, cwd) });
-      await validateAgentMutation(runtime, agent, qualifier.mutationPlan, output, compareWorkspaceSnapshots(beforeWorkspace, afterWorkspace), step, store);
+      const afterExecuteWorkspace = await createWorkspaceSnapshot(cwd, { excludedRoots: workspaceExclusions(runtime, cwd) });
+      const delta = compareWorkspaceSnapshots(beforeWorkspace, afterExecuteWorkspace);
+      let mutationAudit: { initialReported: readonly string[]; correctionAttempted: true; correctionError?: string } | undefined;
+      try {
+        validateAgentMutationScope(agent, qualifier.mutationPlan, delta);
+      } catch {
+        await validateAgentMutation(runtime, agent, qualifier.mutationPlan, output, delta, step, store);
+      }
+      if (ROLE_MUTATION_KINDS[agent] !== "none") {
+        const initialReported = changedFilesOf(output);
+        try {
+          validateReportedFileSet(initialReported, delta);
+        } catch (reportError) {
+          const correctionEnvelope: AgentTaskEnvelope<AgentTaskMap[A]> = {
+            taskSchemaVersion: AGENT_TASK_SCHEMA_VERSION,
+            mode: "correct_output",
+            task: payload,
+            memoryContext: memoryEnvelope,
+            correction: {
+              attempt: 1,
+              reason: "reported_changed_files_mismatch",
+              fieldPath: "changedFiles",
+              expectedChangedFiles: [...delta.changedFiles]
+            }
+          };
+          const correctionConfig = { ...runBase.config, tools: runBase.config.tools.filter(tool => CORRECTION_TOOLS.has(tool)) };
+          let correctedOutput: AgentOutputMap[A];
+          try {
+            result = await executeInvocation("correct_output", correctionConfig, JSON.stringify(correctionEnvelope, null, 2));
+            rawText = result.text;
+            correctedOutput = validate(result.text);
+          } catch (correctionError) {
+            await validateAgentMutation(runtime, agent, qualifier.mutationPlan, output, delta, step, store, {
+              initialReported,
+              correctionAttempted: true,
+              correctionError: messageOf(correctionError)
+            });
+            throw correctionError;
+          }
+          const afterCorrectionWorkspace = await createWorkspaceSnapshot(cwd, { excludedRoots: workspaceExclusions(runtime, cwd) });
+          const correctionDelta = compareWorkspaceSnapshots(afterExecuteWorkspace, afterCorrectionWorkspace);
+          if (correctionDelta.changedFiles.length > 0) {
+            const finalDelta = compareWorkspaceSnapshots(beforeWorkspace, afterCorrectionWorkspace);
+            await validateAgentMutation(runtime, agent, qualifier.mutationPlan, correctedOutput, finalDelta, step, store, {
+              initialReported,
+              correctionAttempted: true,
+              additionalViolations: [`${agent} output correction changed project files: ${correctionDelta.changedFiles.join(", ")}`]
+            });
+          }
+          output = correctedOutput;
+          mutationAudit = { initialReported, correctionAttempted: true };
+        }
+      }
+      await validateAgentMutation(runtime, agent, qualifier.mutationPlan, output, delta, step, store, mutationAudit);
+      workspaceAudited = true;
     }
     const artifact = store.artifactName({ ...qualifier, sequence: step.sequence, stage, agent, kind: "output" });
     step.artifact = await store.saveJson(artifact, { output, usage: result.usage });
@@ -223,12 +302,46 @@ export async function runAgentStep<A extends AgentName>(
     status.completedAt = runtime.timestamp();
     return output;
   } catch (error) {
+    let effectiveError = error;
+    let recoverySnapshot: WorkspaceSnapshot | undefined;
+    if (beforeWorkspace && !workspaceAudited && ROLE_MUTATION_KINDS[agent] !== "none") {
+      try {
+        const afterWorkspace = await createWorkspaceSnapshot(cwd, { excludedRoots: workspaceExclusions(runtime, cwd) });
+        const delta = compareWorkspaceSnapshots(beforeWorkspace, afterWorkspace);
+        validateAgentMutationScope(agent, qualifier.mutationPlan, delta);
+        for (const file of delta.changedFiles) runtime.validatedChangedFiles.add(file);
+        recoverySnapshot = afterWorkspace;
+        const auditArtifact = store.artifactName({ ...qualifier, sequence: step.sequence, stage, agent, kind: "failed-mutation-audit" });
+        step.artifact = await store.saveJson(auditArtifact, {
+          actual: delta,
+          originalError: messageOf(error),
+          outputValidated: false,
+          scopeValidated: true
+        });
+      } catch (auditError) {
+        effectiveError = auditError;
+        const auditArtifact = store.artifactName({ ...qualifier, sequence: step.sequence, stage, agent, kind: "failed-mutation-audit" });
+        step.artifact = await store.saveJson(auditArtifact, {
+          originalError: messageOf(error),
+          auditError: messageOf(auditError),
+          outputValidated: false,
+          scopeValidated: false
+        }).catch(() => step.artifact);
+      }
+    }
     const cancelled = controller.signal.aborted || error instanceof AgentCancelledError;
     step.status = cancelled ? "cancelled" : "failed";
-    step.message = messageOf(error);
+    step.message = messageOf(effectiveError);
     status.status = cancelled ? "cancelled" : "failed";
-    status.error = messageOf(error);
+    status.error = messageOf(effectiveError);
     status.completedAt = runtime.timestamp();
+    if (recoverySnapshot) {
+      try {
+        await refreshCheckpointAfterInterruptedMutation(runtime, recoverySnapshot);
+      } catch (checkpointError) {
+        state.resumeBlockedReason = `Interrupted mutation was audited, but its recovery checkpoint failed: ${messageOf(checkpointError)}`;
+      }
+    }
     if (rawText === undefined) {
       const errorArtifact = store.artifactName({ ...qualifier, sequence: step.sequence, stage, agent, kind: "execution-error" });
       const details = error instanceof AgentIncompleteResponseError
@@ -236,10 +349,15 @@ export async function runAgentStep<A extends AgentName>(
         : { error: messageOf(error) };
       step.artifact = await store.saveJson(errorArtifact, details);
     }
-    throw error;
+    throw effectiveError;
   } finally {
     step.completedAt = runtime.timestamp();
     state.activeAgent = undefined;
     await persist(runtime, ctx);
   }
+}
+
+function changedFilesOf(output: unknown): string[] {
+  const changedFiles = (output as { changedFiles?: unknown }).changedFiles;
+  return Array.isArray(changedFiles) ? changedFiles.filter((value): value is string => typeof value === "string") : [];
 }

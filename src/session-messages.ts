@@ -53,6 +53,16 @@ export function formatApprovedPlan(plan: PlannerOutput): string {
   );
 }
 
+export function formatScopeRevision(plan: PlannerOutput, addedFiles: string[]): string {
+  return truncateToBytes(
+    `## Plan scope revised\n\n` +
+    `Failing checks require updates outside the original approved file set. The revised plan was reviewed and approved.\n\n` +
+    `### Newly authorized files\n\n${changedFilesSummary(addedFiles)}\n\n` +
+    `**Plan:** ${plan.summary}\n`,
+    MAX_BYTES
+  );
+}
+
 export function formatBaselineReport(
   checks: CheckResult[],
   diagnosis: DebuggerOutput,

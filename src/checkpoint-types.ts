@@ -15,14 +15,16 @@ import type {
 } from "./types.js";
 import type { WorktreeHandle } from "./worktree.js";
 
-export const CHECKPOINT_SCHEMA_VERSION = 2 as const;
+export const CHECKPOINT_SCHEMA_VERSION = 3 as const;
 
 export const CHECKPOINT_CURSOR_KINDS = [
   "plan_approved",
+  "checks_configured",
   "mutation_ready",
   "bug_diagnosed",
   "tester_completed",
   "builder_completed",
+  "scope_revision_approved",
   "implementation_verified",
   "review_fix_completed",
   "review_approved",

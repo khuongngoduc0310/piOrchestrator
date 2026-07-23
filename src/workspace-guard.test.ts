@@ -94,6 +94,23 @@ describe("mutation path scopes", () => {
       .toThrow("only documentation-classified files");
   });
 
+  it("authorizes exact explicit Tester support files", () => {
+    const testsPlan = {
+      ...plan(["test/code.test.ts"]),
+      route: "tests_only" as const,
+      tasks: [{
+        ...plan(["test/code.test.ts"]).tasks[0],
+        testSupportFiles: ["vitest.config.ts", "fixtures/example.json"]
+      }]
+    };
+    expect(deriveRoleMutationPaths("tester", testsPlan)).toEqual([
+      "fixtures/example.json",
+      "test/code.test.ts",
+      "vitest.config.ts"
+    ]);
+    expect(deriveMutationPathScope(testsPlan).testSupportFiles).toEqual(["fixtures/example.json", "vitest.config.ts"]);
+  });
+
   it("requires exact normalized reported and actual sets", () => {
     expect(() => validateReportedFileSet(["src\\a.ts", "src/b.ts"], ["src/b.ts", "src/a.ts"])).not.toThrow();
     expect(() => validateReportedFileSet(["src/a.ts"], ["src/a.ts", "src/b.ts"])).toThrow("unreported: src/b.ts");

@@ -134,7 +134,7 @@ export function buildRunViewModel(
       ? COMMANDS
       : state.status === "running"
         ? ["/orchestrator-status", "/orchestrator-cancel"]
-        : state.latestCheckpoint
+        : state.latestCheckpoint && !state.resumeBlockedReason
           ? [`/orchestrator-resume ${state.runId}`, `/orchestrator-inspect ${state.runId}`]
           : [`/orchestrator-inspect ${state.runId}`]
   };

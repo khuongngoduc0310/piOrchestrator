@@ -3,7 +3,7 @@ import type { CheckpointBindings, CheckpointCursorKind, WorkflowCheckpoint } fro
 import type { WorkflowContext } from "./orchestrator-context.js";
 import type { OrchestratorRuntime } from "./orchestrator-runtime.js";
 import { persist } from "./orchestrator-state.js";
-import { createWorkspaceSnapshot, canonicalSha256, workspaceSnapshotDigest } from "./workspace-guard.js";
+import { createWorkspaceSnapshot, canonicalSha256, workspaceSnapshotDigest, type WorkspaceSnapshot } from "./workspace-guard.js";
 import { workspaceExclusions } from "./orchestrator-workspace.js";
 
 export async function saveWorkflowCheckpoint(
@@ -56,4 +56,35 @@ export async function currentWorkspaceDigest(runtime: OrchestratorRuntime, works
     excludedRoots: workspaceExclusions(runtime, workspaceRoot)
   });
   return workspaceSnapshotDigest(snapshot);
+}
+
+/** Preserve the last completed semantic cursor after an interrupted, scope-valid mutation. */
+export async function refreshCheckpointAfterInterruptedMutation(
+  runtime: OrchestratorRuntime,
+  snapshot: WorkspaceSnapshot
+): Promise<void> {
+  const state = runtime.requireState();
+  const runStore = runtime.requireStore();
+  const store = new CheckpointStore(runStore.runDir, state.runId);
+  const latest = await store.loadLatest();
+  if (!latest) return;
+  const { schemaVersion: _schemaVersion, checkpointNumber: _checkpointNumber, ...previous } = latest;
+  const checkpoint = await store.save({
+    ...previous,
+    createdAt: runtime.timestamp(),
+    workspaceDigest: workspaceSnapshotDigest(snapshot),
+    workspaceRoot: snapshot.root,
+    validatedChangedFiles: [...runtime.validatedChangedFiles].sort(),
+    state: structuredClone(state)
+  });
+  state.latestCheckpoint = {
+    number: checkpoint.checkpointNumber,
+    cursor: checkpoint.cursor.kind,
+    createdAt: checkpoint.createdAt
+  };
+  await runStore.event("checkpoint_recovered", {
+    checkpointNumber: checkpoint.checkpointNumber,
+    cursor: checkpoint.cursor.kind,
+    reason: "interrupted_mutation"
+  });
 }

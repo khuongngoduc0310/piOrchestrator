@@ -10,6 +10,7 @@ import {
   validateTesterOutput,
   ValidationError
 } from "./validation.js";
+import { MAX_EVIDENCE_DETAIL_BYTES } from "./memory-types.js";
 import { WORKFLOW_ROUTES } from "./types.js";
 
 const validPlan = {
@@ -91,6 +92,29 @@ describe("structured output validation", () => {
     expect(output.evidence[0].path).toBe("src/index.ts");
   });
 
+  it("enforces repository evidence detail UTF-8 byte limits", () => {
+    const output = {
+      architecture: "extension",
+      relevantFiles: ["src/index.ts"],
+      conventions: [],
+      similarImplementations: [],
+      commands: [],
+      risks: [],
+      knownLessons: [],
+      evidence: [{ path: "src/index.ts", detail: "x".repeat(MAX_EVIDENCE_DETAIL_BYTES) }]
+    };
+
+    expect(validateExplorerOutput(output).evidence[0].detail).toHaveLength(MAX_EVIDENCE_DETAIL_BYTES);
+    output.evidence[0].detail = "\u00e9".repeat(MAX_EVIDENCE_DETAIL_BYTES / 2);
+    expect(validateExplorerOutput(output).evidence[0].detail).toHaveLength(MAX_EVIDENCE_DETAIL_BYTES / 2);
+    output.evidence[0].detail = "\u00e9".repeat(MAX_EVIDENCE_DETAIL_BYTES / 2 + 1);
+    expect(() => validateExplorerOutput(output))
+      .toThrow(`explorer.evidence[0].detail: must not exceed ${MAX_EVIDENCE_DETAIL_BYTES} bytes`);
+    output.evidence[0].detail = "x".repeat(MAX_EVIDENCE_DETAIL_BYTES + 1);
+    expect(() => validateExplorerOutput(output))
+      .toThrow(`explorer.evidence[0].detail: must not exceed ${MAX_EVIDENCE_DETAIL_BYTES} bytes`);
+  });
+
   it.each([
     "/etc/passwd",
     "C:\\secret.txt",
@@ -122,6 +146,28 @@ describe("structured output validation", () => {
     expect(validateBuilderOutput(valid).commands[0].status).toBe("passed");
     expect(() => validateBuilderOutput({ ...valid, commands: [{ command: "npm test", status: "green", evidence: "ok" }] }))
       .toThrow("builder.commands[0].status");
+  });
+
+  it("validates structured Builder blockers", () => {
+    const base = {
+      summary: "blocked",
+      changedFiles: [],
+      commands: [],
+      assumptions: [],
+      unresolvedIssues: ["integration test is outside scope"]
+    };
+    expect(validateBuilderOutput({
+      ...base,
+      blocker: { kind: "scope", reason: "test must change", requiredFiles: ["src/App.test.ts"] }
+    }).blocker?.requiredFiles).toEqual(["src/App.test.ts"]);
+    expect(() => validateBuilderOutput({
+      ...base,
+      blocker: { kind: "scope", reason: "test must change", requiredFiles: [] }
+    })).toThrow("builder.blocker.requiredFiles");
+    expect(() => validateBuilderOutput({
+      ...base,
+      blocker: { kind: "tooling", reason: "tool unavailable", requiredFiles: ["package.json"] }
+    })).toThrow("builder.blocker.requiredFiles");
   });
 
   it("validates debugger categories", () => {

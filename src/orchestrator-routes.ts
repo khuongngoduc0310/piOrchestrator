@@ -1,6 +1,6 @@
 import type { ImplementationPlanningResult, PlanningResult, WorkflowContext } from "./orchestrator-context.js";
 import type { OrchestratorRuntime } from "./orchestrator-runtime.js";
-import { prepareImplementationPhase } from "./orchestrator-planning.js";
+import { enterMutationPhase, prepareImplementationPhase } from "./orchestrator-planning.js";
 import { runImplementationPhase } from "./orchestrator-implementation.js";
 import { runReviewPhase } from "./orchestrator-review.js";
 import { runFinalizationPhase, runReadOnlyFinalizationPhase } from "./orchestrator-finalization.js";
@@ -10,6 +10,9 @@ import { runAgentStep } from "./orchestrator-agent-step.js";
 import { parseDebuggerOutput } from "./validation.js";
 import { saveWorkflowCheckpoint } from "./orchestrator-checkpoints.js";
 import type { DebuggerOutput } from "./types.js";
+import { filesOutsidePlan } from "./plan-revision.js";
+import { reviseImplementationScope } from "./orchestrator-scope-revision.js";
+import { consumeScopeRevision } from "./scope-revision-budget.js";
 
 export async function runSelectedRoute(
   runtime: OrchestratorRuntime,
@@ -26,11 +29,12 @@ export async function runSelectedRoute(
       return;
     }
     case "bug_fix": {
-      const prepared = options.prepared
+      let prepared = options.prepared
         ? planning as ImplementationPlanningResult
         : await prepareImplementationPhase(runtime, workflow, planning, {
             agents: ["debugger", "tester", "builder", "reviewer", "documenter"],
-            allowBaselineRepair: false
+            allowBaselineRepair: false,
+            deferMutation: true
           });
       const diagnosis = options.bugDiagnosis ?? await runAgentStep(runtime, "debugger", "debugging", "Diagnose requested bug", {
         action: "diagnose_bug",
@@ -39,6 +43,18 @@ export async function runSelectedRoute(
         exploration: prepared.exploration,
         checks: prepared.baseline
       }, workflow.mutationCwd, workflow.ctx, parseDebuggerOutput);
+      if (!options.bugDiagnosis) {
+        if (["environment_error", "tooling_error", "unknown"].includes(diagnosis.category) || diagnosis.affectedFiles.length === 0) {
+          throw new Error(`Bug diagnosis is not actionable as a repository mutation: ${diagnosis.rootCause}`);
+        }
+        const additions = filesOutsidePlan(prepared.plan, diagnosis.affectedFiles);
+        if (additions.length > 0) {
+          const scopeRevisionCount = consumeScopeRevision(prepared.scopeRevisionCount, workflow.config.limits.planRevisions, "during bug diagnosis");
+          prepared = await reviseImplementationScope(runtime, workflow, prepared, additions, { checks: prepared.baseline, diagnosis }, scopeRevisionCount);
+          prepared = { ...prepared, scopeRevisionCount };
+        }
+        await enterMutationPhase(runtime, workflow);
+      }
       if (!options.bugDiagnosis) {
         await saveWorkflowCheckpoint(runtime, workflow, "bug_diagnosed", { planning: prepared, diagnosis }, {
           exploration: prepared.exploration,
@@ -69,8 +85,9 @@ export async function runSelectedRoute(
       const prepared = options.prepared
         ? planning as ImplementationPlanningResult
         : await prepareImplementationPhase(runtime, workflow, planning, {
-            agents: workflow.route === "tests_only" ? ["tester"] : ["documenter"],
-            allowBaselineRepair: false
+            agents: workflow.route === "tests_only" ? ["debugger", "tester"] : ["debugger", "documenter"],
+            allowBaselineRepair: false,
+            allowAuthorizedTestFailures: workflow.route === "tests_only"
           });
       await runSpecializedMutationRoute(runtime, workflow, prepared);
       return;

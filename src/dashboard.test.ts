@@ -1,7 +1,6 @@
-import vm from "node:vm";
 import { describe, expect, it } from "vitest";
 import { DashboardServer } from "./dashboard.js";
-import type { AgentInspection, AgentTranscript, ArtifactContent, DashboardRunHistoryItem, InvocationDiffView, OrchestratorViewModel } from "./types.js";
+import type { AgentHistoryResponse, AgentInspection, AgentTranscript, ArtifactContent, DashboardRunHistoryItem, InvocationDiffView, OrchestratorViewModel } from "./types.js";
 
 const emptyProvider = {
   getViewModel: () => undefined,
@@ -54,6 +53,13 @@ const testRun: DashboardRunHistoryItem = {
   startedAt: "2026-01-01T00:00:00.000Z", updatedAt: "2026-01-01T00:00:01.000Z", active: true
 };
 
+const testHistory: AgentHistoryResponse = {
+  runId: "test-123",
+  total: { invocationCount: 1, measuredInvocationCount: 1, usage: { input: 2, output: 3, cacheRead: 1, cacheWrite: 0, cost: 0.3 } },
+  agents: [{ name: "planner", invocationCount: 1, measuredInvocationCount: 1, usage: { input: 2, output: 3, cacheRead: 1, cacheWrite: 0, cost: 0.3 } }],
+  invocations: []
+};
+
 const sampleViewModel: OrchestratorViewModel = {
   mode: "running",
   cwd: "/test",
@@ -91,6 +97,7 @@ function providerWith(vm: OrchestratorViewModel | undefined, agent?: AgentInspec
     listRuns: async () => [testRun],
     getRunViewModel: async (_runId: string) => vm,
     getRunAgentInspection: async (_runId: string, _name: string) => agent ?? testAgent,
+    getRunAgentHistory: async (_runId: string) => testHistory,
     getRunAgentTranscript: async (_runId: string, _stepId: string, _invocation: number) => testTranscript,
     getInvocationDiff: async (_runId: string, _stepId: string, _invocation: number) => testDiff,
     readRunArtifact: async (_runId: string, _name: string) => artifact ?? testArtifact,
@@ -102,6 +109,8 @@ async function server(): Promise<{ dashboard: DashboardServer; url: string }> {
   const url = await dashboard.start(0);
   return { dashboard, url };
 }
+
+
 
 describe("DashboardServer", () => {
   it("starts on a local port and returns a URL", async () => {
@@ -116,10 +125,9 @@ describe("DashboardServer", () => {
     expect(htmlResponse.status).toBe(200);
     const html = await htmlResponse.text();
     expect(html).toContain("piOrchestrator");
-    expect(html).toContain("Conversation history");
-    expect(html).toContain("Thinking");
-    expect(html).toContain("Run history");
-    expect(html).toContain("Unified diff");
+    expect(html).toContain('<div id="root"></div>');
+    expect(html).toContain("/dashboard.js");
+    expect(html).toContain("/dashboard.css");
     const stateResponse = await fetch(`${url}/api/state`);
     expect(stateResponse.status).toBe(200);
     const body = await stateResponse.json();
@@ -205,6 +213,9 @@ describe("DashboardServer", () => {
     const htmlResponse = await fetch(url);
     expect(htmlResponse.headers.get("x-content-type-options")).toBe("nosniff");
     expect(htmlResponse.headers.get("cache-control")).toBe("no-store");
+    const csp = htmlResponse.headers.get("content-security-policy") ?? "";
+    expect(csp).toContain("script-src 'self'");
+    expect(csp).not.toContain("unsafe-inline");
     const stateResponse = await fetch(`${url}/api/state`);
     expect(stateResponse.headers.get("x-content-type-options")).toBe("nosniff");
     await dashboard.stop();
@@ -243,6 +254,7 @@ describe("DashboardServer", () => {
     expect(await (await fetch(`${url}/api/runs`)).json()).toEqual([testRun]);
     expect((await (await fetch(`${url}/api/runs/test-123/state`)).json()).run.id).toBe("test-123");
     expect((await (await fetch(`${url}/api/runs/test-123/agents/planner`)).json()).name).toBe("planner");
+    expect(await (await fetch(`${url}/api/runs/test-123/agent-history`)).json()).toEqual(testHistory);
     expect(await (await fetch(`${url}/api/runs/test-123/steps/step-001/invocations/1/transcript`)).json()).toEqual(testTranscript);
     expect(await (await fetch(`${url}/api/runs/test-123/steps/step-001/invocations/1/diff`)).json()).toEqual(testDiff);
     expect(await (await fetch(`${url}/api/runs/test-123/artifacts/test.json`)).text()).toBe(testArtifact.text);
@@ -312,14 +324,34 @@ describe("DashboardServer", () => {
     await dashboard.stop();
   });
 
-  it("inline script in served HTML is syntactically valid JavaScript", async () => {
+  it("serves dashboard.js with correct MIME type", async () => {
     const { dashboard, url } = await server();
-    const htmlResponse = await fetch(url);
-    const html = await htmlResponse.text();
-    const scriptMatch = html.match(/<script>([\s\S]*?)<\/script>/);
-    expect(scriptMatch).not.toBeNull();
-    const scriptContent = scriptMatch![1];
-    expect(() => { new vm.Script(scriptContent); }).not.toThrow();
+    const response = await fetch(`${url}/dashboard.js`);
+    expect(response.status).toBe(200);
+    expect(response.headers.get("content-type")).toContain("text/javascript");
+    await dashboard.stop();
+  });
+
+  it("serves dashboard.css with correct MIME type", async () => {
+    const { dashboard, url } = await server();
+    const response = await fetch(`${url}/dashboard.css`);
+    expect(response.status).toBe(200);
+    expect(response.headers.get("content-type")).toContain("text/css");
+    await dashboard.stop();
+  });
+
+  it("returns 404 for unknown static assets", async () => {
+    const { dashboard, url } = await server();
+    const response = await fetch(`${url}/dashboard.unknown`);
+    expect(response.status).toBe(404);
+    await dashboard.stop();
+  });
+
+  it("applies security headers to static assets", async () => {
+    const { dashboard, url } = await server();
+    const response = await fetch(`${url}/dashboard.js`);
+    expect(response.headers.get("x-content-type-options")).toBe("nosniff");
+    expect(response.headers.get("cache-control")).toBe("no-store");
     await dashboard.stop();
   });
 

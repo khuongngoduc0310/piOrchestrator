@@ -5,7 +5,7 @@
 - Use Node.js `>=22.19.0` and npm; `package-lock.json` is the dependency source of truth.
 - Install with `npm install`. Validate with `npm run typecheck` and `npm test`.
 - Run one test file with `npm test -- src/config.test.ts`; add `-t "test name"` to select one test.
-- There is no build step: Pi loads `src/index.ts` directly. Install the extension locally with `pi install ./` when an end-to-end Pi check is needed.
+- There is no extension build step: Pi loads `src/index.ts` directly. The browser dashboard is a React application built with Vite; prebuilt assets are committed under `src/dashboard-dist/` so `pi install ./` works without running the build. Regenerate them with `npm run build:dashboard`. Dashboard source lives in `src/dashboard-client/`.
 - This is ESM with `moduleResolution: NodeNext`; keep `.js` suffixes on relative imports in TypeScript source.
 
 ## Architecture

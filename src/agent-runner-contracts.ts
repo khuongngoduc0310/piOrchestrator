@@ -9,6 +9,7 @@ import type {
   AgentResult,
   AgentTranscript,
   AgentUsage,
+  AgentUsageSnapshot,
   OrchestratorConfig,
   ThinkingLevel
 } from "./types.js";
@@ -37,6 +38,7 @@ export interface AgentRunOptions {
   signal: AbortSignal;
   onEvent?: (event: AgentEventMetadata) => void;
   onTranscript?: (transcript: AgentTranscript) => void;
+  onUsage?: (snapshot: AgentUsageSnapshot) => void;
   allowedWritePaths?: readonly string[];
   readRoots?: readonly string[];
 }

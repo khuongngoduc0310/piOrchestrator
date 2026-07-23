@@ -53,6 +53,11 @@ export interface AgentInvocationRecord {
   changedFileCount?: number;
   messageCount: number;
   truncated: boolean;
+  usage?: AgentUsage;
+  provider?: string;
+  model?: string;
+  api?: string;
+  stopReason?: string;
 }
 
 export type AgentTranscriptPart =
@@ -95,10 +100,28 @@ export interface AgentUsage {
   cacheRead: number;
   cacheWrite: number;
   cost: number;
+  totalTokens?: number;
+  reasoning?: number;
+  cacheWrite1h?: number;
+  costBreakdown?: {
+    input: number;
+    output: number;
+    cacheRead: number;
+    cacheWrite: number;
+  };
+}
+
+export interface AgentUsageSnapshot {
+  usage: AgentUsage;
+  provider: string;
+  model: string;
+  api: string;
+  stopReason: string;
 }
 
 export interface AgentResult {
   text: string;
   usage?: AgentUsage;
   transcript?: AgentTranscript;
+  response?: Omit<AgentUsageSnapshot, "usage">;
 }

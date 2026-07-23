@@ -1,15 +1,20 @@
-import { collectWorktreeChanges, removeWorktree, syncWorktreeChanges } from "./worktree.js";
+import { collectWorktreeChanges, removeWorktree, syncWorktreeChanges, verifySynchronizedSource } from "./worktree.js";
 import { computeFinalChecksDigest } from "./memory-validation.js";
 import { formatCompletedRun } from "./session-messages.js";
 import type { CompletionSummary } from "./types.js";
 import type { PlanningResult, ReadOnlyReviewResult, ReviewResult, SpecializedMutationResult, WorkflowContext } from "./orchestrator-context.js";
 import type { OrchestratorRuntime } from "./orchestrator-runtime.js";
-import { EXTENSION_VERSION, messageOf } from "./orchestrator-helpers.js";
+import { allGreen, EXTENSION_VERSION, messageOf } from "./orchestrator-helpers.js";
 import { runCheckStep, validateFinalWorktreeChanges } from "./orchestrator-workspace.js";
 import { hydrateLessonPreparation, persistAndPromoteLessons, prepareLessons, type SerializedLessonPreparation } from "./orchestrator-lessons.js";
-import { publishSessionMessage, throwIfAborted, transition } from "./orchestrator-state.js";
+import { persist, publishSessionMessage, throwIfAborted, transition } from "./orchestrator-state.js";
 import { saveWorkflowCheckpoint } from "./orchestrator-checkpoints.js";
 import type { CheckResult, DocumenterOutput } from "./types.js";
+import { parseDebuggerOutput, parseDocumenterOutput } from "./validation.js";
+import { runAgentStep } from "./orchestrator-agent-step.js";
+import { assertDocumenterComplete } from "./mutation-completion.js";
+import { deriveRoleMutationPaths } from "./workspace-guard.js";
+import { CheckFailureError } from "./workflow-errors.js";
 
 export type FinalizationContinuation =
   | { point: "documenter_completed"; documentation: DocumenterOutput }
@@ -24,12 +29,48 @@ export async function runFinalizationPhase(
 ): Promise<void> {
   const { request, ctx, config, store } = workflow;
   const { plan, tester, codeReview, reviewApprovalSource, priorCodeReviews } = review;
-  const lessonPreparation = continuation?.point === "lessons_screened" || continuation?.point === "final_checks_passed"
+  let lessonPreparation = continuation?.point === "lessons_screened" || continuation?.point === "final_checks_passed"
     ? hydrateLessonPreparation(continuation.preparation)
     : await prepareLessons(runtime, workflow, review, continuation?.point === "documenter_completed" ? continuation.documentation : undefined);
-  const finalChecks = continuation?.point === "final_checks_passed"
-    ? continuation.finalChecks
-    : await runCheckStep(runtime, "testing", "Run final checks after all agent sessions", workflow.mutationCwd, ctx, { requireGreen: true, kind: "final" });
+  let finalChecks = continuation?.point === "final_checks_passed" ? continuation.finalChecks : undefined;
+  if (!finalChecks) {
+    const maxAttempts = Math.max(1, config.limits.implementationRetries + 1);
+    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+      finalChecks = await runCheckStep(runtime, "testing", "Run final checks after all agent sessions", workflow.mutationCwd, ctx, {
+        requireGreen: false,
+        attempt,
+        kind: "final"
+      });
+      if (allGreen(finalChecks, config.checks.length)) break;
+      const diagnosis = await runAgentStep(runtime, "debugger", "debugging", "Diagnose final check failures", {
+        action: "diagnose_verification",
+        request,
+        plan,
+        checks: finalChecks,
+        phase: "final",
+        attempt
+      }, workflow.mutationCwd, ctx, parseDebuggerOutput, { attempt });
+      const authorized = new Set(deriveRoleMutationPaths("documenter", plan));
+      const repairable = diagnosis.affectedFiles.length > 0
+        && diagnosis.affectedFiles.every(file => authorized.has(file))
+        && !["environment_error", "tooling_error", "unknown"].includes(diagnosis.category);
+      if (!repairable || attempt === maxAttempts) {
+        throw new CheckFailureError("Final checks", finalChecks.filter(check => !check.passed).map(check => check.command), diagnosis);
+      }
+      const documentation = await runAgentStep(runtime, "documenter", "documenting", "Repair documentation check failures", {
+        action: "repair_checks",
+        request,
+        plan,
+        checks: finalChecks,
+        diagnosis,
+        previous: lessonPreparation.documentation,
+        attempt
+      }, workflow.mutationCwd, ctx, parseDocumenterOutput, { attempt, mutationPlan: plan });
+      assertDocumenterComplete(documentation);
+      lessonPreparation = await prepareLessons(runtime, workflow, review, documentation);
+    }
+  }
+  if (!finalChecks || !allGreen(finalChecks, config.checks.length)) throw new Error("Final checks did not reach a verified state");
   if (continuation?.point !== "final_checks_passed") {
     await saveWorkflowCheckpoint(runtime, workflow, "final_checks_passed", {
       review,
@@ -49,7 +90,26 @@ export async function runFinalizationPhase(
   }
   const { synchronizedFiles, finalChecksDigest } = await synchronizeFinalizedMutation(runtime, workflow, finalChecks, "promote");
   await store.saveJson("final-checks-digest.json", { digest: finalChecksDigest });
-  const lessonCounts = await persistAndPromoteLessons(runtime, workflow, lessonPreparation, finalChecksDigest);
+  let lessonCounts;
+  try {
+    lessonCounts = await persistAndPromoteLessons(runtime, workflow, lessonPreparation, finalChecksDigest);
+  } catch (error) {
+    const warning = `Repository changes were delivered, but lesson persistence failed: ${messageOf(error)}`;
+    runtime.requireState().warning = warning;
+    ctx.ui.notify(warning, "warning");
+    await store.saveJson("lesson-persistence-error.json", {
+      error: messageOf(error),
+      finalChecksDigest,
+      occurredAt: runtime.timestamp()
+    }).catch(() => undefined);
+    lessonCounts = {
+      humanApprovedCount: 0,
+      humanDeclinedCount: 0,
+      promotedCount: 0,
+      promotionFailedCount: lessonPreparation.proposedCandidates.length,
+      pendingCount: 0
+    };
+  }
   const reportedChanged = [...new Set([
     ...(tester?.changedFiles ?? []),
     ...runtime.builderSessionOutputs.flatMap(output => output.changedFiles),
@@ -207,6 +267,7 @@ async function synchronizeFinalizedMutation(
   const { ctx, store } = workflow;
   throwIfAborted(runtime);
   runtime.requireState().resumeBlockedReason = "Finalization has started; uncertain side effects are never replayed";
+  await persist(runtime, ctx);
   const finalChecksDigest = computeFinalChecksDigest(finalChecks);
   await store.saveJson("finalization-intent.json", {
     runId: workflow.runId,
@@ -225,7 +286,8 @@ async function synchronizeFinalizedMutation(
     if (runtime.enforceWorkspacePolicy) validateFinalWorktreeChanges(runtime, activeWorktree, pendingChanges.changedFiles);
     runtime.mutationCommitStarted = true;
     try {
-      const synchronized = await syncWorktreeChanges(activeWorktree);
+      const synchronized = await syncWorktreeChanges(activeWorktree, pendingChanges);
+      await verifySynchronizedSource(activeWorktree, synchronized);
       synchronizedFiles = synchronized.changedFiles;
       for (const file of synchronized.changedFiles) runtime.validatedChangedFiles.add(file);
       workflow.worktreeSynced = true;

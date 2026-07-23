@@ -27,6 +27,7 @@ export interface WorktreeRename {
 }
 
 export interface WorktreeChanges {
+  finalCommit: string;
   additions: string[];
   modifications: string[];
   deletions: string[];
@@ -121,7 +122,7 @@ async function snapshotCommit(cwd: string, parent: string | undefined, message: 
     }
     await runGit(cwd, ["add", "-A"], { env });
     await runGit(cwd, [
-      "rm", "-r", "--cached", "--ignore-unmatch", "--",
+      "rm", "-r", "-f", "--cached", "--ignore-unmatch", "--",
        `${CONFIG_DIR_NAME}/orchestrator/runs`, `${CONFIG_DIR_NAME}/orchestrator/worktrees`
     ], { env });
     const tree = (await gitText(cwd, ["write-tree"], { env })).trim();
@@ -309,7 +310,7 @@ export async function attachWorktree(
   return handle;
 }
 
-function parseNameStatus(output: Buffer): Omit<WorktreeChanges, "binaries" | "changedFiles" | "patch"> {
+function parseNameStatus(output: Buffer): Omit<WorktreeChanges, "finalCommit" | "binaries" | "changedFiles" | "patch"> {
   const tokens = splitNul(output);
   const additions: string[] = [];
   const modifications: string[] = [];
@@ -377,11 +378,22 @@ export async function collectWorktreeChanges(handle: WorktreeHandle): Promise<Wo
     ...changes.deletions,
     ...changes.renames.flatMap(rename => [rename.from, rename.to]),
   ];
-  return { ...changes, binaries, changedFiles: [...new Set(changedFiles)], patch: patch.stdout };
+  return { ...changes, finalCommit, binaries, changedFiles: [...new Set(changedFiles)], patch: patch.stdout };
 }
 
-async function assertSourceHasNotDrifted(handle: WorktreeHandle, paths: readonly string[]): Promise<void> {
-  if (paths.length === 0) return;
+/** Verify the delivered source filesystem normalizes to the exact checked worktree tree. */
+export async function verifySynchronizedSource(handle: WorktreeHandle, changes: WorktreeChanges): Promise<void> {
+  const sourceCommit = await snapshotCommit(handle.repositoryRoot, handle.baselineCommit, "pi-orchestrator synchronized source verification");
+  const [expectedTree, sourceTree] = await Promise.all([
+    gitText(handle.repositoryRoot, ["rev-parse", `${changes.finalCommit}^{tree}`]),
+    gitText(handle.repositoryRoot, ["rev-parse", `${sourceCommit}^{tree}`])
+  ]);
+  if (expectedTree.trim() !== sourceTree.trim()) {
+    throw new Error("Synchronized source workspace does not match the checked isolated workspace");
+  }
+}
+
+async function assertSourceHasNotDrifted(handle: WorktreeHandle): Promise<void> {
   await withTemporaryIndex(handle.repositoryRoot, async env => {
     await runGit(handle.repositoryRoot, ["read-tree", handle.baselineCommit], { env });
     await runGit(handle.repositoryRoot, [
@@ -399,20 +411,18 @@ async function assertSourceHasNotDrifted(handle: WorktreeHandle, paths: readonly
       "-z",
       handle.baselineCommit,
     ], { env })).stdout);
-    const touched = new Set(paths);
-    const conflicts = drift.filter(file => touched.has(file));
-    if (conflicts.length > 0) {
-      throw new Error(`Cannot sync worktree because source paths changed after creation: ${conflicts.join(", ")}`);
+    if (drift.length > 0) {
+      throw new Error(`Cannot sync worktree because source paths changed after creation or isolation: ${drift.join(", ")}`);
     }
   });
 }
 
 /** Apply worktree changes only when all touched source paths still match the baseline. */
-export async function syncWorktreeChanges(handle: WorktreeHandle): Promise<WorktreeChanges> {
-  const changes = await collectWorktreeChanges(handle);
+export async function syncWorktreeChanges(handle: WorktreeHandle, validatedChanges?: WorktreeChanges): Promise<WorktreeChanges> {
+  const changes = validatedChanges ?? await collectWorktreeChanges(handle);
   if (changes.changedFiles.length === 0) return changes;
 
-  await assertSourceHasNotDrifted(handle, changes.changedFiles);
+  await assertSourceHasNotDrifted(handle);
   await runGit(handle.repositoryRoot, ["apply", "--check", "--binary"], { input: changes.patch });
   await runGit(handle.repositoryRoot, ["apply", "--binary"], { input: changes.patch });
   return changes;

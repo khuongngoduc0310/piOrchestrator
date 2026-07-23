@@ -70,11 +70,18 @@ export type AgentTaskEnvelope<T> =
       mode: "correct_output";
       task: T;
       memoryContext: MemoryContext | null;
-      correction: {
-        attempt: 1;
-        reason: "schema_validation_failed";
-        fieldPath?: string;
-      };
+      correction:
+        | {
+            attempt: 1;
+            reason: "schema_validation_failed";
+            fieldPath?: string;
+          }
+        | {
+            attempt: 1;
+            reason: "reported_changed_files_mismatch";
+            fieldPath: "changedFiles";
+            expectedChangedFiles: string[];
+          };
     };
 
 export interface ExplorerOutput {
@@ -92,6 +99,8 @@ export interface PlanTask {
   id: string;
   description: string;
   files: string[];
+  /** Exact non-test-named files explicitly authorized for Tester support work. */
+  testSupportFiles?: string[];
   dependencies: string[];
   verification: string[];
 }
@@ -120,6 +129,18 @@ export type PlannerTask =
       previousPlan: PlannerOutput;
       feedback: { source: "human"; text: string } | { source: "reviewer"; review: ReviewOutput };
     }
+  | {
+      action: "revise_for_failure";
+      route: WorkflowRoute;
+      request: string;
+      exploration: ExplorerOutput;
+      previousPlan: PlannerOutput;
+      checks: CheckResult[];
+      requiredFiles: string[];
+      diagnosis?: DebuggerOutput;
+      blocker?: BuilderBlocker;
+      feedback?: { source: "human"; text: string } | { source: "reviewer"; review: ReviewOutput };
+    }
   | { action: "repair_baseline"; route: "implementation"; request: string; diagnosis: DebuggerOutput; checkFailures: CheckResult[] };
 
 export type ReviewDecision = "approved" | "changes_requested";
@@ -133,6 +154,17 @@ export interface ReviewOutput {
 
 export type ReviewerTask =
   | { reviewType: "plan"; request: string; exploration: ExplorerOutput; plan: PlannerOutput }
+  | {
+      reviewType: "scope_revision";
+      request: string;
+      exploration: ExplorerOutput;
+      previousPlan: PlannerOutput;
+      plan: PlannerOutput;
+      checks: CheckResult[];
+      requiredFiles: string[];
+      diagnosis?: DebuggerOutput;
+      blocker?: BuilderBlocker;
+    }
   | {
       reviewType: "repository";
       request: string;
@@ -176,15 +208,33 @@ export interface TesterOutput {
   commands: CommandReport[];
   assumptions: string[];
   unresolvedIssues: string[];
+  blocker?: BuilderBlocker;
 }
 
-export interface TesterTask {
-  action: "create_tests";
-  request: string;
-  plan: PlannerOutput;
-  acceptanceCriteria: Array<{ index: number; text: string }>;
-  baselineChecks: CheckResult[];
-  diagnosis?: DebuggerOutput;
+export type TesterTask =
+  | {
+      action: "create_tests";
+      request: string;
+      plan: PlannerOutput;
+      acceptanceCriteria: Array<{ index: number; text: string }>;
+      baselineChecks: CheckResult[];
+      diagnosis?: DebuggerOutput;
+    }
+  | {
+      action: "repair_checks";
+      request: string;
+      plan: PlannerOutput;
+      acceptanceCriteria: Array<{ index: number; text: string }>;
+      checks: CheckResult[];
+      diagnosis: DebuggerOutput;
+      previous: TesterOutput;
+      attempt: number;
+    };
+
+export interface BuilderBlocker {
+  kind: "scope" | "environment" | "tooling" | "insufficient_evidence";
+  reason: string;
+  requiredFiles: string[];
 }
 
 export interface BuilderOutput {
@@ -193,6 +243,7 @@ export interface BuilderOutput {
   commands: CommandReport[];
   assumptions: string[];
   unresolvedIssues: string[];
+  blocker?: BuilderBlocker;
 }
 
 export type BuilderTask =
@@ -215,6 +266,8 @@ export type BuilderTask =
       review: ReviewOutput;
       priorReviews: ReviewOutput[];
       revision: number;
+      checks?: CheckResult[];
+      diagnosis?: DebuggerOutput;
     };
 
 export interface DebuggerOutput {
@@ -229,7 +282,8 @@ export interface DebuggerOutput {
 export type DebuggerTask =
   | { action: "diagnose_baseline"; request: string; checks: CheckResult[] }
   | { action: "diagnose_bug"; request: string; plan: PlannerOutput; exploration: ExplorerOutput; checks: CheckResult[] }
-  | { action: "diagnose_implementation"; request: string; plan: PlannerOutput; checks: CheckResult[]; attempt: number };
+  | { action: "diagnose_implementation"; request: string; plan: PlannerOutput; checks: CheckResult[]; attempt: number }
+  | { action: "diagnose_verification"; request: string; plan: PlannerOutput; checks: CheckResult[]; phase: "review_fix" | "final"; attempt: number };
 
 export interface ProposedLesson {
   title: string;
@@ -250,6 +304,7 @@ export interface DocumenterOutput {
   proposedLessons: ProposedLesson[];
   commands: CommandReport[];
   unresolvedIssues: string[];
+  blocker?: BuilderBlocker;
 }
 
 export type DocumenterTask =
@@ -269,6 +324,15 @@ export type DocumenterTask =
       request: string;
       plan: PlannerOutput;
       baselineChecks: CheckResult[];
+    }
+  | {
+      action: "repair_checks";
+      request: string;
+      plan: PlannerOutput;
+      checks: CheckResult[];
+      diagnosis: DebuggerOutput;
+      previous: DocumenterOutput;
+      attempt: number;
     };
 
 export interface AgentTaskMap {

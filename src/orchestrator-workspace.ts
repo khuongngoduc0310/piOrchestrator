@@ -3,7 +3,7 @@ import type { ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import type { RunStore } from "./store.js";
 import type { WorktreeHandle } from "./worktree.js";
 import { ROLE_MUTATION_KINDS } from "./role-capabilities.js";
-import { MutationBoundaryError } from "./workflow-errors.js";
+import { CheckFailureError, MutationBoundaryError } from "./workflow-errors.js";
 import {
   compareWorkspaceSnapshots,
   createWorkspaceSnapshot,
@@ -53,11 +53,9 @@ export async function runCheckStep(
     const artifact = runtime.requireStore().artifactName({ sequence: step.sequence, stage, attempt: options.attempt, revision: options.revision, kind: options.kind ?? "checks" });
     step.artifact = await runtime.requireStore().saveJson(artifact, results);
     if (controller.signal.aborted || results.some(result => result.cancelled)) throw new Error("Checks cancelled");
-    const infrastructureFailure = results.find(result => result.timedOut || result.executionError);
-    if (infrastructureFailure) {
-      throw new Error(`Check could not complete: ${infrastructureFailure.command} (${infrastructureFailure.executionError ?? "timeout"})`);
+    if (options.requireGreen && !allGreen(results, config.checks.length)) {
+      throw new CheckFailureError(label, results.filter(result => !result.passed).map(result => result.command));
     }
-    if (options.requireGreen && !allGreen(results, config.checks.length)) throw new Error(`${label} failed`);
     throwIfAborted(runtime);
     step.status = "succeeded";
     step.message = allGreen(results, config.checks.length) ? "All checks passed" : "Checks completed with failures";
@@ -109,26 +107,56 @@ export async function validateAgentMutation<A extends AgentName>(
   output: AgentOutputMap[A],
   delta: WorkspaceDelta,
   step: StepRecord,
-  store: RunStore
+  store: RunStore,
+  audit?: {
+    initialReported: readonly string[];
+    correctionAttempted: true;
+    correctionError?: string;
+    additionalViolations?: readonly string[];
+  }
 ): Promise<void> {
   const mutation = ROLE_MUTATION_KINDS[agent];
   const reported = "changedFiles" in (output as object)
     ? ((output as unknown as { changedFiles: string[] }).changedFiles ?? [])
     : [];
-  const violations: string[] = [];
+  const violations: string[] = [...(audit?.additionalViolations ?? [])];
   try {
-    if (mutation === "none") {
-      if (delta.changedFiles.length > 0) throw new Error(`${agent} is read-only but changed ${delta.changedFiles.join(", ")}`);
-    } else {
-      if (!plan) throw new Error(`${agent} has no approved mutation plan`);
-      validateRoleDelta(agent, plan, delta);
-      validateReportedFileSet(reported, delta);
-    }
+    validateAgentMutationScope(agent, plan, delta);
+    if (mutation !== "none") validateReportedFileSet(reported, delta);
   } catch (error) {
     violations.push(messageOf(error));
   }
   const artifact = store.artifactName({ sequence: step.sequence, stage: step.stage, agent, attempt: step.attempt, revision: step.revision, kind: "mutation" });
-  step.mutationArtifact = await store.saveJson(artifact, { role: agent, policy: mutation, allowed: plan ? deriveRoleMutationPaths(agent, plan) : [], reported, actual: delta, violations });
+  step.mutationArtifact = await store.saveJson(artifact, {
+    role: agent,
+    policy: mutation,
+    allowed: plan ? deriveRoleMutationPaths(agent, plan) : [],
+    reported,
+    actual: delta,
+    violations,
+    ...(audit ? {
+      correction: {
+        attempted: audit.correctionAttempted,
+        initialReported: [...audit.initialReported],
+        expectedChangedFiles: [...delta.changedFiles],
+        ...(audit.correctionError ? { error: audit.correctionError } : {})
+      }
+    } : {})
+  });
   if (violations.length > 0) throw new MutationBoundaryError(violations.join("; "));
   for (const file of delta.changedFiles) runtime.validatedChangedFiles.add(file);
+}
+
+export function validateAgentMutationScope(
+  agent: AgentName,
+  plan: PlannerOutput | undefined,
+  delta: WorkspaceDelta
+): void {
+  const mutation = ROLE_MUTATION_KINDS[agent];
+  if (mutation === "none") {
+    if (delta.changedFiles.length > 0) throw new Error(`${agent} is read-only but changed ${delta.changedFiles.join(", ")}`);
+    return;
+  }
+  if (!plan) throw new Error(`${agent} has no approved mutation plan`);
+  validateRoleDelta(agent, plan, delta);
 }

@@ -10,7 +10,7 @@ const resolved = { model, thinkingLevel: "low" as const, warning: undefined, err
 
 function assistantEvent(
   text: string,
-  options: { stopReason?: "stop" | "length" | "error" | "aborted"; errorMessage?: string } = {}
+  options: { stopReason?: "stop" | "length" | "error" | "aborted"; errorMessage?: string; reasoning?: number; cacheWrite1h?: number } = {}
 ): AgentSessionEvent {
   return {
     type: "message_end",
@@ -26,6 +26,8 @@ function assistantEvent(
         cacheRead: 1,
         cacheWrite: 0,
         totalTokens: 6,
+        reasoning: options.reasoning,
+        cacheWrite1h: options.cacheWrite1h,
         cost: { input: 0.1, output: 0.2, cacheRead: 0, cacheWrite: 0, total: 0.3 }
       },
       stopReason: options.stopReason ?? "stop",
@@ -206,6 +208,7 @@ describe("PiSdkAgentExecutor", () => {
     const unsubscribe = vi.fn();
     const dispose = vi.fn();
     const events: unknown[] = [];
+    const usageSnapshots: unknown[] = [];
     const executor = new PiSdkAgentExecutor({
       runtime: async () => runtime,
       resolveModel: () => resolved,
@@ -217,7 +220,7 @@ describe("PiSdkAgentExecutor", () => {
           prompt: async () => {
             listener?.({ type: "agent_start" } as AgentSessionEvent);
             listener?.({ type: "tool_execution_start", toolCallId: "x", toolName: "read", args: { path: "test.txt" } } as AgentSessionEvent);
-            listener?.(assistantEvent('{"ok":true}'));
+            listener?.(assistantEvent('{"ok":true}', { reasoning: 2, cacheWrite1h: 0 }));
           },
           abort: async () => undefined,
           dispose
@@ -233,10 +236,23 @@ describe("PiSdkAgentExecutor", () => {
       config: DEFAULT_CONFIG.agents.explorer,
       timeoutMs: 1000,
       signal: new AbortController().signal,
-      onEvent: event => events.push(event)
+      onEvent: event => events.push(event),
+      onUsage: snapshot => usageSnapshots.push(snapshot)
     });
     expect(result.text).toBe('{"ok":true}');
-    expect(result.usage).toMatchObject({ input: 2, output: 3, cost: 0.3 });
+    expect(result.usage).toEqual({
+      input: 2,
+      output: 3,
+      cacheRead: 1,
+      cacheWrite: 0,
+      totalTokens: 6,
+      reasoning: 2,
+      cacheWrite1h: 0,
+      cost: 0.3,
+      costBreakdown: { input: 0.1, output: 0.2, cacheRead: 0, cacheWrite: 0 }
+    });
+    expect(result.response).toEqual({ provider: "test", model: "model", api: "test", stopReason: "stop" });
+    expect(usageSnapshots).toEqual([{ usage: result.usage, provider: "test", model: "model", api: "test", stopReason: "stop" }]);
     expect(events).toEqual([
       { type: "agent_start" },
       { type: "tool_execution_start", toolName: "read", args: '{"path":"test.txt"}' }

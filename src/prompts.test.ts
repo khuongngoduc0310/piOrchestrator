@@ -6,6 +6,7 @@ import {
   DEBUGGER_CATEGORIES,
   LESSON_CATEGORIES
 } from "./types.js";
+import { MAX_EVIDENCE_DETAIL_BYTES } from "./memory-types.js";
 
 const promptRoot = path.resolve("prompts");
 
@@ -34,6 +35,17 @@ describe("role prompt contracts", () => {
       expect(debuggerPrompt).toContain(`\`${action}\``);
     }
     for (const category of DEBUGGER_CATEGORIES) expect(debuggerPrompt).toContain(`\`${category}\``);
+    expect(builder).toContain("structured `blocker`");
+    expect(debuggerPrompt).toContain("every exact repository file required");
+  });
+
+  it("requires impacted-test discovery and constrained failure replanning", async () => {
+    expect(await prompt("explorer")).toContain("Search all test, snapshot, and test-support files");
+    const planner = await prompt("planner");
+    expect(planner).toContain("`revise_for_failure`");
+    expect(planner).toContain("integration tests");
+    expect(await prompt("reviewer")).toContain("`scope_revision`");
+    expect(await prompt("tester")).toContain("stale assertions");
   });
 
   it("keeps Tester, Reviewer, and Documenter contracts visible", async () => {
@@ -43,5 +55,33 @@ describe("role prompt contracts", () => {
     const documenter = await prompt("documenter");
     expect(documenter).toContain("approvalSource");
     for (const category of LESSON_CATEGORIES) expect(documenter).toContain(`\`${category}\``);
+  });
+
+  it("defines changedFiles as invocation-local for every mutation agent", async () => {
+    for (const name of ["tester", "builder", "documenter"]) {
+      const text = await prompt(name);
+      expect(text).toContain("exact file delta produced by this");
+      expect(text).toContain("not the cumulative workflow diff");
+      expect(text.toLowerCase()).toContain("return `[]`");
+      expect(text).toContain("correction.expectedChangedFiles");
+    }
+    const documenter = await prompt("documenter");
+    expect(documenter).toContain("task.builderOutputs[].changedFiles");
+    expect(documenter).toContain("task.tester.changedFiles");
+  });
+
+  it("documents repository evidence detail byte limits", async () => {
+    const expectedLimits = [
+      ["explorer", "`evidence[].detail`"],
+      ["reviewer", "`evidence[].detail`"],
+      ["debugger", "`evidence[].detail`"],
+      ["documenter", "`proposedLessons[].evidence[].detail`"]
+    ] as const;
+
+    for (const [name, field] of expectedLimits) {
+      const text = await prompt(name);
+      expect(text).toContain(field);
+      expect(text).toContain(`at most ${MAX_EVIDENCE_DETAIL_BYTES} UTF-8 bytes`);
+    }
   });
 });

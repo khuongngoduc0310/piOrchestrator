@@ -13,6 +13,7 @@ import {
 import type { CheckRunner, OrchestratorDependencies } from "./orchestrator.js";
 import { Orchestrator } from "./orchestrator.js";
 import { DEFAULT_CONFIG, loadConfig, saveConfig } from "./config.js";
+import { MAX_EVIDENCE_DETAIL_BYTES } from "./memory-types.js";
 import { RunStore } from "./store.js";
 import type { AgentResult, CheckResult, OrchestratorConfig, WorkflowRoute } from "./types.js";
 
@@ -451,6 +452,102 @@ describe("Orchestrator", () => {
     expect(await readFile(path.join(engine.getState()!.runDir, builderInvocation.filePatchArtifact!), "utf8")).toContain("value = 2");
   }, 20_000);
 
+  it("corrects a Documenter report that copies Builder changed files without rerunning mutation", async () => {
+    const cwd = await mkdtemp(path.join(os.tmpdir(), "pi-orchestrator-documenter-correction-"));
+    directories.push(cwd);
+    await mkdir(path.join(cwd, "src"), { recursive: true });
+    await mkdir(path.join(cwd, "tests"), { recursive: true });
+    await writeFile(path.join(cwd, "src", "index.ts"), "export const value = 1;\n");
+    await writeFile(path.join(cwd, "tests", "index.test.ts"), "test('value', () => {});\n");
+    await writeFile(path.join(cwd, "README.md"), "# Project\n");
+    execFileSync("git", ["init"], { cwd, stdio: "ignore" });
+    execFileSync("git", ["config", "user.email", "test@example.com"], { cwd });
+    execFileSync("git", ["config", "user.name", "Test"], { cwd });
+    execFileSync("git", ["add", "."], { cwd });
+    execFileSync("git", ["commit", "-m", "initial"], { cwd, stdio: "ignore" });
+
+    const config = structuredClone(DEFAULT_CONFIG);
+    config.checks = ["check"];
+    config.dashboard.enabled = false;
+    config.limits.worktreeIsolation = true;
+    await saveConfig(cwd, config);
+
+    const correctionPlan = json({
+      route: "quick_implementation",
+      summary: "implement",
+      assumptions: [],
+      acceptanceCriteria: ["check passes"],
+      tasks: [{ id: "one", description: "change", files: ["src/index.ts", "README.md"], dependencies: [], verification: ["check"] }],
+      risks: []
+    });
+    const incorrectDocumenter = json({
+      ...JSON.parse(documenter),
+      changedFiles: ["src/index.ts"]
+    });
+    const correctedDocumenter = json({
+      ...JSON.parse(documenter),
+      changedFiles: []
+    });
+
+    class ReportingAgent extends QueueAgent {
+      override async run(options: AgentRunOptions): Promise<AgentResult> {
+        const envelope = JSON.parse(options.task);
+        if (options.name === "builder" && envelope.mode === "execute") {
+          await writeFile(path.join(options.cwd, "src", "index.ts"), "export const value = 2;\n");
+        }
+        return super.run(options);
+      }
+    }
+    const agent = new ReportingAgent([
+      explorer,
+      correctionPlan,
+      approved,
+      builder,
+      approved,
+      incorrectDocumenter,
+      correctedDocumenter,
+      approved
+    ]);
+    const checkRunner = vi.fn(async () => [check(true)]) as unknown as CheckRunner;
+    const pi = { appendEntry: vi.fn(), exec: vi.fn(), sendMessage: vi.fn() } as unknown as ExtensionAPI;
+    const ctx = {
+      cwd,
+      hasUI: false,
+      isProjectTrusted: () => true,
+      ui: { notify: vi.fn(), setStatus: vi.fn(), setWidget: vi.fn() }
+    } as unknown as ExtensionCommandContext;
+    const engine = new Orchestrator(pi, path.resolve("."), { agentExecutor: agent, checkRunner });
+    await engine.start({ route: "quick_implementation", request: "request" }, ctx);
+
+    expect(engine.getState()?.status).toBe("completed");
+    const documenterCalls = agent.calls.filter(call => call.name === "documenter");
+    expect(documenterCalls).toHaveLength(2);
+    expect(JSON.parse(documenterCalls[1].task)).toMatchObject({
+      mode: "correct_output",
+      correction: {
+        attempt: 1,
+        reason: "reported_changed_files_mismatch",
+        fieldPath: "changedFiles",
+        expectedChangedFiles: []
+      }
+    });
+    expect(documenterCalls[1].config.tools).not.toContain("write");
+    expect(documenterCalls[1].config.tools).not.toContain("edit");
+    const documenterStep = engine.getState()!.steps.find(step => step.agent === "documenter")!;
+    const mutation = JSON.parse(await readFile(path.join(engine.getState()!.runDir, documenterStep.mutationArtifact!), "utf8"));
+    expect(mutation).toMatchObject({
+      reported: [],
+      actual: { changedFiles: [] },
+      violations: [],
+      correction: {
+        attempted: true,
+        initialReported: ["src/index.ts"],
+        expectedChangedFiles: []
+      }
+    });
+    expect(await readFile(path.join(cwd, "src", "index.ts"), "utf8")).toContain("value = 2");
+  }, 20_000);
+
   it("sends every role a stable version-3 task envelope", async () => {
     const { agent } = await scenario(
       [explorer, plan, approved, tester, builder, approved, documenter, approved],
@@ -627,7 +724,103 @@ describe("Orchestrator", () => {
     expect(agent.calls.filter(call => call.name === "debugger")).toHaveLength(1);
   });
 
-  it("fails when the only implementation attempt fails without diagnosing", async () => {
+  it("revises approved scope when diagnosis identifies an omitted integration test", async () => {
+    const diagnosis = json({
+      category: "test_defect",
+      rootCause: "integration assertion still expects the old card count",
+      evidence: [{ path: "src/App.test.ts", detail: "expected five cards but receives six" }],
+      recommendedFix: "update the stale integration assertion",
+      affectedFiles: ["src/App.test.ts"],
+      confidence: "high"
+    });
+    const revisedPlan = json({
+      ...JSON.parse(plan),
+      tasks: [
+        ...JSON.parse(plan).tasks,
+        {
+          id: "update-integration-test",
+          description: "update the stale card-count assertion",
+          files: ["src/App.test.ts"],
+          dependencies: ["one"],
+          verification: ["run integration tests"]
+        }
+      ]
+    });
+    const { engine, agent } = await scenario(
+      [explorer, plan, approved, tester, builder, diagnosis, revisedPlan, approved, builder, approved, documenter, approved],
+      [true, false, false, true, true],
+      config => { config.limits.implementationRetries = 2; }
+    );
+
+    expect(engine.getState()?.status).toBe("completed");
+    const plannerTasks = agent.calls.filter(call => call.name === "planner").map(call => JSON.parse(call.task).task);
+    expect(plannerTasks[1]).toMatchObject({ action: "revise_for_failure", requiredFiles: ["src/App.test.ts"] });
+    const secondBuilder = agent.calls.filter(call => call.name === "builder")[1];
+    expect(JSON.parse(secondBuilder.task).task.plan.tasks).toEqual(expect.arrayContaining([
+      expect.objectContaining({ files: ["src/App.test.ts"] })
+    ]));
+  });
+
+  it("expands scope and retries the same attempt when Builder reports a scope blocker", async () => {
+    const blocked = json({
+      summary: "blocked by omitted integration test",
+      changedFiles: [],
+      commands: [],
+      assumptions: [],
+      unresolvedIssues: ["src/App.test.ts must be updated"],
+      blocker: { kind: "scope", reason: "integration assertion is stale", requiredFiles: ["src/App.test.ts"] }
+    });
+    const quickPlan = JSON.parse(routePlan("quick_implementation"));
+    const revisedQuickPlan = json({
+      ...quickPlan,
+      tasks: [
+        ...quickPlan.tasks,
+        {
+          id: "update-integration-test",
+          description: "update stale integration assertion",
+          files: ["src/App.test.ts"],
+          dependencies: ["one"],
+          verification: ["run integration tests"]
+        }
+      ]
+    });
+    const { engine, agent } = await scenario(
+      [explorer, routePlan("quick_implementation"), approved, blocked, revisedQuickPlan, approved, builder, approved, documenter, approved],
+      [true, true, true],
+      undefined,
+      {},
+      "quick_implementation"
+    );
+
+    expect(engine.getState()?.status).toBe("completed");
+    const builders = agent.calls.filter(call => call.name === "builder");
+    expect(builders).toHaveLength(2);
+    expect(JSON.parse(builders[0].task).task.attempt).toBe(1);
+    expect(JSON.parse(builders[1].task).task.attempt).toBe(1);
+    expect(engine.getState()?.steps.filter(step => step.stage === "testing")).toHaveLength(2);
+  });
+
+  it("fails immediately when a legacy Builder reports unresolved work without a structured blocker", async () => {
+    const unresolved = json({
+      summary: "blocked",
+      changedFiles: [],
+      commands: [],
+      assumptions: [],
+      unresolvedIssues: ["src/App.test.ts is outside the approved plan"]
+    });
+    const { engine, agent } = await scenario(
+      [explorer, routePlan("quick_implementation"), approved, unresolved],
+      [true],
+      undefined,
+      {},
+      "quick_implementation"
+    );
+    expect(engine.getState()?.status).toBe("failed");
+    expect(engine.getState()?.message).toContain("Builder did not complete");
+    expect(agent.calls.filter(call => call.name === "builder")).toHaveLength(1);
+  });
+
+  it("diagnoses the final failed implementation attempt", async () => {
     const { engine, agent } = await scenario(
       [explorer, plan, approved, tester, builder],
       [true, false, false],
@@ -635,7 +828,7 @@ describe("Orchestrator", () => {
     );
     expect(engine.getState()?.status).toBe("failed");
     expect(agent.calls.filter(call => call.name === "builder")).toHaveLength(1);
-    expect(agent.calls.filter(call => call.name === "debugger")).toHaveLength(0);
+    expect(agent.calls.filter(call => call.name === "debugger")).toHaveLength(1);
   });
 
   it("diagnoses after first failure and fails on the retry", async () => {
@@ -646,7 +839,7 @@ describe("Orchestrator", () => {
     );
     expect(engine.getState()?.status).toBe("failed");
     expect(agent.calls.filter(call => call.name === "builder")).toHaveLength(2);
-    expect(agent.calls.filter(call => call.name === "debugger")).toHaveLength(1);
+    expect(agent.calls.filter(call => call.name === "debugger")).toHaveLength(2);
   });
 
   it("checks a review fix and re-reviews before approval", async () => {
@@ -717,6 +910,39 @@ describe("Orchestrator", () => {
       mode: "correct_output",
       status: "succeeded"
     });
+  });
+
+  it("recovers when Explorer corrects an oversized evidence detail", async () => {
+    const oversizedDetail = "x".repeat(MAX_EVIDENCE_DETAIL_BYTES + 1);
+    const oversizedExplorer = json({
+      architecture: "small extension",
+      relevantFiles: ["src/index.ts"],
+      conventions: [],
+      similarImplementations: [],
+      commands: ["check"],
+      risks: [],
+      knownLessons: [],
+      evidence: [{ path: "src/index.ts", detail: oversizedDetail }]
+    });
+    const { engine, agent } = await scenario(
+      [oversizedExplorer, explorer, plan, approved, tester, builder, approved, documenter, approved],
+      [true, true, true, true]
+    );
+
+    expect(engine.getState()?.status).toBe("completed");
+    const explorerCalls = agent.calls.filter(call => call.name === "explorer");
+    expect(explorerCalls).toHaveLength(2);
+    expect(JSON.parse(explorerCalls[1].task)).toMatchObject({
+      taskSchemaVersion: 3,
+      mode: "correct_output",
+      correction: {
+        attempt: 1,
+        reason: "schema_validation_failed",
+        fieldPath: "explorer.evidence[0].detail"
+      }
+    });
+    expect(explorerCalls[1].task).not.toContain("previousOutput");
+    expect(explorerCalls[1].task).not.toContain(oversizedDetail);
   });
 
   it("strips bash from a reviewer output-correction retry", async () => {
@@ -792,6 +1018,13 @@ describe("Orchestrator", () => {
       providerError: "quota exhausted",
       partialText: "partial response",
       usage: { input: 10, output: 2, cacheRead: 0, cacheWrite: 0, cost: 0.1 }
+    });
+    expect(state.steps[0].invocations?.[0]).toMatchObject({
+      status: "failed",
+      provider: "test-provider",
+      model: "test-model",
+      stopReason: "error",
+      usage: { input: 10, output: 2, cost: 0.1 }
     });
   });
 
@@ -1232,6 +1465,43 @@ describe("Orchestrator", () => {
     // Builder 2 (address_review) must run between reviewer 3 (rev 1) and reviewer 4 (rev 2)
     expect(builderIndices[2].index).toBeGreaterThan(reviewerIndices[2].index);
     expect(builderIndices[2].index).toBeLessThan(reviewerIndices[3].index);
+  });
+
+  it("revises scope when a code-review fix requires an omitted file", async () => {
+    const blocked = json({
+      summary: "review fix blocked",
+      changedFiles: [],
+      commands: [],
+      assumptions: [],
+      unresolvedIssues: ["src/App.test.ts must be updated"],
+      blocker: { kind: "scope", reason: "review found a stale integration test", requiredFiles: ["src/App.test.ts"] }
+    });
+    const basePlan = JSON.parse(plan);
+    const revisedPlan = json({
+      ...basePlan,
+      tasks: [
+        ...basePlan.tasks,
+        {
+          id: "update-integration-test",
+          description: "update stale integration assertion",
+          files: ["src/App.test.ts"],
+          dependencies: ["one"],
+          verification: ["run integration tests"]
+        }
+      ]
+    });
+    const { engine, agent } = await scenario(
+      [explorer, plan, approved, tester, builder, changes, blocked, revisedPlan, approved, builder, approved, documenter, approved],
+      [true, false, true, true, true],
+      config => { config.limits.reviewRevisions = 1; }
+    );
+
+    expect(engine.getState()?.status).toBe("completed");
+    const addressReviewBuilders = agent.calls.filter(call => call.name === "builder" && call.task.includes("address_review"));
+    expect(addressReviewBuilders).toHaveLength(2);
+    expect(JSON.parse(addressReviewBuilders[1].task).task.plan.tasks).toEqual(expect.arrayContaining([
+      expect.objectContaining({ files: ["src/App.test.ts"] })
+    ]));
   });
 
   it("updates implementationChecks after each successful review fix", async () => {

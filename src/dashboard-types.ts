@@ -1,4 +1,4 @@
-import type { AgentName } from "./agent-types.js";
+import type { AgentInvocationMode, AgentName, AgentUsage } from "./agent-types.js";
 import type { WorkflowRoute } from "./agent-task-types.js";
 import type { Stage, StepRecord, WorkflowState } from "./workflow-types.js";
 import type { InvocationFileDiff } from "./git-tree-diff.js";
@@ -123,4 +123,38 @@ export interface InvocationDiffView {
   metadata: InvocationFileDiff;
   patch: string;
   patchTruncated: boolean;
+}
+
+export interface AgentUsageSummary {
+  invocationCount: number;
+  measuredInvocationCount: number;
+  usage?: AgentUsage;
+}
+
+export interface AgentHistoryInvocation {
+  key: string;
+  stepId: string;
+  stepLabel: string;
+  sequence: number;
+  agent: AgentName;
+  mode: AgentInvocationMode;
+  status: "running" | "succeeded" | "failed" | "cancelled";
+  startedAt: string;
+  completedAt?: string;
+  durationMs?: number;
+  usage?: AgentUsage;
+  provider?: string;
+  model?: string;
+  api?: string;
+  stopReason?: string;
+  changedFileCount?: number;
+  hasTranscript: boolean;
+  hasDiff: boolean;
+}
+
+export interface AgentHistoryResponse {
+  runId: string;
+  total: AgentUsageSummary;
+  agents: Array<AgentUsageSummary & { name: AgentName }>;
+  invocations: AgentHistoryInvocation[];
 }

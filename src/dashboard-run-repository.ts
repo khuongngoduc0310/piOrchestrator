@@ -6,6 +6,7 @@ import { readSafeArtifact } from "./checkpoint-store.js";
 import { validateWorkflowStateForResume } from "./checkpoint-validation.js";
 import type { AgentInspection } from "./dashboard-types.js";
 import type { WorkflowState } from "./workflow-types.js";
+import { buildAgentHistory } from "./agent-history.js";
 
 const DEFAULT_MAX_RUNS = 1_000;
 const DEFAULT_MAX_STATE_BYTES = 4 * 1024 * 1024;
@@ -120,6 +121,11 @@ export class DashboardRunRepository {
       hasArtifact: steps.some(step => step.artifact !== undefined),
       hasRawArtifact: steps.some(step => step.rawArtifact !== undefined)
     };
+  }
+
+  async getAgentHistory(runId: string) {
+    const state = await this.loadRun(runId);
+    return state ? buildAgentHistory(state) : undefined;
   }
 
   async getInvocationTranscript(

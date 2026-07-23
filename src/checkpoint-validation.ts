@@ -38,6 +38,29 @@ function optionalString(value: unknown, path: string): void {
   if (value !== undefined) string(value, path, true);
 }
 
+function nonNegativeNumber(value: unknown, path: string): number {
+  if (typeof value !== "number" || !Number.isFinite(value) || value < 0) {
+    throw new ValidationError(path, "expected a finite number >= 0");
+  }
+  return value;
+}
+
+function validateUsage(value: unknown, path: string): void {
+  const usage = record(value, path);
+  for (const field of ["input", "output", "cacheRead", "cacheWrite", "cost"] as const) {
+    nonNegativeNumber(usage[field], `${path}.${field}`);
+  }
+  for (const field of ["totalTokens", "reasoning", "cacheWrite1h"] as const) {
+    if (usage[field] !== undefined) nonNegativeNumber(usage[field], `${path}.${field}`);
+  }
+  if (usage.costBreakdown !== undefined) {
+    const costs = record(usage.costBreakdown, `${path}.costBreakdown`);
+    for (const field of ["input", "output", "cacheRead", "cacheWrite"] as const) {
+      nonNegativeNumber(costs[field], `${path}.costBreakdown.${field}`);
+    }
+  }
+}
+
 export function validateWorkflowStateForResume(value: unknown, path = "state"): WorkflowState {
   const state = record(value, path);
   if (integer(state.schemaVersion, `${path}.schemaVersion`) !== SCHEMA_VERSION) {
@@ -68,6 +91,23 @@ export function validateWorkflowStateForResume(value: unknown, path = "state"): 
     string(step.label, `${entryPath}.label`);
     enumValue(step.status, `${entryPath}.status`, STEP_STATUSES);
     isoDate(step.startedAt, `${entryPath}.startedAt`);
+    if (step.invocations !== undefined) {
+      array(step.invocations, `${entryPath}.invocations`, (item, itemPath) => {
+        const invocation = record(item, itemPath);
+        integer(invocation.sequence, `${itemPath}.sequence`, 1);
+        enumValue(invocation.mode, `${itemPath}.mode`, ["execute", "correct_output"] as const);
+        enumValue(invocation.status, `${itemPath}.status`, STEP_STATUSES);
+        isoDate(invocation.startedAt, `${itemPath}.startedAt`);
+        if (invocation.completedAt !== undefined) isoDate(invocation.completedAt, `${itemPath}.completedAt`);
+        integer(invocation.messageCount, `${itemPath}.messageCount`);
+        boolean(invocation.truncated, `${itemPath}.truncated`);
+        if (invocation.usage !== undefined) validateUsage(invocation.usage, `${itemPath}.usage`);
+        for (const field of ["provider", "model", "api", "stopReason"] as const) {
+          optionalString(invocation[field], `${itemPath}.${field}`);
+        }
+        return item;
+      });
+    }
     return entry;
   });
   if (state.latestCheckpoint !== undefined) {

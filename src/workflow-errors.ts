@@ -18,6 +18,8 @@ export interface WorkflowTermination {
   message: string;
   source?: CancellationSource;
   stoppedStage?: string;
+  failedCommands?: string[];
+  diagnosis?: { category: string; rootCause: string };
 }
 
 export class WorkflowTerminationError extends Error {
@@ -77,6 +79,22 @@ export class MutationBoundaryError extends WorkflowTerminationError {
   constructor(message = "Mutation boundary was crossed", options?: ErrorOptions) {
     super("mutation_boundary_violation", "failed", message, options);
     this.name = "MutationBoundaryError";
+  }
+}
+
+export class CheckFailureError extends WorkflowTerminationError {
+  constructor(
+    phase: string,
+    failedCommands: readonly string[],
+    diagnosis?: { category: string; rootCause: string },
+    options?: ErrorOptions
+  ) {
+    const commands = failedCommands.length > 0 ? failedCommands.join(", ") : "unknown check";
+    const detail = diagnosis ? `; ${diagnosis.category}: ${diagnosis.rootCause}` : "";
+    super("workflow_failed", "failed", `${phase} failed (${commands})${detail}`, options);
+    this.name = "CheckFailureError";
+    this.termination.failedCommands = [...failedCommands];
+    if (diagnosis) this.termination.diagnosis = diagnosis;
   }
 }
 
