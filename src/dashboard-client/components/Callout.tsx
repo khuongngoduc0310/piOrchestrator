@@ -45,6 +45,17 @@ export function Callout({ snapshot, onOpenArtifact }: CalloutProps) {
 
   // Run-associated states
   switch (mode) {
+    case "paused":
+      return (
+        <div id="callout" className="waiting" role="status" aria-live="polite">
+          <div className="callout-title">Decision required</div>
+          <div className="callout-body">{run.waitingFor ?? "This workflow is waiting for human input."}</div>
+          {run.resumeCommand && (
+            <div className="callout-body">Resume in Pi: <code>{run.resumeCommand}</code></div>
+          )}
+        </div>
+      );
+
     case "waiting":
       return run.waitingFor ? (
         <div id="callout" className="waiting" role="status" aria-live="polite">

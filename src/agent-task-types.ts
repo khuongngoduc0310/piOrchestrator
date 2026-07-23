@@ -1,5 +1,5 @@
 import type { AgentName } from "./agent-types.js";
-import type { MemoryContext } from "./memory-types.js";
+import type { MemoryContext } from "./memory/memory-types.js";
 import type { BaselineReviewContext, CheckResult } from "./workflow-types.js";
 
 export const AGENT_TASK_SCHEMA_VERSION = 3 as const;

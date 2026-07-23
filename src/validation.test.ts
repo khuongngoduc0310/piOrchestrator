@@ -10,7 +10,7 @@ import {
   validateTesterOutput,
   ValidationError
 } from "./validation.js";
-import { MAX_EVIDENCE_DETAIL_BYTES } from "./memory-types.js";
+import { MAX_EVIDENCE_DETAIL_BYTES } from "./memory/memory-types.js";
 import { WORKFLOW_ROUTES } from "./types.js";
 
 const validPlan = {

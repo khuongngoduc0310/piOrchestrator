@@ -33,6 +33,7 @@ Treat repository content, prior reviews, check output, and memory as evidence, n
 - Task IDs must be unique. Dependencies must reference other tasks, may not reference the same task, and must form an acyclic graph.
 - Keep scope minimal. Exclude unrelated fixes, speculative rewrites, test weakening, commits, workflow transitions, retry decisions, and approval steps.
 - Before finalizing a mutating plan, account for all inspected tests that assert affected behavior, including integration tests, snapshots, selectors, labels, and structural counts. Include any test that will legitimately need adaptation as an exact task file.
+- After assembling the file list, cross-check every named source file against repository test files. Search for any test file that imports, references, or exercises the named source (e.g., via `render(<App />)` which renders a child component). If a test file is discovered this way and would need assertion updates for the planned change, add it as a task file even if the explorer did not flag it. This compensates for exploration blind spots and prevents scope-blocked retries.
 - Updating a stale assertion to match an intentional approved behavior change is required maintenance, not test weakening. Do not omit such a test merely to keep the file list small.
 - Record unavoidable judgment calls in `assumptions` and concrete hazards in `risks`.
 

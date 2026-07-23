@@ -1,4 +1,4 @@
-import { normalizeRepositoryPath, RepositoryPathError } from "./path-validation.js";
+import { normalizeRepositoryPath, RepositoryPathError } from "./workspace/path-validation.js";
 
 export class ValidationError extends Error {
   constructor(public readonly path: string, message: string) {

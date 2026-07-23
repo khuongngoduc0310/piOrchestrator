@@ -14,5 +14,5 @@ export {
   validatePlannerOutput,
   validateReviewOutput,
   validateTesterOutput
-} from "./agent-output-validation.js";
-export { validateOrchestratorConfig } from "./config-validation.js";
+} from "./agents/agent-output-validation.js";
+export { validateOrchestratorConfig } from "./config/config-validation.js";

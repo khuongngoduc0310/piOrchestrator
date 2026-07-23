@@ -9,18 +9,24 @@ import {
   AgentIncompleteResponseError,
   type AgentExecutor,
   type AgentRunOptions
-} from "./agent-runner.js";
+} from "./agents/agent-runner.js";
 import type { CheckRunner, OrchestratorDependencies } from "./orchestrator.js";
 import { Orchestrator } from "./orchestrator.js";
-import { DEFAULT_CONFIG, loadConfig, saveConfig } from "./config.js";
-import { MAX_EVIDENCE_DETAIL_BYTES } from "./memory-types.js";
-import { RunStore } from "./store.js";
+import { DEFAULT_CONFIG, loadConfig, saveConfig } from "./config/config.js";
+import { MAX_EVIDENCE_DETAIL_BYTES } from "./memory/memory-types.js";
+import { RunStore } from "./persistence/store.js";
 import type { AgentResult, CheckResult, OrchestratorConfig, WorkflowRoute } from "./types.js";
 
 const directories: string[] = [];
 afterEach(async () => {
   await Promise.all(directories.splice(0).map(directory => rm(directory, { recursive: true, force: true })));
 });
+
+function defaultTestConfig(): OrchestratorConfig {
+  const config = structuredClone(DEFAULT_CONFIG);
+  config.humanInTheLoop.importantDecisions = false;
+  return config;
+}
 
 const explorer = json({
   architecture: "small extension",
@@ -165,7 +171,7 @@ async function scenario(
 ): Promise<{ engine: Orchestrator; agent: QueueAgent; cwd: string; notifications: ReturnType<typeof vi.fn>; sendMessage: ReturnType<typeof vi.fn> }> {
   const cwd = await mkdtemp(path.join(os.tmpdir(), "pi-orchestrator-flow-"));
   directories.push(cwd);
-  const config = structuredClone(DEFAULT_CONFIG);
+  const config = defaultTestConfig();
   config.checks = ["check"];
   config.dashboard.enabled = false;
   configure?.(config);
@@ -199,7 +205,7 @@ describe("Orchestrator", () => {
   it("approves discovered checks and continues the same invocation", async () => {
     const cwd = await mkdtemp(path.join(os.tmpdir(), "pi-orchestrator-setup-"));
     directories.push(cwd);
-    await saveConfig(cwd, { ...structuredClone(DEFAULT_CONFIG), dashboard: { enabled: false, port: 0 } });
+    await saveConfig(cwd, { ...defaultTestConfig(), dashboard: { enabled: false, port: 0 } });
     await writeFile(path.join(cwd, "package.json"), JSON.stringify({ scripts: { test: "vitest run" } }));
     const agent = new QueueAgent([explorer, plan, approved, tester, builder, approved, documenter, approved]);
     const checkRunner = vi.fn(async () => [check(true)]) as unknown as CheckRunner;
@@ -221,7 +227,7 @@ describe("Orchestrator", () => {
   it("cancels an implementation route when deferred check setup is declined", async () => {
     const cwd = await mkdtemp(path.join(os.tmpdir(), "pi-orchestrator-setup-cancel-"));
     directories.push(cwd);
-    await saveConfig(cwd, { ...structuredClone(DEFAULT_CONFIG), dashboard: { enabled: false, port: 0 } });
+    await saveConfig(cwd, { ...defaultTestConfig(), dashboard: { enabled: false, port: 0 } });
     const agent = new QueueAgent([explorer, plan, approved]);
     const pi = { appendEntry: vi.fn(), exec: vi.fn() } as unknown as ExtensionAPI;
     const ctx = {
@@ -310,6 +316,45 @@ describe("Orchestrator", () => {
     expect(agent.calls.map(call => call.name)).toEqual(["explorer", "planner", "reviewer", "tester"]);
   });
 
+  it("resumes final delivery approval for a tests-only route", async () => {
+    const initial = await scenario(
+      [explorer, routePlan("tests_only", ["test.ts"]), approved, tester],
+      [true, true],
+      config => { config.humanInTheLoop.importantDecisions = true; },
+      {},
+      "tests_only"
+    );
+    const paused = initial.engine.getState()!;
+    expect(paused.status).toBe("paused");
+    expect(paused.pendingDecision?.kind).toBe("final_delivery");
+
+    const resumedAgent = new QueueAgent([]);
+    const pi = { appendEntry: vi.fn(), exec: vi.fn(), sendMessage: vi.fn() } as unknown as ExtensionAPI;
+    const ctx = {
+      cwd: initial.cwd,
+      hasUI: true,
+      ui: {
+        select: vi.fn(async () => "Finish delivery"),
+        input: vi.fn(),
+        editor: vi.fn(),
+        confirm: vi.fn(),
+        notify: vi.fn(),
+        setStatus: vi.fn(),
+        setWidget: vi.fn()
+      }
+    } as unknown as ExtensionCommandContext;
+    const resumed = new Orchestrator(pi, path.resolve("."), {
+      agentExecutor: resumedAgent,
+      checkRunner: vi.fn(async () => [check(true)]) as unknown as CheckRunner,
+      enforceWorkspacePolicy: false
+    });
+
+    await resumed.resume(paused.runId, ctx);
+
+    expect(resumed.getState()?.status).toBe("completed");
+    expect(resumedAgent.calls).toHaveLength(0);
+  });
+
   it("runs documentation-only without Tester or Builder", async () => {
     const { engine, agent } = await scenario(
       [explorer, routePlan("documentation_only", ["README.md"]), approved, documentationOnlyOutput],
@@ -386,7 +431,7 @@ describe("Orchestrator", () => {
     execFileSync("git", ["add", "."], { cwd });
     execFileSync("git", ["commit", "-m", "initial"], { cwd, stdio: "ignore" });
 
-    const config = structuredClone(DEFAULT_CONFIG);
+    const config = defaultTestConfig();
     config.checks = ["check"];
     config.dashboard.enabled = false;
     config.limits.worktreeIsolation = true;
@@ -466,7 +511,7 @@ describe("Orchestrator", () => {
     execFileSync("git", ["add", "."], { cwd });
     execFileSync("git", ["commit", "-m", "initial"], { cwd, stdio: "ignore" });
 
-    const config = structuredClone(DEFAULT_CONFIG);
+    const config = defaultTestConfig();
     config.checks = ["check"];
     config.dashboard.enabled = false;
     config.limits.worktreeIsolation = true;
@@ -579,17 +624,17 @@ describe("Orchestrator", () => {
     expect(agent.calls.some(call => call.name === "tester" || call.name === "builder")).toBe(false);
   });
 
-  it("rejects a red baseline before tester or builder mutation", async () => {
+  it("pauses for red baseline repair approval before tester or builder mutation", async () => {
     const { engine, agent } = await scenario([explorer, plan, approved, debuggerOutput, plan], [false]);
-    expect(engine.getState()?.status).toBe("failed");
-    expect(engine.getState()?.failedStage).toBe("baseline");
+    expect(engine.getState()?.status).toBe("paused");
+    expect(engine.getState()?.pendingDecision?.kind).toBe("baseline_repair_approval");
     expect(agent.calls.some(call => call.name === "tester" || call.name === "builder")).toBe(false);
   });
 
   it("proposes a baseline repair plan and continues after human approval", async () => {
     const cwd = await mkdtemp(path.join(os.tmpdir(), "pi-orchestrator-baseline-repair-"));
     directories.push(cwd);
-    const config = structuredClone(DEFAULT_CONFIG);
+    const config = defaultTestConfig();
     config.checks = ["check"];
     config.dashboard.enabled = false;
     await saveConfig(cwd, config);
@@ -624,10 +669,51 @@ describe("Orchestrator", () => {
     expect(select).toHaveBeenCalledTimes(2); // baseline repair + memory approval
   });
 
+  it("resumes pending baseline repair approval without regenerating its plan", async () => {
+    const initial = await scenario(
+      [explorer, plan, approved, debuggerOutput, plan],
+      [false]
+    );
+    const paused = initial.engine.getState()!;
+    expect(paused.status).toBe("paused");
+    expect(paused.pendingDecision?.kind).toBe("baseline_repair_approval");
+
+    const resumedAgent = new QueueAgent([builder, tester, builder, approved, documenter, approved]);
+    const checkQueue = [[check(true)], [check(true)], [check(true)], [check(true)]];
+    const pi = { appendEntry: vi.fn(), exec: vi.fn(), sendMessage: vi.fn() } as unknown as ExtensionAPI;
+    const editor = vi.fn(async () => "viewed");
+    const ctx = {
+      cwd: initial.cwd,
+      hasUI: true,
+      ui: {
+        editor,
+        select: vi.fn()
+          .mockResolvedValueOnce("Approve plan")
+          .mockResolvedValueOnce("Finish delivery"),
+        input: vi.fn(),
+        confirm: vi.fn(),
+        notify: vi.fn(),
+        setStatus: vi.fn(),
+        setWidget: vi.fn()
+      }
+    } as unknown as ExtensionCommandContext;
+    const resumed = new Orchestrator(pi, path.resolve("."), {
+      agentExecutor: resumedAgent,
+      checkRunner: vi.fn(async () => checkQueue.shift() ?? [check(true)]) as unknown as CheckRunner,
+      enforceWorkspacePolicy: false
+    });
+
+    await resumed.resume(paused.runId, ctx);
+
+    expect(resumed.getState()?.status).toBe("completed");
+    expect(editor).toHaveBeenCalledOnce();
+    expect(resumedAgent.calls.map(call => call.name)).toEqual(["builder", "tester", "builder", "reviewer", "documenter", "reviewer"]);
+  });
+
   it("opens browser dashboard when enabled", async () => {
     const cwd = await mkdtemp(path.join(os.tmpdir(), "pi-orchestrator-dashboard-"));
     directories.push(cwd);
-    const config = structuredClone(DEFAULT_CONFIG);
+    const config = defaultTestConfig();
     config.checks = ["check"];
     config.dashboard.enabled = true;
     await saveConfig(cwd, config);
@@ -651,7 +737,7 @@ describe("Orchestrator", () => {
   it("does not open browser when dashboard is disabled", async () => {
     const cwd = await mkdtemp(path.join(os.tmpdir(), "pi-orchestrator-no-dashboard-"));
     directories.push(cwd);
-    const config = structuredClone(DEFAULT_CONFIG);
+    const config = defaultTestConfig();
     config.checks = ["check"];
     config.dashboard.enabled = false;
     await saveConfig(cwd, config);
@@ -749,7 +835,7 @@ describe("Orchestrator", () => {
     const { engine, agent } = await scenario(
       [explorer, plan, approved, tester, builder, diagnosis, revisedPlan, approved, builder, approved, documenter, approved],
       [true, false, false, true, true],
-      config => { config.limits.implementationRetries = 2; }
+      config => { config.limits.implementationRetries = 2; config.humanInTheLoop.importantDecisions = false; }
     );
 
     expect(engine.getState()?.status).toBe("completed");
@@ -787,7 +873,7 @@ describe("Orchestrator", () => {
     const { engine, agent } = await scenario(
       [explorer, routePlan("quick_implementation"), approved, blocked, revisedQuickPlan, approved, builder, approved, documenter, approved],
       [true, true, true],
-      undefined,
+      config => { config.humanInTheLoop.importantDecisions = false; },
       {},
       "quick_implementation"
     );
@@ -798,6 +884,115 @@ describe("Orchestrator", () => {
     expect(JSON.parse(builders[0].task).task.attempt).toBe(1);
     expect(JSON.parse(builders[1].task).task.attempt).toBe(1);
     expect(engine.getState()?.steps.filter(step => step.stage === "testing")).toHaveLength(2);
+  });
+
+  it("resumes a pending scope expansion at the blocked implementation attempt", async () => {
+    const blocked = json({
+      summary: "blocked by omitted integration test",
+      changedFiles: [],
+      commands: [],
+      assumptions: [],
+      unresolvedIssues: ["src/App.test.ts must be updated"],
+      blocker: { kind: "scope", reason: "integration assertion is stale", requiredFiles: ["src/App.test.ts"] }
+    });
+    const quickPlan = JSON.parse(routePlan("quick_implementation"));
+    const revisedQuickPlan = json({
+      ...quickPlan,
+      tasks: [
+        ...quickPlan.tasks,
+        {
+          id: "update-integration-test",
+          description: "update stale integration assertion",
+          files: ["src/App.test.ts"],
+          dependencies: ["one"],
+          verification: ["run integration tests"]
+        }
+      ]
+    });
+    const initial = await scenario(
+      [explorer, routePlan("quick_implementation"), approved, blocked, revisedQuickPlan],
+      [true],
+      config => { config.humanInTheLoop.importantDecisions = true; },
+      {},
+      "quick_implementation"
+    );
+    const paused = initial.engine.getState()!;
+    expect(paused.status).toBe("paused");
+    expect(paused.pendingDecision?.kind).toBe("scope_expansion");
+
+    const resumedAgent = new QueueAgent([builder, approved, documenter, approved]);
+    const checks = [[check(true)], [check(true)]];
+    const pi = { appendEntry: vi.fn(), exec: vi.fn(), sendMessage: vi.fn() } as unknown as ExtensionAPI;
+    const editor = vi.fn(async () => "viewed");
+    const ctx = {
+      cwd: initial.cwd,
+      hasUI: true,
+      ui: {
+        editor,
+        select: vi.fn()
+          .mockResolvedValueOnce("Approve plan")
+          .mockResolvedValueOnce("Finish delivery"),
+        input: vi.fn(),
+        confirm: vi.fn(),
+        notify: vi.fn(),
+        setStatus: vi.fn(),
+        setWidget: vi.fn()
+      }
+    } as unknown as ExtensionCommandContext;
+    const resumed = new Orchestrator(pi, path.resolve("."), {
+      agentExecutor: resumedAgent,
+      checkRunner: vi.fn(async () => checks.shift() ?? [check(true)]) as unknown as CheckRunner,
+      enforceWorkspacePolicy: false
+    });
+
+    await resumed.resume(paused.runId, ctx);
+
+    expect(resumed.getState()?.status).toBe("completed");
+    expect(editor).toHaveBeenCalledOnce();
+    expect(resumedAgent.calls.map(call => call.name)).toEqual(["builder", "reviewer", "documenter", "reviewer"]);
+    expect(JSON.parse(resumedAgent.calls[0].task).task.attempt).toBe(1);
+  });
+
+  it("expands scope from debugger diagnosis for quick_implementation when integration test is omitted from plan", async () => {
+    const quickPlan = JSON.parse(routePlan("quick_implementation"));
+    const diagnosis = json({
+      category: "test_defect",
+      rootCause: "integration assertion still expects the old card count",
+      evidence: [{ path: "src/App.test.ts", detail: "expected five cards but receives six" }],
+      recommendedFix: "update the stale integration assertion",
+      affectedFiles: ["src/App.test.ts"],
+      confidence: "high"
+    });
+    const revisedPlan = json({
+      ...quickPlan,
+      tasks: [
+        ...quickPlan.tasks,
+        {
+          id: "update-integration-test",
+          description: "update the stale card-count assertion",
+          files: ["src/App.test.ts"],
+          dependencies: ["one"],
+          verification: ["run integration tests"]
+        }
+      ]
+    });
+    const { engine, agent, notifications } = await scenario(
+      [explorer, routePlan("quick_implementation"), approved, builder, diagnosis, revisedPlan, approved, builder, approved, documenter, approved],
+      [true, false, true, true],
+      config => { config.limits.implementationRetries = 2; config.humanInTheLoop.importantDecisions = false; },
+      {},
+      "quick_implementation"
+    );
+
+    expect(engine.getState()?.status).toBe("completed");
+    const plannerTasks = agent.calls.filter(call => call.name === "planner").map(call => JSON.parse(call.task).task);
+    expect(plannerTasks[1]).toMatchObject({ action: "revise_for_failure", requiredFiles: ["src/App.test.ts"] });
+    const builders = agent.calls.filter(call => call.name === "builder");
+    expect(builders).toHaveLength(2);
+    const secondBuilderTask = JSON.parse(builders[1].task).task;
+    expect(secondBuilderTask.plan.tasks).toEqual(expect.arrayContaining([
+      expect.objectContaining({ files: ["src/App.test.ts"] })
+    ]));
   });
 
   it("fails immediately when a legacy Builder reports unresolved work without a structured blocker", async () => {
@@ -824,7 +1019,7 @@ describe("Orchestrator", () => {
     const { engine, agent } = await scenario(
       [explorer, plan, approved, tester, builder],
       [true, false, false],
-      config => { config.limits.implementationRetries = 0; }
+      config => { config.limits.implementationRetries = 0; config.humanInTheLoop.importantDecisions = true; }
     );
     expect(engine.getState()?.status).toBe("failed");
     expect(agent.calls.filter(call => call.name === "builder")).toHaveLength(1);
@@ -842,6 +1037,97 @@ describe("Orchestrator", () => {
     expect(agent.calls.filter(call => call.name === "debugger")).toHaveLength(2);
   });
 
+  it("resumes an approved extra implementation repair after budget exhaustion", async () => {
+    const initial = await scenario(
+      [explorer, plan, approved, tester, builder, debuggerOutput],
+      [true, false, false],
+      config => { config.limits.implementationRetries = 0; config.humanInTheLoop.importantDecisions = true; }
+    );
+    const paused = initial.engine.getState()!;
+    expect(paused.status).toBe("paused");
+    expect(paused.pendingDecision?.kind).toBe("repair_budget_exhausted");
+
+    const resumedAgent = new QueueAgent([builder, approved, documenter, approved]);
+    const checks = [[check(true)], [check(true)]];
+    const pi = { appendEntry: vi.fn(), exec: vi.fn(), sendMessage: vi.fn() } as unknown as ExtensionAPI;
+    const select = vi.fn()
+      .mockResolvedValueOnce("Allow one more repair")
+      .mockResolvedValueOnce("Finish delivery");
+    const ctx = {
+      cwd: initial.cwd,
+      hasUI: true,
+      ui: {
+        select,
+        editor: vi.fn(),
+        input: vi.fn(),
+        confirm: vi.fn(),
+        notify: vi.fn(),
+        setStatus: vi.fn(),
+        setWidget: vi.fn()
+      }
+    } as unknown as ExtensionCommandContext;
+    const resumed = new Orchestrator(pi, path.resolve("."), {
+      agentExecutor: resumedAgent,
+      checkRunner: vi.fn(async () => checks.shift() ?? [check(true)]) as unknown as CheckRunner,
+      enforceWorkspacePolicy: false
+    });
+
+    await resumed.resume(paused.runId, ctx);
+
+    expect(resumed.getState()?.status).toBe("completed");
+    expect(select).toHaveBeenCalledTimes(2);
+    expect(resumedAgent.calls.map(call => call.name)).toEqual(["builder", "reviewer", "documenter", "reviewer"]);
+    expect(JSON.parse(resumedAgent.calls[0].task).task.attempt).toBe(2);
+  });
+
+  it("routes a final delivery change request through planning, implementation, checks, and review", async () => {
+    const initial = await scenario(
+      [explorer, plan, approved, tester, builder, approved, documenter, approved],
+      [true, false, true, true],
+      config => { config.humanInTheLoop.importantDecisions = true; }
+    );
+    const paused = initial.engine.getState()!;
+    expect(paused.status).toBe("paused");
+    expect(paused.pendingDecision?.kind).toBe("final_delivery");
+
+    const resumedAgent = new QueueAgent([plan, builder, approved, documenter, approved]);
+    const checks = [[check(true)], [check(true)]];
+    const select = vi.fn()
+      .mockResolvedValueOnce("Request changes")
+      .mockResolvedValueOnce("Finish delivery");
+    const input = vi.fn(async () => "Tighten the final behavior before delivery");
+    const pi = { appendEntry: vi.fn(), exec: vi.fn(), sendMessage: vi.fn() } as unknown as ExtensionAPI;
+    const ctx = {
+      cwd: initial.cwd,
+      hasUI: true,
+      ui: {
+        select,
+        input,
+        editor: vi.fn(),
+        confirm: vi.fn(),
+        notify: vi.fn(),
+        setStatus: vi.fn(),
+        setWidget: vi.fn()
+      }
+    } as unknown as ExtensionCommandContext;
+    const resumed = new Orchestrator(pi, path.resolve("."), {
+      agentExecutor: resumedAgent,
+      checkRunner: vi.fn(async () => checks.shift() ?? [check(true)]) as unknown as CheckRunner,
+      enforceWorkspacePolicy: false
+    });
+
+    await resumed.resume(paused.runId, ctx);
+
+    expect(resumed.getState()?.status).toBe("completed");
+    expect(select).toHaveBeenCalledTimes(2);
+    expect(resumedAgent.calls.map(call => call.name)).toEqual(["planner", "builder", "reviewer", "documenter", "reviewer"]);
+    const plannerTask = JSON.parse(resumedAgent.calls[0].task).task;
+    expect(plannerTask).toMatchObject({
+      action: "revise_plan",
+      feedback: { source: "human", text: "Tighten the final behavior before delivery" }
+    });
+  });
+
   it("checks a review fix and re-reviews before approval", async () => {
     const { engine, agent } = await scenario(
       [explorer, plan, approved, tester, builder, changes, builder, approved, documenter, approved],
@@ -853,14 +1139,56 @@ describe("Orchestrator", () => {
     expect(agent.calls.filter(call => call.name === "builder")).toHaveLength(2);
   });
 
-  it("fails when code review revisions are exhausted", async () => {
-    const { engine } = await scenario(
+  it("pauses when code review revisions are exhausted", async () => {
+    const { engine, agent } = await scenario(
       [explorer, plan, approved, tester, builder, changes],
       [true, false, true],
-      config => { config.limits.reviewRevisions = 0; }
+      config => { config.limits.reviewRevisions = 0; config.humanInTheLoop.importantDecisions = true; }
     );
-    expect(engine.getState()?.status).toBe("failed");
-    expect(engine.getState()?.failedStage).toBe("reviewing_code");
+    expect(engine.getState()?.status).toBe("paused");
+    expect(engine.getState()?.pendingDecision?.kind).toBe("code_review_rejection");
+    expect(engine.getState()?.latestCheckpoint?.cursor).toBe("human_decision_pending");
+    expect(agent.calls.filter(call => call.name === "builder")).toHaveLength(1);
+  });
+
+  it("resumes a pending code review decision without rerunning Reviewer", async () => {
+    const initial = await scenario(
+      [explorer, plan, approved, tester, builder, changes],
+      [true, false, true],
+      config => { config.limits.reviewRevisions = 0; config.humanInTheLoop.importantDecisions = true; }
+    );
+    const paused = initial.engine.getState()!;
+    expect(paused.status).toBe("paused");
+
+    const resumedAgent = new QueueAgent([documenter, approved]);
+    const pi = { appendEntry: vi.fn(), exec: vi.fn(), sendMessage: vi.fn() } as unknown as ExtensionAPI;
+    const select = vi.fn()
+      .mockResolvedValueOnce("Accept current implementation")
+      .mockResolvedValueOnce("Finish delivery");
+    const ctx = {
+      cwd: initial.cwd,
+      hasUI: true,
+      ui: {
+        select,
+        editor: vi.fn(),
+        input: vi.fn(),
+        confirm: vi.fn(),
+        notify: vi.fn(),
+        setStatus: vi.fn(),
+        setWidget: vi.fn()
+      }
+    } as unknown as ExtensionCommandContext;
+    const resumed = new Orchestrator(pi, path.resolve("."), {
+      agentExecutor: resumedAgent,
+      checkRunner: vi.fn(async () => [check(true)]) as unknown as CheckRunner,
+      enforceWorkspacePolicy: false
+    });
+
+    await resumed.resume(paused.runId, ctx);
+
+    expect(resumed.getState()?.status).toBe("completed");
+    expect(resumedAgent.calls.map(call => call.name)).toEqual(["documenter", "reviewer"]);
+    expect(select).toHaveBeenCalledTimes(2);
   });
 
   it("stores malformed agent output separately and fails the stage", async () => {
@@ -1181,7 +1509,7 @@ describe("Orchestrator", () => {
   it("human approves plan when planApproval is enabled", async () => {
     const cwd = await mkdtemp(path.join(os.tmpdir(), "pi-orchestrator-human-approve-"));
     directories.push(cwd);
-    const config = structuredClone(DEFAULT_CONFIG);
+    const config = defaultTestConfig();
     config.checks = ["check"];
     config.dashboard.enabled = false;
     config.humanInTheLoop.planApproval = true;
@@ -1207,32 +1535,33 @@ describe("Orchestrator", () => {
     expect(select).toHaveBeenCalledTimes(2); // plan approval + memory approval
   });
 
-  it("fails closed when plan approval is required without an interactive UI", async () => {
+  it("pauses when plan approval is required without an interactive UI", async () => {
     const { engine, agent } = await scenario(
       [explorer, plan],
       [],
       config => { config.humanInTheLoop.planApproval = true; }
     );
-    expect(engine.getState()?.status).toBe("failed");
-    expect(engine.getState()?.termination?.code).toBe("human_gate_unavailable");
+    expect(engine.getState()?.status).toBe("paused");
+    expect(engine.getState()?.latestCheckpoint?.cursor).toBe("human_decision_pending");
+    expect(engine.getState()?.pendingDecision?.kind).toBe("plan_approval");
     expect(agent.calls.some(call => call.name === "tester" || call.name === "builder")).toBe(false);
   });
 
-  it("fails closed before mutation when confirmation is required without an interactive UI", async () => {
+  it("pauses before mutation when confirmation requires an interactive UI", async () => {
     const { engine, agent } = await scenario(
       [explorer, plan, approved],
       [true],
       config => { config.humanInTheLoop.confirmBeforeMutation = true; }
     );
-    expect(engine.getState()?.status).toBe("failed");
-    expect(engine.getState()?.termination?.code).toBe("human_gate_unavailable");
+    expect(engine.getState()?.status).toBe("paused");
+    expect(engine.getState()?.pendingDecision?.kind).toBe("mutation_confirmation");
     expect(agent.calls.some(call => call.name === "tester" || call.name === "builder")).toBe(false);
   });
 
   it("human requests changes to plan and planner revises", async () => {
     const cwd = await mkdtemp(path.join(os.tmpdir(), "pi-orchestrator-human-changes-"));
     directories.push(cwd);
-    const config = structuredClone(DEFAULT_CONFIG);
+    const config = defaultTestConfig();
     config.checks = ["check"];
     config.dashboard.enabled = false;
     config.humanInTheLoop.planApproval = true;
@@ -1284,10 +1613,154 @@ describe("Orchestrator", () => {
     expect(engine.getState()?.message).toContain("cancelled");
   });
 
+  it("resumes a deferred plan decision without rerunning exploration or planning", async () => {
+    const cwd = await mkdtemp(path.join(os.tmpdir(), "pi-orchestrator-human-resume-"));
+    directories.push(cwd);
+    const config = defaultTestConfig();
+    config.checks = ["check"];
+    config.dashboard.enabled = false;
+    config.humanInTheLoop.planApproval = true;
+    await saveConfig(cwd, config);
+
+    const initialAgent = new QueueAgent([explorer, plan]);
+    const pi = { appendEntry: vi.fn(), exec: vi.fn(), sendMessage: vi.fn() } as unknown as ExtensionAPI;
+    const initialContext = {
+      cwd,
+      hasUI: true,
+      isProjectTrusted: () => true,
+      ui: {
+        editor: vi.fn(async () => undefined),
+        select: vi.fn(),
+        input: vi.fn(),
+        confirm: vi.fn(),
+        notify: vi.fn(),
+        setStatus: vi.fn(),
+        setWidget: vi.fn()
+      }
+    } as unknown as ExtensionCommandContext;
+    const initial = new Orchestrator(pi, path.resolve("."), {
+      agentExecutor: initialAgent,
+      checkRunner: vi.fn(async () => [check(true)]) as unknown as CheckRunner,
+      enforceWorkspacePolicy: false
+    });
+    await initial.start({ route: "implementation", request: "request" }, initialContext);
+    const paused = initial.getState()!;
+    expect(paused.status).toBe("paused");
+    expect(paused.latestCheckpoint?.cursor).toBe("human_decision_pending");
+
+    const resumedAgent = new QueueAgent([tester, builder, approved, documenter, approved]);
+    const checkQueue = [[check(true)], [check(false)], [check(true)], [check(true)]];
+    const select = vi.fn()
+      .mockResolvedValueOnce("Approve plan")
+      .mockResolvedValueOnce("Defer all");
+    const resumedContext = {
+      cwd,
+      hasUI: true,
+      isProjectTrusted: () => true,
+      ui: {
+        editor: vi.fn(async () => "viewed"),
+        select,
+        input: vi.fn(),
+        confirm: vi.fn(),
+        notify: vi.fn(),
+        setStatus: vi.fn(),
+        setWidget: vi.fn()
+      }
+    } as unknown as ExtensionCommandContext;
+    const resumed = new Orchestrator(pi, path.resolve("."), {
+      agentExecutor: resumedAgent,
+      checkRunner: vi.fn(async () => checkQueue.shift() ?? [check(true)]) as unknown as CheckRunner,
+      enforceWorkspacePolicy: false
+    });
+
+    await resumed.resume(paused.runId, resumedContext);
+
+    expect(resumed.getState()?.status).toBe("completed");
+    expect(resumed.getState()?.resumeCount).toBe(1);
+    expect(resumedAgent.calls.map(call => call.name)).toEqual(["tester", "builder", "reviewer", "documenter", "reviewer"]);
+  });
+
+  it("consumes a recorded plan decision after interruption without prompting again", async () => {
+    class FailFirstPlanWriteStore extends RunStore {
+      private failed = false;
+      override saveJson(name: string, value: unknown): Promise<string> {
+        if (name === "plan.json" && !this.failed) {
+          this.failed = true;
+          return Promise.reject(new Error("interrupted after decision recording"));
+        }
+        return super.saveJson(name, value);
+      }
+    }
+
+    const cwd = await mkdtemp(path.join(os.tmpdir(), "pi-orchestrator-human-recorded-"));
+    directories.push(cwd);
+    const config = defaultTestConfig();
+    config.checks = ["check"];
+    config.dashboard.enabled = false;
+    config.humanInTheLoop.planApproval = true;
+    await saveConfig(cwd, config);
+
+    const initialAgent = new QueueAgent([explorer, plan]);
+    const pi = { appendEntry: vi.fn(), exec: vi.fn(), sendMessage: vi.fn() } as unknown as ExtensionAPI;
+    const initialContext = {
+      cwd,
+      hasUI: true,
+      isProjectTrusted: () => true,
+      ui: {
+        editor: vi.fn(async () => "viewed"),
+        select: vi.fn(async () => "Approve plan"),
+        input: vi.fn(),
+        confirm: vi.fn(),
+        notify: vi.fn(),
+        setStatus: vi.fn(),
+        setWidget: vi.fn()
+      }
+    } as unknown as ExtensionCommandContext;
+    const initial = new Orchestrator(pi, path.resolve("."), {
+      agentExecutor: initialAgent,
+      checkRunner: vi.fn(async () => [check(true)]) as unknown as CheckRunner,
+      storeFactory: (project, runId) => new FailFirstPlanWriteStore(project, runId),
+      enforceWorkspacePolicy: false
+    });
+    await initial.start({ route: "implementation", request: "request" }, initialContext);
+    const failed = initial.getState()!;
+    expect(failed.status).toBe("failed");
+    expect(failed.latestCheckpoint?.cursor).toBe("human_decision_recorded");
+
+    const resumedAgent = new QueueAgent([tester, builder, approved, documenter, approved]);
+    const checkQueue = [[check(true)], [check(false)], [check(true)], [check(true)]];
+    const editor = vi.fn(async () => "unexpected prompt");
+    const resumedContext = {
+      cwd,
+      hasUI: true,
+      isProjectTrusted: () => true,
+      ui: {
+        editor,
+        select: vi.fn(async () => "Defer all"),
+        input: vi.fn(),
+        confirm: vi.fn(),
+        notify: vi.fn(),
+        setStatus: vi.fn(),
+        setWidget: vi.fn()
+      }
+    } as unknown as ExtensionCommandContext;
+    const resumed = new Orchestrator(pi, path.resolve("."), {
+      agentExecutor: resumedAgent,
+      checkRunner: vi.fn(async () => checkQueue.shift() ?? [check(true)]) as unknown as CheckRunner,
+      enforceWorkspacePolicy: false
+    });
+
+    await resumed.resume(failed.runId, resumedContext);
+
+    expect(resumed.getState()?.status).toBe("completed");
+    expect(editor).not.toHaveBeenCalled();
+    expect(resumedAgent.calls.map(call => call.name)).toEqual(["tester", "builder", "reviewer", "documenter", "reviewer"]);
+  });
+
   it("human confirms mutation before builder runs", async () => {
     const cwd = await mkdtemp(path.join(os.tmpdir(), "pi-orchestrator-human-confirm-"));
     directories.push(cwd);
-    const config = structuredClone(DEFAULT_CONFIG);
+    const config = defaultTestConfig();
     config.checks = ["check"];
     config.dashboard.enabled = false;
     config.humanInTheLoop.confirmBeforeMutation = true;
@@ -1306,6 +1779,45 @@ describe("Orchestrator", () => {
     expect(engine.getState()?.status).toBe("completed");
     expect(confirm).toHaveBeenCalled(); // at least the builder confirmation
     expect(agent.calls.filter(c => c.name === "builder")).toHaveLength(1);
+  });
+
+  it("resumes pending mutation confirmation without rerunning preparation", async () => {
+    const initial = await scenario(
+      [explorer, plan, approved],
+      [true],
+      config => { config.humanInTheLoop.confirmBeforeMutation = true; }
+    );
+    const paused = initial.engine.getState()!;
+    expect(paused.status).toBe("paused");
+
+    const resumedAgent = new QueueAgent([tester, builder, approved, documenter, approved]);
+    const checkQueue = [[check(false)], [check(true)], [check(true)]];
+    const confirm = vi.fn(async () => true);
+    const pi = { appendEntry: vi.fn(), exec: vi.fn(), sendMessage: vi.fn() } as unknown as ExtensionAPI;
+    const ctx = {
+      cwd: initial.cwd,
+      hasUI: true,
+      ui: {
+        select: vi.fn(),
+        editor: vi.fn(),
+        input: vi.fn(),
+        confirm,
+        notify: vi.fn(),
+        setStatus: vi.fn(),
+        setWidget: vi.fn()
+      }
+    } as unknown as ExtensionCommandContext;
+    const resumed = new Orchestrator(pi, path.resolve("."), {
+      agentExecutor: resumedAgent,
+      checkRunner: vi.fn(async () => checkQueue.shift() ?? [check(true)]) as unknown as CheckRunner,
+      enforceWorkspacePolicy: false
+    });
+
+    await resumed.resume(paused.runId, ctx);
+
+    expect(resumed.getState()?.status).toBe("completed");
+    expect(confirm).toHaveBeenCalledOnce();
+    expect(resumedAgent.calls.map(call => call.name)).toEqual(["tester", "builder", "reviewer", "documenter", "reviewer"]);
   });
 
   it("human denies the mutation phase before any mutating agent runs", async () => {
@@ -1400,6 +1912,7 @@ describe("Orchestrator", () => {
     const select = vi.fn(async () => {
       selectCalls++;
       if (selectCalls === 1) return "Allow one more targeted fix";
+      if (selectCalls === 2) return "Finish delivery";
       return "Skip all (decline)";
     });
     const pi = { appendEntry: vi.fn(), exec: vi.fn(), sendMessage: vi.fn() } as unknown as ExtensionAPI;
@@ -1439,6 +1952,7 @@ describe("Orchestrator", () => {
     const select = vi.fn(async () => {
       selectCalls++;
       if (selectCalls <= 2) return "Allow one more targeted fix";
+      if (selectCalls === 3) return "Finish delivery";
       return "Skip all (decline)";
     });
     const pi = { appendEntry: vi.fn(), exec: vi.fn(), sendMessage: vi.fn() } as unknown as ExtensionAPI;
@@ -1507,7 +2021,7 @@ describe("Orchestrator", () => {
   it("updates implementationChecks after each successful review fix", async () => {
     const cwd = await mkdtemp(path.join(os.tmpdir(), "pi-orchestrator-fresh-checks-"));
     directories.push(cwd);
-    const config = structuredClone(DEFAULT_CONFIG);
+    const config = defaultTestConfig();
     config.checks = ["lint", "test"];
     config.dashboard.enabled = false;
     config.limits.reviewRevisions = 1;

@@ -1,7 +1,8 @@
 import type { AgentInvocationRecord, AgentName, AgentStatus } from "./agent-types.js";
-import type { WorkflowTermination } from "./workflow-errors.js";
+import type { WorkflowTermination } from "./orchestration/workflow-errors.js";
+import type { HumanDecisionKind, PendingHumanDecision } from "./orchestration/human-decision-types.js";
 
-export const SCHEMA_VERSION = 1;
+export const SCHEMA_VERSION = 2;
 
 export type Stage =
   | "idle"
@@ -24,12 +25,15 @@ export type Stage =
   | "human_review_lessons"
   | "promoting_memory"
   | "reviewing_lessons"
+  | "paused"
   | "completed"
   | "failed"
   | "cancelled";
 
+export type WorkflowStateStatus = "running" | "paused" | "completed" | "failed" | "cancelled";
+
 export interface HumanGateState {
-  kind: "plan_approval" | "plan_revision_approval" | "baseline_repair_approval" | "mutation_confirmation" | "code_review_decision";
+  kind: HumanDecisionKind;
   label: string;
   startedAt: string;
 }
@@ -68,7 +72,7 @@ export interface WorkflowState {
   stage: Stage;
   failedStage?: Stage;
   stoppedStage?: Stage;
-  status: "running" | "completed" | "failed" | "cancelled";
+  status: WorkflowStateStatus;
   activeAgent?: AgentName;
   attempt: number;
   startedAt: string;
@@ -79,17 +83,18 @@ export interface WorkflowState {
   dashboardUrl?: string;
   waitingFor?: string;
   humanGate?: HumanGateState;
+  pendingDecision?: PendingHumanDecision;
   termination?: WorkflowTermination;
   memoryMode?: "untrusted" | "disabled" | "empty" | "valid" | "invalid" | "scope_mismatch" | "unsupported";
   memoryRevision?: number;
   latestCheckpoint?: {
     number: number;
-    cursor: import("./checkpoint-types.js").CheckpointCursorKind;
+    cursor: import("./persistence/checkpoint-types.js").CheckpointCursorKind;
     createdAt: string;
   };
   resumeCount?: number;
   resumedAt?: string;
-  resumedFromCheckpoint?: import("./checkpoint-types.js").CheckpointCursorKind;
+  resumedFromCheckpoint?: import("./persistence/checkpoint-types.js").CheckpointCursorKind;
   resumeBlockedReason?: string;
   currentTool?: string;
   currentToolArgs?: string;

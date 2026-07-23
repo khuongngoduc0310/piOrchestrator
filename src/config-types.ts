@@ -13,6 +13,7 @@ export interface HumanTouchpoints {
   planApproval: boolean;
   planRevisionApproval: boolean;
   confirmBeforeMutation: boolean;
+  importantDecisions: boolean;
 }
 
 export interface OrchestratorConfig {

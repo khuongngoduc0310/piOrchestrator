@@ -1,7 +1,7 @@
 import type { AgentInvocationMode, AgentName, AgentUsage } from "./agent-types.js";
 import type { WorkflowRoute } from "./agent-task-types.js";
 import type { Stage, StepRecord, WorkflowState } from "./workflow-types.js";
-import type { InvocationFileDiff } from "./git-tree-diff.js";
+import type { InvocationFileDiff } from "./workspace/git-tree-diff.js";
 
 export const UI_PHASE_LABELS = [
   "Setup / preflight",
@@ -63,7 +63,7 @@ export interface AgentSummary {
 }
 
 export interface OrchestratorViewModel {
-  mode: "idle" | "running" | "completed" | "failed" | "cancelled" | "config_error" | "waiting";
+  mode: "idle" | "running" | "paused" | "completed" | "failed" | "cancelled" | "config_error" | "waiting";
   cwd: string;
   config: ConfigSummary;
   run?: RunSummary;

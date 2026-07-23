@@ -1,11 +1,11 @@
 import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import type { AgentModelUpdates, AgentName, OrchestratorConfig, ThinkingLevel, WorkflowRequest, WorkflowState } from "./types.js";
-import { OrchestratorRuntime } from "./orchestrator-runtime.js";
-import { runWorkflow } from "./orchestrator-workflow.js";
-import type { OrchestratorDependencies } from "./orchestrator-contracts.js";
-import { resumeWorkflow } from "./orchestrator-resume.js";
+import { OrchestratorRuntime } from "./orchestration/orchestrator-runtime.js";
+import { runWorkflow } from "./orchestration/orchestrator-workflow.js";
+import type { OrchestratorDependencies } from "./orchestration/orchestrator-contracts.js";
+import { resumeWorkflow } from "./orchestration/orchestrator-resume.js";
 
-export type { CheckRunner, OrchestratorDependencies } from "./orchestrator-contracts.js";
+export type { CheckRunner, OrchestratorDependencies } from "./orchestration/orchestrator-contracts.js";
 
 export class Orchestrator {
   private readonly runtime: OrchestratorRuntime;

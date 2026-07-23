@@ -1,16 +1,16 @@
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
-import { configureAgentModels } from "./agent-settings.js";
-import { openSettings } from "./config-settings.js";
-import { inspectRun } from "./inspect.js";
-import { handleMemoryCommand } from "./memory-commands.js";
-import { openBrowser } from "./open-browser.js";
+import { configureAgentModels } from "./agents/agent-settings.js";
+import { openSettings } from "./config/config-settings.js";
+import { inspectRun } from "./commands/inspect.js";
+import { handleMemoryCommand } from "./memory/memory-commands.js";
+import { openBrowser } from "./commands/open-browser.js";
 import { Orchestrator } from "./orchestrator.js";
-import { UiController } from "./ui-controller.js";
+import { UiController } from "./ui/ui-controller.js";
 import { AGENT_NAMES, THINKING_LEVELS, type AgentName, type ThinkingLevel } from "./types.js";
-import { handleResumeCommand } from "./resume-command.js";
-import { collectWorkflowRequest, ORCHESTRATE_USAGE } from "./route-selection.js";
+import { handleResumeCommand } from "./commands/resume-command.js";
+import { collectWorkflowRequest, ORCHESTRATE_USAGE } from "./commands/route-selection.js";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const agents = new Set<AgentName>(AGENT_NAMES);
