@@ -24,6 +24,8 @@ export interface HistoricalRunSummary {
   completedAt?: string;
   activeAgent?: AgentName;
   message?: string;
+  latestCheckpoint?: WorkflowState["latestCheckpoint"];
+  resumeBlockedReason?: WorkflowState["resumeBlockedReason"];
 }
 
 export interface HistoricalArtifactContent {
@@ -233,7 +235,9 @@ function toSummary(state: WorkflowState): HistoricalRunSummary {
     updatedAt: state.updatedAt,
     completedAt: state.completedAt,
     activeAgent: state.activeAgent,
-    message: state.message
+    message: state.message,
+    latestCheckpoint: state.latestCheckpoint,
+    resumeBlockedReason: state.resumeBlockedReason
   };
 }
 

@@ -70,6 +70,15 @@ export function validateWorkflowStateForResume(value: unknown, path = "state"): 
     isoDate(step.startedAt, `${entryPath}.startedAt`);
     return entry;
   });
+  if (state.latestCheckpoint !== undefined) {
+    const cp = record(state.latestCheckpoint, `${path}.latestCheckpoint`);
+    integer(cp.number, `${path}.latestCheckpoint.number`, 1);
+    enumValue(cp.cursor, `${path}.latestCheckpoint.cursor`, CHECKPOINT_CURSOR_KINDS);
+    isoDate(cp.createdAt, `${path}.latestCheckpoint.createdAt`);
+  }
+  if (state.resumeBlockedReason !== undefined) {
+    string(state.resumeBlockedReason, `${path}.resumeBlockedReason`);
+  }
   return value as WorkflowState;
 }
 

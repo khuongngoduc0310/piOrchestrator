@@ -21,7 +21,7 @@ npm test
 pi install ./
 ```
 
-Pi loads this package directly from `src/index.ts`; there is no separate build command or zip-packaging script.
+Pi loads this package directly from `src/index.ts`; there is no extension build step. The browser dashboard is a React application built with Vite. Prebuilt assets are committed under `src/dashboard-dist/` so `pi install ./` works without running the dashboard build. Run `npm run build:dashboard` to regenerate them after modifying the frontend source.
 
 ## Persistent command-line UI
 
@@ -67,7 +67,7 @@ The panel persists across workflow runs and clears only on Pi session shutdown.
 ```text
 /orchestrate
 /orchestrator-status
-/orchestrator-resume <exact-run-id>
+/orchestrator-resume [exact-run-id]
 /orchestrator-ui
 /orchestrator-cancel
 /orchestrator-settings
@@ -86,7 +86,7 @@ The panel persists across workflow runs and clears only on Pi session shutdown.
 
 `/agent-model` remains the direct single-role shortcut. `retain` keeps the role's current thinking setting; `clear` removes the explicit setting. Both commands resolve and check the complete role configuration before writing. These settings affect orchestrator-created role sessions only; they do not change the active parent chat model selected by Pi's `/model` command.
 
-`/orchestrator-resume <exact-run-id>` continues a failed or cancelled run from its latest validated checkpoint. Resume requires the same project path, extension version, normalized configuration, project-memory content, and workspace contents. Isolated runs additionally require their original registered detached worktree at the expected commit. The command never accepts an abbreviated run ID and never repeats a Tester, Builder, review fix, or Documenter that completed at the checkpoint.
+`/orchestrator-resume [exact-run-id]` continues a failed or cancelled run from its latest validated checkpoint. Without an argument it opens an interactive browser listing recent resumable runs; selecting one requires confirmation before resuming. With an exact run ID the command resumes immediately without browsing. Resume requires the same project path, extension version, normalized configuration, project-memory content, and workspace contents. Isolated runs additionally require their original registered detached worktree at the expected commit. The command never accepts an abbreviated run ID and never repeats a Tester, Builder, review fix, or Documenter that completed at the checkpoint.
 
 ## Configuration
 
@@ -217,7 +217,7 @@ Key areas:
 
 When no workflow has run, the dashboard shows one of three states: ready with agent and check counts, setup-required for missing configuration, or a configuration-error message if the config file is invalid — without creating or modifying any files.
 
-The dashboard is read-only, dependency-free at runtime, bound to localhost with security headers (X-Content-Type-Options, CSP, cache control, no-store, asset-less design). SSE clients receive the current state immediately upon connection.
+The dashboard is a React application built into self-contained local assets under `src/dashboard-dist/`. It is read-only, bound to localhost with security headers (X-Content-Type-Options, CSP, cache control, no-store), and requires no external network dependencies. SSE clients receive the current state immediately upon connection.
 
 ## Project memory
 

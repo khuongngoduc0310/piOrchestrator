@@ -9,6 +9,7 @@ import { openBrowser } from "./open-browser.js";
 import { Orchestrator } from "./orchestrator.js";
 import { UiController } from "./ui-controller.js";
 import { AGENT_NAMES, THINKING_LEVELS, type AgentName, type ThinkingLevel } from "./types.js";
+import { handleResumeCommand } from "./resume-command.js";
 import { collectWorkflowRequest, ORCHESTRATE_USAGE } from "./route-selection.js";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
@@ -71,18 +72,10 @@ export default function piOrchestrator(pi: ExtensionAPI): void {
   });
 
   pi.registerCommand("orchestrator-resume", {
-    description: "Resume a workflow from its latest safe checkpoint: /orchestrator-resume <run-id>",
+    description: "Browse resumable workflows or resume one by exact run ID: /orchestrator-resume [run-id]",
     handler: async (args: string, ctx: ExtensionCommandContext) => {
-      const parts = args.trim().split(/\s+/).filter(Boolean);
-      if (parts.length !== 1) {
-        ctx.ui.notify("Usage: /orchestrator-resume <exact-run-id>", "warning");
-        return;
-      }
-      try {
-        await engine.resume(parts[0], ctx);
-      } catch (error) {
-        ctx.ui.notify(`Resume failed: ${messageOf(error)}`, "error");
-      }
+      const cwd = ctx.cwd ?? process.cwd();
+      await handleResumeCommand(cwd, args, ctx, runId => engine.resume(runId, ctx));
     }
   });
 

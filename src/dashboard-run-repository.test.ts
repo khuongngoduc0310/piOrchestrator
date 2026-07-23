@@ -101,6 +101,30 @@ describe("DashboardRunRepository", () => {
     await expect(repository.listRuns()).resolves.toEqual([]);
   });
 
+  it("includes checkpoint and blocked reason in historical summaries when present", async () => {
+    const { cwd, runsDir } = await fixture();
+    const cp = { number: 2, cursor: "tester_completed" as const, createdAt: "2026-07-22T12:00:00.000Z" };
+    await writeRun(runsDir, "blocked-run", {
+      ...state("blocked-run", path.join(runsDir, "blocked-run")),
+      status: "failed",
+      latestCheckpoint: cp,
+      resumeBlockedReason: "finalization started"
+    });
+    await writeRun(runsDir, "resumable-run", {
+      ...state("resumable-run", path.join(runsDir, "resumable-run")),
+      status: "failed",
+      latestCheckpoint: cp
+    });
+
+    const list = await new DashboardRunRepository(cwd).listRuns();
+    const blocked = list.find(s => s.id === "blocked-run")!;
+    const resumable = list.find(s => s.id === "resumable-run")!;
+    expect(blocked.latestCheckpoint).toEqual(cp);
+    expect(blocked.resumeBlockedReason).toBe("finalization started");
+    expect(resumable.latestCheckpoint).toEqual(cp);
+    expect(resumable.resumeBlockedReason).toBeUndefined();
+  });
+
   it("loads persisted inspection and a matching invocation transcript", async () => {
     const { cwd, runsDir } = await fixture();
     const runDir = await writeRun(runsDir, "run-1");

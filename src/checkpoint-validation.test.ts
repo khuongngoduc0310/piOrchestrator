@@ -21,6 +21,53 @@ describe("checkpoint validation", () => {
     expect(() => validateCheckResults([{ command: "test", exitCode: -1 }])).toThrow("exitCode");
   });
 
+  it("validates latestCheckpoint fields when present", () => {
+    const validState = {
+      schemaVersion: 1,
+      extensionVersion: "test",
+      runId: "run-1",
+      request: "fix bug",
+      route: "implementation",
+      cwd: "/tmp",
+      runDir: "/tmp/runs/run-1",
+      stage: "failed",
+      status: "failed",
+      attempt: 1,
+      startedAt: "2026-07-22T10:00:00.000Z",
+      updatedAt: "2026-07-22T10:01:00.000Z",
+      agents: { builder: { status: "idle", model: "test" }, explorer: { status: "idle", model: "test" }, planner: { status: "idle", model: "test" }, reviewer: { status: "idle", model: "test" }, documenter: { status: "idle", model: "test" }, tester: { status: "idle", model: "test" }, debugger: { status: "idle", model: "test" } },
+      steps: [],
+      latestCheckpoint: { number: 1, cursor: "plan_approved", createdAt: "2026-07-22T10:30:00.000Z" }
+    };
+    expect(() => validateWorkflowStateForResume(validState)).not.toThrow();
+    expect(() => validateWorkflowStateForResume({ ...validState, latestCheckpoint: "not-an-object" })).toThrow("expected an object");
+    expect(() => validateWorkflowStateForResume({ ...validState, latestCheckpoint: { number: 0, cursor: "plan_approved", createdAt: "2026-07-22T10:30:00.000Z" } })).toThrow(">= 1");
+    expect(() => validateWorkflowStateForResume({ ...validState, latestCheckpoint: { number: 1, cursor: "unknown_cursor", createdAt: "2026-07-22T10:30:00.000Z" } })).toThrow("expected one of");
+    expect(() => validateWorkflowStateForResume({ ...validState, latestCheckpoint: { number: 1, cursor: "plan_approved", createdAt: "invalid-date" } })).toThrow("ISO date");
+  });
+
+  it("rejects non-empty resumeBlockedReason when present", () => {
+    const validState = {
+      schemaVersion: 1,
+      extensionVersion: "test",
+      runId: "run-1",
+      request: "fix bug",
+      route: "implementation",
+      cwd: "/tmp",
+      runDir: "/tmp/runs/run-1",
+      stage: "failed",
+      status: "failed",
+      attempt: 1,
+      startedAt: "2026-07-22T10:00:00.000Z",
+      updatedAt: "2026-07-22T10:01:00.000Z",
+      agents: { builder: { status: "idle", model: "test" }, explorer: { status: "idle", model: "test" }, planner: { status: "idle", model: "test" }, reviewer: { status: "idle", model: "test" }, documenter: { status: "idle", model: "test" }, tester: { status: "idle", model: "test" }, debugger: { status: "idle", model: "test" } },
+      steps: []
+    };
+    expect(() => validateWorkflowStateForResume({ ...validState, resumeBlockedReason: "finalization started" })).not.toThrow();
+    expect(() => validateWorkflowStateForResume({ ...validState, resumeBlockedReason: "" })).toThrow("must not be empty");
+    expect(() => validateWorkflowStateForResume({ ...validState, resumeBlockedReason: 123 })).toThrow("expected a string");
+  });
+
   it("rejects semantically contradictory successful checks", () => {
     expect(() => validateCheckResults([{
       command: "test",
