@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { access, copyFile, lstat, realpath, rm } from "node:fs/promises";
 import path from "node:path";
+import { CONFIG_DIR_NAME } from "@earendil-works/pi-coding-agent";
 import { GitError, gitText, runGit } from "./git.js";
 
 const RUN_ID = /^[A-Za-z0-9](?:[A-Za-z0-9._-]{0,126}[A-Za-z0-9_-])?$/;
@@ -13,6 +14,11 @@ export interface WorktreeHandle {
   worktreeRoot: string;
   effectiveCwd: string;
   baselineCommit: string;
+}
+
+export interface AttachWorktreeOptions {
+  expectedWorkspaceSnapshotDigest?: string;
+  workspaceSnapshotDigest?: (effectiveCwd: string) => string | Promise<string>;
 }
 
 export interface WorktreeRename {
@@ -37,6 +43,31 @@ function isMissing(error: unknown): boolean {
 function validateRunId(runId: string): void {
   if (!RUN_ID.test(runId) || WINDOWS_DEVICE_NAME.test(runId)) {
     throw new Error(`Invalid worktree run ID: ${JSON.stringify(runId)}`);
+  }
+}
+
+function samePath(left: string, right: string): boolean {
+  const normalizedLeft = path.normalize(left);
+  const normalizedRight = path.normalize(right);
+  return process.platform === "win32"
+    ? normalizedLeft.toLowerCase() === normalizedRight.toLowerCase()
+    : normalizedLeft === normalizedRight;
+}
+
+function persistedString(value: unknown, name: keyof WorktreeHandle): string {
+  if (typeof value !== "string" || (name !== "projectRelativePath" && value.length === 0)) {
+    throw new Error(`Cannot attach worktree: invalid ${name}`);
+  }
+  return value;
+}
+
+async function persistedRealpath(value: unknown, name: keyof WorktreeHandle): Promise<string> {
+  const filePath = persistedString(value, name);
+  if (!path.isAbsolute(filePath)) throw new Error(`Cannot attach worktree: ${name} must be absolute`);
+  try {
+    return await realpath(filePath);
+  } catch {
+    throw new Error(`Cannot attach worktree: ${name} does not exist: ${filePath}`);
   }
 }
 
@@ -91,7 +122,7 @@ async function snapshotCommit(cwd: string, parent: string | undefined, message: 
     await runGit(cwd, ["add", "-A"], { env });
     await runGit(cwd, [
       "rm", "-r", "--cached", "--ignore-unmatch", "--",
-      ".pi/orchestrator/runs", ".pi/orchestrator/worktrees"
+       `${CONFIG_DIR_NAME}/orchestrator/runs`, `${CONFIG_DIR_NAME}/orchestrator/worktrees`
     ], { env });
     const tree = (await gitText(cwd, ["write-tree"], { env })).trim();
     const args = ["commit-tree", tree];
@@ -142,7 +173,7 @@ export async function createWorktree(cwd: string, runId: string): Promise<Worktr
   }
 
   const baselineCommit = await snapshotCommit(repositoryRoot, await headCommit(repositoryRoot), `pi-orchestrator baseline ${runId}`);
-  const worktreesDirectory = path.join(repositoryRoot, ".pi", "orchestrator", "worktrees");
+  const worktreesDirectory = path.join(repositoryRoot, CONFIG_DIR_NAME, "orchestrator", "worktrees");
   const requestedRoot = path.join(worktreesDirectory, runId);
   await assertPathAbsent(requestedRoot);
 
@@ -167,6 +198,115 @@ export async function createWorktree(cwd: string, runId: string): Promise<Worktr
     if (errors.length > 1) throw new AggregateError(errors, `Failed to create and clean up worktree ${requestedRoot}`);
     throw error;
   }
+}
+
+/** Validate and canonicalize a persisted detached-worktree handle before reuse. */
+export async function attachWorktree(
+  persisted: Readonly<WorktreeHandle>,
+  options: AttachWorktreeOptions = {}
+): Promise<WorktreeHandle> {
+  if (!persisted || typeof persisted !== "object") throw new Error("Cannot attach worktree: invalid handle");
+
+  const repositoryRoot = await persistedRealpath(persisted.repositoryRoot, "repositoryRoot");
+  const sourceCwd = await persistedRealpath(persisted.sourceCwd, "sourceCwd");
+  const worktreeRoot = await persistedRealpath(persisted.worktreeRoot, "worktreeRoot");
+  const effectiveCwd = await persistedRealpath(persisted.effectiveCwd, "effectiveCwd");
+
+  let discoveredRepositoryRoot: string;
+  try {
+    discoveredRepositoryRoot = await realpath((await gitText(repositoryRoot, ["rev-parse", "--show-toplevel"])).trim());
+  } catch {
+    throw new Error(`Cannot attach worktree: repositoryRoot is not a Git repository: ${repositoryRoot}`);
+  }
+  if (!samePath(repositoryRoot, discoveredRepositoryRoot)) {
+    throw new Error(`Cannot attach worktree: repositoryRoot does not match Git repository root: ${repositoryRoot}`);
+  }
+
+  let sourceRepositoryRoot: string;
+  try {
+    sourceRepositoryRoot = await realpath((await gitText(sourceCwd, ["rev-parse", "--show-toplevel"])).trim());
+  } catch {
+    throw new Error(`Cannot attach worktree: sourceCwd is not in the persisted repository: ${sourceCwd}`);
+  }
+  if (!samePath(repositoryRoot, sourceRepositoryRoot)) {
+    throw new Error(`Cannot attach worktree: sourceCwd is not in the persisted repository: ${sourceCwd}`);
+  }
+
+  const projectRelativePath = path.relative(repositoryRoot, sourceCwd);
+  const persistedProjectRelativePath = persistedString(persisted.projectRelativePath, "projectRelativePath");
+  const normalizedPersistedRelativePath = persistedProjectRelativePath === "" || persistedProjectRelativePath === "."
+    ? ""
+    : path.normalize(persistedProjectRelativePath);
+  if (
+    normalizedPersistedRelativePath === ".."
+    || normalizedPersistedRelativePath.startsWith(`..${path.sep}`)
+    || path.isAbsolute(normalizedPersistedRelativePath)
+    || !samePath(normalizedPersistedRelativePath, projectRelativePath)
+  ) {
+    throw new Error("Cannot attach worktree: projectRelativePath does not match sourceCwd");
+  }
+
+  let discoveredWorktreeRoot: string;
+  try {
+    discoveredWorktreeRoot = await realpath((await gitText(worktreeRoot, ["rev-parse", "--show-toplevel"])).trim());
+  } catch {
+    throw new Error(`Cannot attach worktree: worktreeRoot is not a Git worktree: ${worktreeRoot}`);
+  }
+  if (!samePath(worktreeRoot, discoveredWorktreeRoot)) {
+    throw new Error(`Cannot attach worktree: worktreeRoot does not match Git worktree root: ${worktreeRoot}`);
+  }
+
+  const expectedEffectiveCwd = await realpath(path.join(worktreeRoot, projectRelativePath));
+  if (!samePath(effectiveCwd, expectedEffectiveCwd)) {
+    throw new Error("Cannot attach worktree: effectiveCwd does not match worktreeRoot and projectRelativePath");
+  }
+
+  const baselineValue = persistedString(persisted.baselineCommit, "baselineCommit");
+  if (!/^[0-9a-fA-F]{40,64}$/.test(baselineValue)) {
+    throw new Error("Cannot attach worktree: invalid baselineCommit");
+  }
+  let baselineCommit: string;
+  try {
+    baselineCommit = (await gitText(repositoryRoot, ["rev-parse", "--verify", "--end-of-options", `${baselineValue}^{commit}`])).trim();
+  } catch {
+    throw new Error(`Cannot attach worktree: baselineCommit does not exist: ${baselineValue}`);
+  }
+
+  const records = splitNul(Buffer.from(await gitText(repositoryRoot, ["worktree", "list", "--porcelain", "-z"])));
+  let registration: { path: string; head?: string; detached: boolean } | undefined;
+  let current: typeof registration;
+  for (const record of records) {
+    if (record.startsWith("worktree ")) {
+      current = { path: record.slice("worktree ".length), detached: false };
+      if (samePath(path.resolve(current.path), worktreeRoot)) registration = current;
+    } else if (current && record.startsWith("HEAD ")) {
+      current.head = record.slice("HEAD ".length);
+    } else if (current && record === "detached") {
+      current.detached = true;
+    }
+  }
+  if (!registration) throw new Error(`Cannot attach worktree: worktree is not registered: ${worktreeRoot}`);
+
+  const head = (await gitText(worktreeRoot, ["rev-parse", "--verify", "HEAD"])).trim();
+  const headName = (await gitText(worktreeRoot, ["rev-parse", "--abbrev-ref", "HEAD"])).trim();
+  if (headName !== "HEAD" || !registration.detached) {
+    throw new Error(`Cannot attach worktree: worktree HEAD is not detached: ${worktreeRoot}`);
+  }
+  if (head !== baselineCommit || registration.head !== baselineCommit) {
+    throw new Error(`Cannot attach worktree: worktree HEAD does not match baselineCommit: ${baselineCommit}`);
+  }
+
+  const handle = { repositoryRoot, sourceCwd, projectRelativePath, worktreeRoot, effectiveCwd, baselineCommit };
+  if (options.expectedWorkspaceSnapshotDigest !== undefined) {
+    if (!options.workspaceSnapshotDigest) {
+      throw new Error("Cannot attach worktree: workspaceSnapshotDigest callback is required for the expected digest");
+    }
+    const actualDigest = await options.workspaceSnapshotDigest(effectiveCwd);
+    if (actualDigest !== options.expectedWorkspaceSnapshotDigest) {
+      throw new Error("Cannot attach worktree: workspace snapshot digest does not match");
+    }
+  }
+  return handle;
 }
 
 function parseNameStatus(output: Buffer): Omit<WorktreeChanges, "binaries" | "changedFiles" | "patch"> {
@@ -249,8 +389,8 @@ async function assertSourceHasNotDrifted(handle: WorktreeHandle, paths: readonly
       "-A",
       "--",
       ".",
-      ":(exclude,top,literal).pi/orchestrator/runs",
-      ":(exclude,top,literal).pi/orchestrator/worktrees",
+       `:(exclude,top,literal)${CONFIG_DIR_NAME}/orchestrator/runs`,
+       `:(exclude,top,literal)${CONFIG_DIR_NAME}/orchestrator/worktrees`,
     ], { env });
     const drift = splitNul((await runGit(handle.repositoryRoot, [
       "diff",

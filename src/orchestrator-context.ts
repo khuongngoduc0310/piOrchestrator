@@ -4,6 +4,7 @@ import type { RunStore } from "./store.js";
 import type {
   CheckResult,
   DebuggerOutput,
+  DocumenterOutput,
   ExplorerOutput,
   OrchestratorConfig,
   PlannerOutput,
@@ -11,8 +12,10 @@ import type {
   ReviewOutput,
   TesterOutput
 } from "./types.js";
+import type { WorkflowRoute } from "./agent-task-types.js";
 
 export interface WorkflowContext {
+  route: WorkflowRoute;
   request: string;
   ctx: ExtensionCommandContext;
   cwd: string;
@@ -30,11 +33,14 @@ export interface WorkflowContext {
 export interface PlanningResult {
   exploration: ExplorerOutput;
   plan: PlannerOutput;
+}
+
+export interface ImplementationPlanningResult extends PlanningResult {
   baseline: CheckResult[];
 }
 
-export interface ImplementationResult extends PlanningResult {
-  tester: TesterOutput;
+export interface ImplementationResult extends ImplementationPlanningResult {
+  tester?: TesterOutput;
   finalImplChecks: CheckResult[];
   diagnosis?: DebuggerOutput;
 }
@@ -44,3 +50,11 @@ export interface ReviewResult extends ImplementationResult {
   reviewApprovalSource: ReviewApprovalSource;
   priorCodeReviews: ReviewOutput[];
 }
+
+export interface ReadOnlyReviewResult extends PlanningResult {
+  codeReview: ReviewOutput;
+}
+
+export type SpecializedMutationResult =
+  | (ImplementationPlanningResult & { route: "tests_only"; tester: TesterOutput })
+  | (ImplementationPlanningResult & { route: "documentation_only"; documentation: DocumenterOutput });

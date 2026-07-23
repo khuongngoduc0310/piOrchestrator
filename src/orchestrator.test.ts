@@ -14,7 +14,7 @@ import type { CheckRunner, OrchestratorDependencies } from "./orchestrator.js";
 import { Orchestrator } from "./orchestrator.js";
 import { DEFAULT_CONFIG, loadConfig, saveConfig } from "./config.js";
 import { RunStore } from "./store.js";
-import type { AgentResult, CheckResult, OrchestratorConfig } from "./types.js";
+import type { AgentResult, CheckResult, OrchestratorConfig, WorkflowRoute } from "./types.js";
 
 const directories: string[] = [];
 afterEach(async () => {
@@ -32,12 +32,31 @@ const explorer = json({
   evidence: [{ path: "src/index.ts", detail: "entry point" }]
 });
 const plan = json({
+  route: "implementation",
   summary: "implement",
   assumptions: [],
   acceptanceCriteria: ["check passes"],
   tasks: [{ id: "one", description: "change", files: ["src/index.ts"], dependencies: [], verification: ["check"] }],
   risks: []
 });
+const reviewOnlyPlan = json({
+  route: "review_only",
+  summary: "review existing changes",
+  assumptions: [],
+  acceptanceCriteria: ["findings cite repository evidence"],
+  tasks: [{ id: "review", description: "review changes", files: ["src/index.ts"], dependencies: [], verification: ["report findings"] }],
+  risks: []
+});
+function routePlan(route: WorkflowRoute, files = ["src/index.ts"]): string {
+  return json({
+    route,
+    summary: `${route} plan`,
+    assumptions: [],
+    acceptanceCriteria: ["check passes"],
+    tasks: [{ id: "one", description: "bounded work", files, dependencies: [], verification: ["check"] }],
+    risks: []
+  });
+}
 const approved = json({
   decision: "approved",
   blockingIssues: [],
@@ -88,6 +107,14 @@ const documenter = json({
   commands: [],
   unresolvedIssues: []
 });
+const documentationOnlyOutput = json({
+  summary: "documentation updated",
+  changedFiles: ["README.md"],
+  documentationChanges: ["documented"],
+  proposedLessons: [],
+  commands: [],
+  unresolvedIssues: []
+});
 
 class QueueAgent implements AgentExecutor {
   readonly calls: AgentRunOptions[] = [];
@@ -132,7 +159,8 @@ async function scenario(
   outputs: Array<string | Error>,
   checkPasses: boolean[],
   configure?: (config: OrchestratorConfig) => void,
-  dependencies: Partial<OrchestratorDependencies> = {}
+  dependencies: Partial<OrchestratorDependencies> = {},
+  route: WorkflowRoute = "implementation"
 ): Promise<{ engine: Orchestrator; agent: QueueAgent; cwd: string; notifications: ReturnType<typeof vi.fn>; sendMessage: ReturnType<typeof vi.fn> }> {
   const cwd = await mkdtemp(path.join(os.tmpdir(), "pi-orchestrator-flow-"));
   directories.push(cwd);
@@ -162,7 +190,7 @@ async function scenario(
     ui: { notify: notifications, setStatus: vi.fn(), setWidget: vi.fn() }
   } as unknown as ExtensionCommandContext;
   const engine = new Orchestrator(pi, path.resolve("."), { agentExecutor: agent, checkRunner, openBrowser, enforceWorkspacePolicy: false, ...dependencies });
-  await engine.start("request", ctx);
+  await engine.start({ route, request: "request" }, ctx);
   return { engine, agent, cwd, notifications, sendMessage };
 }
 
@@ -182,18 +210,18 @@ describe("Orchestrator", () => {
       ui: { select, editor: vi.fn(), notify: vi.fn(), setStatus: vi.fn(), setWidget: vi.fn() }
     } as unknown as ExtensionCommandContext;
     const engine = new Orchestrator(pi, path.resolve("."), { agentExecutor: agent, checkRunner, enforceWorkspacePolicy: false });
-    await engine.start("request", ctx);
+    await engine.start({ route: "implementation", request: "request" }, ctx);
     expect(engine.getState()?.status).toBe("completed");
     expect((await loadConfig(cwd)).checks).toEqual(["npm test"]);
     expect(checkRunner).toHaveBeenCalled();
     expect(agent.preflight).toHaveBeenCalled();
   });
 
-  it("cancels setup before creating a run or calling agents", async () => {
+  it("cancels an implementation route when deferred check setup is declined", async () => {
     const cwd = await mkdtemp(path.join(os.tmpdir(), "pi-orchestrator-setup-cancel-"));
     directories.push(cwd);
     await saveConfig(cwd, { ...structuredClone(DEFAULT_CONFIG), dashboard: { enabled: false, port: 0 } });
-    const agent = new QueueAgent([]);
+    const agent = new QueueAgent([explorer, plan, approved]);
     const pi = { appendEntry: vi.fn(), exec: vi.fn() } as unknown as ExtensionAPI;
     const ctx = {
       cwd,
@@ -201,10 +229,134 @@ describe("Orchestrator", () => {
       ui: { select: vi.fn(async () => "Cancel"), editor: vi.fn(), notify: vi.fn(), setStatus: vi.fn(), setWidget: vi.fn() }
     } as unknown as ExtensionCommandContext;
     const engine = new Orchestrator(pi, path.resolve("."), { agentExecutor: agent, enforceWorkspacePolicy: false });
-    await engine.start("request", ctx);
-    expect(engine.getState()).toBeUndefined();
-    expect(agent.preflight).not.toHaveBeenCalled();
+    await engine.start({ route: "implementation", request: "request" }, ctx);
+    expect(engine.getState()?.status).toBe("cancelled");
+    expect(engine.getState()?.route).toBe("implementation");
+    expect(agent.preflight).toHaveBeenCalledTimes(2);
     expect((await loadConfig(cwd)).checks).toEqual([]);
+  });
+
+  it("routes review-only plans directly to repository review without checks or mutations", async () => {
+    const { engine, agent, cwd } = await scenario(
+      [explorer, reviewOnlyPlan, approved, changes],
+      [],
+      config => { config.checks = []; },
+      {},
+      "review_only"
+    );
+
+    const state = engine.getState()!;
+    expect(state.status).toBe("completed");
+    expect(state.route).toBe("review_only");
+    expect(state.steps.map(step => step.stage)).toEqual([
+      "exploring",
+      "planning",
+      "reviewing_plan",
+      "reviewing_repository"
+    ]);
+    expect(agent.calls.map(call => call.name)).toEqual(["explorer", "planner", "reviewer", "reviewer"]);
+    expect((agent.preflight.mock.calls[0] as unknown[])[5]).toEqual(["explorer", "planner", "reviewer"]);
+    expect(agent.preflight).toHaveBeenCalledOnce();
+    expect(agent.calls.some(call => ["tester", "builder", "debugger", "documenter"].includes(call.name))).toBe(false);
+    const repositoryTask = JSON.parse(agent.calls.at(-1)!.task).task;
+    expect(repositoryTask.reviewType).toBe("repository");
+    expect(repositoryTask).not.toHaveProperty("tester");
+    expect(repositoryTask).not.toHaveProperty("builderOutputs");
+    const completion = JSON.parse(await readFile(path.join(state.runDir, "completion-summary.json"), "utf8"));
+    expect(completion).toMatchObject({
+      route: "review_only",
+      changedFiles: [],
+      testsAdded: [],
+      checks: [],
+      review: { outcome: "findings_reported", blockingIssues: ["fix required"] }
+    });
+    expect((await loadConfig(cwd)).checks).toEqual([]);
+  });
+
+  it("runs investigation-only as a read-only diagnostic route", async () => {
+    const { engine, agent } = await scenario(
+      [explorer, routePlan("investigation_only"), approved, changes],
+      [],
+      config => { config.checks = []; },
+      {},
+      "investigation_only"
+    );
+    expect(engine.getState()?.status).toBe("completed");
+    expect(agent.calls.map(call => call.name)).toEqual(["explorer", "planner", "reviewer", "reviewer"]);
+  });
+
+  it("completes planning-only without checks or execution agents", async () => {
+    const { engine, agent } = await scenario(
+      [explorer, routePlan("planning_only"), approved],
+      [],
+      config => { config.checks = []; },
+      {},
+      "planning_only"
+    );
+    expect(engine.getState()?.status).toBe("completed");
+    expect(agent.calls.map(call => call.name)).toEqual(["explorer", "planner", "reviewer"]);
+  });
+
+  it("runs tests-only without Builder or Documenter", async () => {
+    const { engine, agent } = await scenario(
+      [explorer, routePlan("tests_only", ["test.ts"]), approved, tester],
+      [true, true],
+      undefined,
+      {},
+      "tests_only"
+    );
+    expect(engine.getState()?.status).toBe("completed");
+    expect(agent.calls.map(call => call.name)).toEqual(["explorer", "planner", "reviewer", "tester"]);
+  });
+
+  it("runs documentation-only without Tester or Builder", async () => {
+    const { engine, agent } = await scenario(
+      [explorer, routePlan("documentation_only", ["README.md"]), approved, documentationOnlyOutput],
+      [true, true],
+      undefined,
+      {},
+      "documentation_only"
+    );
+    expect(engine.getState()?.status).toBe("completed");
+    expect(agent.calls.map(call => call.name)).toEqual(["explorer", "planner", "reviewer", "documenter"]);
+  });
+
+  it("skips test-first generation for quick implementation", async () => {
+    const { engine, agent } = await scenario(
+      [explorer, routePlan("quick_implementation"), approved, builder, approved, documenter, approved],
+      [true, true, true],
+      undefined,
+      {},
+      "quick_implementation"
+    );
+    expect(engine.getState()?.status).toBe("completed");
+    expect(agent.calls.map(call => call.name)).not.toContain("tester");
+  });
+
+  it("diagnoses a bug before regression tests and implementation", async () => {
+    const { engine, agent } = await scenario(
+      [explorer, routePlan("bug_fix"), approved, debuggerOutput, tester, builder, approved, documenter, approved],
+      [true, false, true, true],
+      undefined,
+      {},
+      "bug_fix"
+    );
+    expect(engine.getState()?.status).toBe("completed");
+    expect(agent.calls.map(call => call.name)).toEqual([
+      "explorer", "planner", "reviewer", "debugger", "tester", "builder", "reviewer", "documenter", "reviewer"
+    ]);
+  });
+
+  it("fails before checks when Planner changes the user-selected route", async () => {
+    const { engine, agent } = await scenario(
+      [explorer, reviewOnlyPlan],
+      [],
+      config => { config.checks = []; },
+      {},
+      "implementation"
+    );
+    expect(engine.getState()?.status).toBe("failed");
+    expect(agent.calls.map(call => call.name)).toEqual(["explorer", "planner"]);
   });
 
   it("completes an immediate first-pass flow with ordered unique artifacts", async () => {
@@ -254,6 +406,7 @@ describe("Orchestrator", () => {
       }
     }
     const isolatedPlan = json({
+      route: "implementation",
       summary: "implement",
       assumptions: [],
       acceptanceCriteria: ["check passes"],
@@ -282,7 +435,7 @@ describe("Orchestrator", () => {
       ui: { notify: vi.fn(), setStatus: vi.fn(), setWidget: vi.fn() }
     } as unknown as ExtensionCommandContext;
     const engine = new Orchestrator(pi, path.resolve("."), { agentExecutor: agent, checkRunner });
-    await engine.start("request", ctx);
+    await engine.start({ route: "implementation", request: "request" }, ctx);
 
     expect(engine.getState()?.status).toBe("completed");
     expect(await readFile(path.join(cwd, "src", "index.ts"), "utf8")).toContain("value = 2");
@@ -290,15 +443,21 @@ describe("Orchestrator", () => {
     expect(agent.calls.filter(call => ["tester", "builder", "documenter"].includes(call.name)).every(call => call.cwd !== cwd)).toBe(true);
     expect(checkCwds[0]).toBe(cwd);
     expect(checkCwds.slice(1).every(checkCwd => checkCwd !== cwd)).toBe(true);
+    const builderStep = engine.getState()!.steps.find(step => step.agent === "builder")!;
+    const builderInvocation = builderStep.invocations![0];
+    expect(builderInvocation).toMatchObject({ changedFileCount: 1 });
+    const builderDiff = JSON.parse(await readFile(path.join(engine.getState()!.runDir, builderInvocation.fileDiffArtifact!), "utf8"));
+    expect(builderDiff).toMatchObject({ status: "available", changedFiles: ["src/index.ts"] });
+    expect(await readFile(path.join(engine.getState()!.runDir, builderInvocation.filePatchArtifact!), "utf8")).toContain("value = 2");
   }, 20_000);
 
-  it("sends every role a stable version-2 task envelope", async () => {
+  it("sends every role a stable version-3 task envelope", async () => {
     const { agent } = await scenario(
       [explorer, plan, approved, tester, builder, approved, documenter, approved],
       [true, false, true, true]
     );
     const envelopes = agent.calls.map(call => ({ name: call.name, envelope: JSON.parse(call.task) }));
-    expect(envelopes.every(({ envelope }) => envelope.taskSchemaVersion === 2 && envelope.mode === "execute")).toBe(true);
+    expect(envelopes.every(({ envelope }) => envelope.taskSchemaVersion === 3 && envelope.mode === "execute")).toBe(true);
     expect(envelopes.every(({ envelope }) => Object.hasOwn(envelope, "memoryContext"))).toBe(true);
     expect(envelopes.every(({ envelope }) => Object.hasOwn(envelope, "task"))).toBe(true);
 
@@ -360,7 +519,7 @@ describe("Orchestrator", () => {
       ui: { select, editor, input: vi.fn(), confirm: vi.fn(), notify: vi.fn(), setStatus: vi.fn(), setWidget: vi.fn() }
     } as unknown as ExtensionCommandContext;
     const engine = new Orchestrator(pi, path.resolve("."), { agentExecutor: agent, checkRunner, enforceWorkspacePolicy: false });
-    await engine.start("request", ctx);
+    await engine.start({ route: "implementation", request: "request" }, ctx);
     expect(engine.getState()?.status).toBe("completed");
     expect(agent.calls.filter(c => c.name === "builder")).toHaveLength(2); // repair + feature
     expect(agent.calls.filter(c => c.name === "debugger")).toHaveLength(1);
@@ -385,7 +544,7 @@ describe("Orchestrator", () => {
       ui: { notify: vi.fn(), setStatus: vi.fn(), setWidget: vi.fn() }
     } as unknown as ExtensionCommandContext;
     const engine = new Orchestrator(pi, path.resolve("."), { agentExecutor: agent, checkRunner, openBrowser, enforceWorkspacePolicy: false });
-    await engine.start("request", ctx);
+    await engine.start({ route: "implementation", request: "request" }, ctx);
     expect(engine.getState()?.status).toBe("completed");
     expect(engine.getState()?.dashboardUrl).toMatch(/^http:\/\/127\.0\.0\.1:\d+$/);
     expect(openBrowser).toHaveBeenCalledOnce();
@@ -409,7 +568,7 @@ describe("Orchestrator", () => {
       ui: { notify: vi.fn(), setStatus: vi.fn(), setWidget: vi.fn() }
     } as unknown as ExtensionCommandContext;
     const engine = new Orchestrator(pi, path.resolve("."), { agentExecutor: agent, checkRunner, openBrowser, enforceWorkspacePolicy: false });
-    await engine.start("request", ctx);
+    await engine.start({ route: "implementation", request: "request" }, ctx);
     expect(engine.getState()?.status).toBe("completed");
     expect(engine.getState()?.dashboardUrl).toBeUndefined();
     expect(openBrowser).not.toHaveBeenCalled();
@@ -449,7 +608,7 @@ describe("Orchestrator", () => {
       ui: { notify: vi.fn(), setStatus: vi.fn(), setWidget: vi.fn() }
     } as unknown as ExtensionCommandContext;
     const engine = new Orchestrator(pi, path.resolve("."), { agentExecutor: agent, checkRunner, enforceWorkspacePolicy: false });
-    await engine.start("request", ctx).catch(() => undefined);
+    await engine.start({ route: "implementation", request: "request" }, ctx).catch(() => undefined);
     expect(engine.getState()?.status).toBe("failed");
     expect(sendMessage).toHaveBeenCalled();
     const calls = sendMessage.mock.calls.map((c: unknown[]) => c[0] as { details?: Record<string, unknown> });
@@ -536,7 +695,7 @@ describe("Orchestrator", () => {
     const correctionCall = agent.calls.filter(c => c.name === "planner")[1];
     const correctionEnvelope = JSON.parse(correctionCall.task);
     expect(correctionEnvelope).toMatchObject({
-      taskSchemaVersion: 2,
+      taskSchemaVersion: 3,
       mode: "correct_output",
       correction: { attempt: 1, reason: "schema_validation_failed" }
     });
@@ -658,6 +817,11 @@ describe("Orchestrator", () => {
     const transcript = JSON.parse(await readFile(path.join(state.runDir, invocation.transcriptArtifact!), "utf8"));
 
     expect(invocation).toMatchObject({ status: "failed", messageCount: 2, truncated: false });
+    expect(invocation.fileDiffArtifact).toBeTruthy();
+    expect(JSON.parse(await readFile(path.join(state.runDir, invocation.fileDiffArtifact!), "utf8"))).toMatchObject({
+      status: "unavailable",
+      changedFiles: []
+    });
     expect(transcript).toMatchObject({
       stepId: "step-001",
       agent: "explorer",
@@ -683,8 +847,8 @@ describe("Orchestrator", () => {
     const pi = { appendEntry: vi.fn(), exec: vi.fn() } as unknown as ExtensionAPI;
     const ctx = { cwd, hasUI: false, ui: { notify: vi.fn(), setStatus: vi.fn(), setWidget: vi.fn() } } as unknown as ExtensionCommandContext;
     const engine = new Orchestrator(pi, path.resolve("."), { agentExecutor: agent, enforceWorkspacePolicy: false });
-    const first = engine.start("first", ctx);
-    await expect(engine.start("second", ctx)).rejects.toThrow("already running");
+    const first = engine.start({ route: "implementation", request: "first" }, ctx);
+    await expect(engine.start({ route: "implementation", request: "second" }, ctx)).rejects.toThrow("already running");
     await expect(engine.saveAgentSettings(cwd, { builder: { model: "test/model", thinking: "high" } }))
       .rejects.toThrow("while a workflow is running");
     await enteredPreflight;
@@ -762,7 +926,7 @@ describe("Orchestrator", () => {
     const saving = engine.saveAgentSettings(cwd, { builder: { model: "openai/coder", thinking: "high" } });
     await enteredPreflight;
     const ctx = { cwd, hasUI: false, ui: { notify: vi.fn() } } as unknown as ExtensionCommandContext;
-    await expect(engine.start("request", ctx)).rejects.toThrow("being validated and saved");
+    await expect(engine.start({ route: "implementation", request: "request" }, ctx)).rejects.toThrow("being validated and saved");
     release();
     await saving;
   });
@@ -803,7 +967,7 @@ describe("Orchestrator", () => {
       ui: { select, editor, input: vi.fn(), confirm: vi.fn(), notify: vi.fn(), setStatus: vi.fn(), setWidget: vi.fn() }
     } as unknown as ExtensionCommandContext;
     const engine = new Orchestrator(pi, path.resolve("."), { agentExecutor: agent, checkRunner, enforceWorkspacePolicy: false });
-    await engine.start("request", ctx);
+    await engine.start({ route: "implementation", request: "request" }, ctx);
     expect(engine.getState()?.status).toBe("completed");
     expect(agent.calls.filter(c => c.name === "reviewer")).toHaveLength(2); // code + lessons review only, not plan
     expect(editor).toHaveBeenCalledOnce();
@@ -855,7 +1019,7 @@ describe("Orchestrator", () => {
       ui: { select, editor, input, confirm: vi.fn(), notify: vi.fn(), setStatus: vi.fn(), setWidget: vi.fn() }
     } as unknown as ExtensionCommandContext;
     const engine = new Orchestrator(pi, path.resolve("."), { agentExecutor: agent, checkRunner, enforceWorkspacePolicy: false });
-    await engine.start("request", ctx);
+    await engine.start({ route: "implementation", request: "request" }, ctx);
     expect(engine.getState()?.status).toBe("completed");
     expect(agent.calls.filter(c => c.name === "planner")).toHaveLength(2); // initial + revision
     const revisionCall = agent.calls.filter(c => c.name === "planner")[1];
@@ -882,7 +1046,7 @@ describe("Orchestrator", () => {
       ui: { select, editor, input: vi.fn(), confirm: vi.fn(), notify: vi.fn(), setStatus: vi.fn(), setWidget: vi.fn() }
     } as unknown as ExtensionCommandContext;
     const engine = new Orchestrator(pi, path.resolve("."), { agentExecutor: agent, checkRunner, enforceWorkspacePolicy: false });
-    await engine.start("request", ctx);
+    await engine.start({ route: "implementation", request: "request" }, ctx);
     expect(engine.getState()?.status).toBe("cancelled");
     expect(engine.getState()?.message).toContain("cancelled");
   });
@@ -905,7 +1069,7 @@ describe("Orchestrator", () => {
       ui: { select: vi.fn(async () => "Approve suggested checks"), editor: vi.fn(), input: vi.fn(), confirm, notify: vi.fn(), setStatus: vi.fn(), setWidget: vi.fn() }
     } as unknown as ExtensionCommandContext;
     const engine = new Orchestrator(pi, path.resolve("."), { agentExecutor: agent, checkRunner, enforceWorkspacePolicy: false });
-    await engine.start("request", ctx);
+    await engine.start({ route: "implementation", request: "request" }, ctx);
     expect(engine.getState()?.status).toBe("completed");
     expect(confirm).toHaveBeenCalled(); // at least the builder confirmation
     expect(agent.calls.filter(c => c.name === "builder")).toHaveLength(1);
@@ -929,7 +1093,7 @@ describe("Orchestrator", () => {
       ui: { select: vi.fn(async () => "Approve suggested checks"), editor: vi.fn(), input: vi.fn(), confirm, notify: vi.fn(), setStatus: vi.fn(), setWidget: vi.fn() }
     } as unknown as ExtensionCommandContext;
     const engine = new Orchestrator(pi, path.resolve("."), { agentExecutor: agent, checkRunner, enforceWorkspacePolicy: false });
-    await engine.start("request", ctx);
+    await engine.start({ route: "implementation", request: "request" }, ctx);
     expect(engine.getState()?.status).toBe("cancelled");
     expect(engine.getState()?.message).toContain("cancelled");
     expect(agent.calls.filter(c => c.name === "builder")).toHaveLength(0);
@@ -969,7 +1133,7 @@ describe("Orchestrator", () => {
     const setWidget = vi.fn();
     const ctx = { cwd, hasUI: true, ui: { notify: vi.fn(), setStatus, setWidget } } as unknown as ExtensionCommandContext;
     const engine = new Orchestrator(pi, path.resolve("."), { agentExecutor: agent, enforceWorkspacePolicy: false });
-    const running = engine.start("request", ctx);
+    const running = engine.start({ route: "implementation", request: "request" }, ctx);
     await startedPromise;
     expect(engine.cancel()).toBe(true);
     expect(engine.cancel()).toBe(false);
@@ -1012,7 +1176,7 @@ describe("Orchestrator", () => {
       ui: { select, editor: vi.fn(), input: vi.fn(), confirm: vi.fn(), notify: vi.fn(), setStatus: vi.fn(), setWidget: vi.fn() }
     } as unknown as ExtensionCommandContext;
     const engine = new Orchestrator(pi, path.resolve("."), { agentExecutor: agent, checkRunner, enforceWorkspacePolicy: false });
-    await engine.start("request", ctx);
+    await engine.start({ route: "implementation", request: "request" }, ctx);
     expect(engine.getState()?.status).toBe("completed");
     expect(agent.calls.filter(c => c.name === "builder")).toHaveLength(2);
     expect(agent.calls.filter(c => c.name === "reviewer")).toHaveLength(4);
@@ -1051,7 +1215,7 @@ describe("Orchestrator", () => {
       ui: { select, editor: vi.fn(), input: vi.fn(), confirm: vi.fn(), notify: vi.fn(), setStatus: vi.fn(), setWidget: vi.fn() }
     } as unknown as ExtensionCommandContext;
     const engine = new Orchestrator(pi, path.resolve("."), { agentExecutor: agent, checkRunner, enforceWorkspacePolicy: false });
-    await engine.start("request", ctx);
+    await engine.start({ route: "implementation", request: "request" }, ctx);
     expect(engine.getState()?.status).toBe("completed");
     expect(agent.calls.filter(c => c.name === "builder")).toHaveLength(3);
     expect(agent.calls.filter(c => c.name === "reviewer")).toHaveLength(5);
@@ -1102,7 +1266,7 @@ describe("Orchestrator", () => {
       ui: { notify: vi.fn(), setStatus: vi.fn(), setWidget: vi.fn() }
     } as unknown as ExtensionCommandContext;
     const engine = new Orchestrator(pi, path.resolve("."), { agentExecutor: agent, checkRunner, enforceWorkspacePolicy: false });
-    await engine.start("request", ctx);
+    await engine.start({ route: "implementation", request: "request" }, ctx);
     expect(engine.getState()?.status).toBe("completed");
     const reviewerCalls = agent.calls.filter(c => c.name === "reviewer").map(c => {
       try { return JSON.parse(c.task); }
@@ -1113,6 +1277,121 @@ describe("Orchestrator", () => {
     expect(codeReviewTasks).toHaveLength(2);
     expect(codeReviewTasks[0].implementationChecks).toEqual(initialChecks);
     expect(codeReviewTasks[1].implementationChecks).toEqual(fix1Checks);
+  });
+
+  it("resumes after verified implementation without replaying completed mutation agents", async () => {
+    const initial = await scenario(
+      [explorer, plan, approved, tester, builder, new Error("review service unavailable")],
+      [true, false, true]
+    );
+    const failed = initial.engine.getState()!;
+    expect(failed.status).toBe("failed");
+    expect(failed.latestCheckpoint?.cursor).toBe("implementation_verified");
+
+    const resumedAgent = new QueueAgent([approved, documenter, approved]);
+    const checkRunner = vi.fn(async () => [check(true)]) as unknown as CheckRunner;
+    const pi = { appendEntry: vi.fn(), exec: vi.fn(), sendMessage: vi.fn() } as unknown as ExtensionAPI;
+    const ctx = {
+      cwd: initial.cwd,
+      hasUI: false,
+      ui: { notify: vi.fn(), setStatus: vi.fn(), setWidget: vi.fn() }
+    } as unknown as ExtensionCommandContext;
+    const resumed = new Orchestrator(pi, path.resolve("."), { agentExecutor: resumedAgent, checkRunner, enforceWorkspacePolicy: false });
+
+    await resumed.resume(failed.runId, ctx);
+
+    expect(resumed.getState()?.status).toBe("completed");
+    expect(resumed.getState()?.resumeCount).toBe(1);
+    expect(resumedAgent.calls.map(call => call.name)).toEqual(["reviewer", "documenter", "reviewer"]);
+    expect(resumed.getState()!.steps.length).toBeGreaterThan(failed.steps.length);
+  });
+
+  it("resumes after Tester without invoking Tester a second time", async () => {
+    const initial = await scenario([explorer, plan, approved, tester], [true, false]);
+    const failed = initial.engine.getState()!;
+    expect(failed.status).toBe("failed");
+    expect(failed.latestCheckpoint?.cursor).toBe("tester_completed");
+
+    const resumedAgent = new QueueAgent([builder, approved, documenter, approved]);
+    const queues = [[check(false)], [check(true)], [check(true)]];
+    const checkRunner = vi.fn(async () => queues.shift() ?? [check(true)]) as unknown as CheckRunner;
+    const pi = { appendEntry: vi.fn(), exec: vi.fn(), sendMessage: vi.fn() } as unknown as ExtensionAPI;
+    const ctx = {
+      cwd: initial.cwd,
+      hasUI: false,
+      ui: { notify: vi.fn(), setStatus: vi.fn(), setWidget: vi.fn() }
+    } as unknown as ExtensionCommandContext;
+    const resumed = new Orchestrator(pi, path.resolve("."), { agentExecutor: resumedAgent, checkRunner, enforceWorkspacePolicy: false });
+
+    await resumed.resume(failed.runId, ctx);
+
+    expect(resumed.getState()?.status).toBe("completed");
+    expect(resumedAgent.calls.map(call => call.name)).toEqual(["builder", "reviewer", "documenter", "reviewer"]);
+  });
+
+  it("refuses resume when the project workspace changed after the checkpoint", async () => {
+    const initial = await scenario(
+      [explorer, plan, approved, tester, builder, new Error("review service unavailable")],
+      [true, false, true]
+    );
+    const failed = initial.engine.getState()!;
+    await writeFile(path.join(initial.cwd, "unexpected.txt"), "external edit");
+    const agent = new QueueAgent([approved]);
+    const pi = { appendEntry: vi.fn(), exec: vi.fn(), sendMessage: vi.fn() } as unknown as ExtensionAPI;
+    const ctx = {
+      cwd: initial.cwd,
+      hasUI: false,
+      ui: { notify: vi.fn(), setStatus: vi.fn(), setWidget: vi.fn() }
+    } as unknown as ExtensionCommandContext;
+    const resumed = new Orchestrator(pi, path.resolve("."), { agentExecutor: agent, enforceWorkspacePolicy: false });
+
+    await expect(resumed.resume(failed.runId, ctx)).rejects.toThrow("Workspace differs from the latest safe checkpoint");
+    expect(agent.calls).toHaveLength(0);
+  });
+
+  it("refuses resume when workflow configuration changed after the checkpoint", async () => {
+    const initial = await scenario(
+      [explorer, plan, approved, tester, builder, new Error("review service unavailable")],
+      [true, false, true]
+    );
+    const failed = initial.engine.getState()!;
+    const changedConfig = await loadConfig(initial.cwd);
+    changedConfig.limits.reviewRevisions++;
+    await saveConfig(initial.cwd, changedConfig);
+    const agent = new QueueAgent([approved]);
+    const pi = { appendEntry: vi.fn(), exec: vi.fn(), sendMessage: vi.fn() } as unknown as ExtensionAPI;
+    const ctx = {
+      cwd: initial.cwd,
+      hasUI: false,
+      ui: { notify: vi.fn(), setStatus: vi.fn(), setWidget: vi.fn() }
+    } as unknown as ExtensionCommandContext;
+    const resumed = new Orchestrator(pi, path.resolve("."), { agentExecutor: agent, enforceWorkspacePolicy: false });
+
+    await expect(resumed.resume(failed.runId, ctx)).rejects.toThrow("configuration changed");
+    expect(agent.calls).toHaveLength(0);
+  });
+
+  it("resumes after Documenter without invoking Documenter a second time", async () => {
+    const initial = await scenario(
+      [explorer, plan, approved, tester, builder, approved, documenter, new Error("lesson review unavailable")],
+      [true, false, true]
+    );
+    const failed = initial.engine.getState()!;
+    expect(failed.latestCheckpoint?.cursor).toBe("documenter_completed");
+    const agent = new QueueAgent([approved]);
+    const checkRunner = vi.fn(async () => [check(true)]) as unknown as CheckRunner;
+    const pi = { appendEntry: vi.fn(), exec: vi.fn(), sendMessage: vi.fn() } as unknown as ExtensionAPI;
+    const ctx = {
+      cwd: initial.cwd,
+      hasUI: false,
+      ui: { notify: vi.fn(), setStatus: vi.fn(), setWidget: vi.fn() }
+    } as unknown as ExtensionCommandContext;
+    const resumed = new Orchestrator(pi, path.resolve("."), { agentExecutor: agent, checkRunner, enforceWorkspacePolicy: false });
+
+    await resumed.resume(failed.runId, ctx);
+
+    expect(resumed.getState()?.status).toBe("completed");
+    expect(agent.calls.map(call => call.name)).toEqual(["reviewer"]);
   });
 });
 

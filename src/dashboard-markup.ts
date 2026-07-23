@@ -22,6 +22,7 @@ export const DASHBOARD_MARKUP = `
 <span id="run-id-display" class="run-id muted"></span>
 </div>
 <div id="request-display" class="request" role="status"></div>
+<div class="run-controls"><label for="run-picker">Run history</label><select id="run-picker" aria-label="Select workflow run"><option>Loading runs…</option></select><button id="refresh-runs" class="close-btn" type="button">Refresh</button></div>
 </header>
 <nav id="section-nav" aria-label="Dashboard sections" hidden>
 <a href="#overview" class="section-link" aria-current="location">Overview</a>

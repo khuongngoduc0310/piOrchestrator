@@ -4,6 +4,7 @@ import { formatPlanForReview } from "./plan-review.js";
 
 function plan(overrides: Partial<PlannerOutput> = {}): PlannerOutput {
   return {
+    route: "implementation",
     summary: "Add pause/resume to the simulation",
     assumptions: ["UI element is the only change needed"],
     acceptanceCriteria: ["Pause preserves state", "Resume continues from same state"],
@@ -29,6 +30,12 @@ function plan(overrides: Partial<PlannerOutput> = {}): PlannerOutput {
 }
 
 describe("formatPlanForReview", () => {
+  it("labels review-only plans and displays their route", () => {
+    const result = formatPlanForReview(plan({ route: "review_only" }));
+    expect(result).toContain("# Review Plan");
+    expect(result).toContain("**Route:** review_only");
+  });
+
   it("renders a full plan with summary, criteria, tasks, assumptions, and risks", () => {
     const result = formatPlanForReview(plan());
     expect(result).toContain("# Implementation Plan");
@@ -156,6 +163,7 @@ describe("formatPlanForReview", () => {
 
   it("renders a baseline repair plan the same way", () => {
     const baselineFix: PlannerOutput = {
+      route: "implementation",
       summary: "Fix broken test assertion",
       assumptions: ["Only test file change needed"],
       acceptanceCriteria: ["Baseline checks pass"],

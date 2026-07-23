@@ -83,6 +83,17 @@ describe("UiModel", () => {
       expect(vm.run!.elapsedMs).toBe(5000);
     });
 
+    it("exposes review-only routing and maps repository review to the review phase", () => {
+      const vm = buildRunViewModel(sampleState({
+        route: "review_only",
+        stage: "reviewing_repository",
+        steps: [{ id: "step-003", sequence: 3, stage: "reviewing_repository", label: "Review repository", status: "running", startedAt: new Date().toISOString() }]
+      }), validConfig, "/project", 5000, 3);
+      expect(vm.run?.route).toBe("review_only");
+      expect(vm.run?.phaseIndex).toBe(6);
+      expect(vm.run?.skippedPhaseIndexes).toEqual([3, 4, 5]);
+    });
+
     it("returns completed mode for a finished workflow", () => {
       const state = sampleState({
         status: "completed",
@@ -117,6 +128,15 @@ describe("UiModel", () => {
       expect(vm.mode).toBe("failed");
       expect(vm.run!.failedArtifact).toBe("001-exploring-invalid-output.txt");
       expect(vm.run!.phaseIndex).toBe(1);
+    });
+
+    it("offers the exact resume command only for terminal runs with a checkpoint", () => {
+      const checkpoint = { number: 3, cursor: "implementation_verified" as const, createdAt: new Date().toISOString() };
+      const failed = buildRunViewModel(sampleState({ status: "failed", stage: "failed", latestCheckpoint: checkpoint }), validConfig, "/project", 1, 3);
+      const running = buildRunViewModel(sampleState({ latestCheckpoint: checkpoint }), validConfig, "/project", 1, 3);
+      expect(failed.run?.resumeCommand).toBe("/orchestrator-resume run-abc-123");
+      expect(failed.commands).toContain("/orchestrator-resume run-abc-123");
+      expect(running.run?.resumeCommand).toBeUndefined();
     });
 
     it("returns waiting mode when waitingFor is set", () => {

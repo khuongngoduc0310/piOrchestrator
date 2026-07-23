@@ -2,10 +2,8 @@ export const DASHBOARD_CLIENT_RUNTIME = `
 function renderTimeline(steps){
   var container=id('timeline-entries');
   var reverse=steps.slice().reverse();
-  var map={};container.querySelectorAll('.timeline-step').forEach(function(e){var id=e.getAttribute('data-step-id');if(id)map[id]=e;container.removeChild(e)});
+  container.innerHTML='';
   reverse.forEach(function(s,i){
-    var existing=map[s.id];
-    if(existing){container.appendChild(existing);delete map[s.id];return}
     var entry=el('div',{className:'timeline-step',role:'listitem','data-step-id':s.id});
     entry.appendChild(el('span',{className:'ts'},ago(s.startedAt)));
     var st=s.status==='succeeded'?'succeeded':s.status==='running'?'running':s.status==='failed'?'failed':'cancelled';
@@ -18,10 +16,11 @@ function renderTimeline(steps){
     if(s.revision)meta.appendChild(document.createTextNode('rev '+s.revision+' '));
     if(s.message)meta.appendChild(document.createTextNode(esc(s.message)));
     main.appendChild(meta);
-    if(s.artifact||s.rawArtifact){
+    if(s.artifact||s.rawArtifact||s.mutationArtifact){
       var actions=el('div',{className:'step-actions'});
       if(s.artifact){var ab=artBtn(s.artifact);actions.appendChild(ab)}
       if(s.rawArtifact){var rb=artBtn(s.rawArtifact);actions.appendChild(rb)}
+      if(s.mutationArtifact){var mb=artBtn(s.mutationArtifact);actions.appendChild(mb)}
       main.appendChild(actions)
     }
     entry.appendChild(main);
@@ -34,6 +33,7 @@ function renderArtifactList(snapshot){
   steps.forEach(function(s){
     if(s.artifact&&!names[s.artifact]){names[s.artifact]=true;list.push(s.artifact)}
     if(s.rawArtifact&&!names[s.rawArtifact]){names[s.rawArtifact]=true;list.push(s.rawArtifact)}
+    if(s.mutationArtifact&&!names[s.mutationArtifact]){names[s.mutationArtifact]=true;list.push(s.mutationArtifact)}
   });
   if(run&&run.failedArtifact&&!names[run.failedArtifact]){names[run.failedArtifact]=true;list.push(run.failedArtifact)}
   var container=id('artifact-list');
@@ -53,7 +53,7 @@ function openArtifact(name){
     if(pre.style.whiteSpace==='pre'){pre.style.whiteSpace='pre-wrap';tog.textContent='Wrap'}else{pre.style.whiteSpace='pre';tog.textContent='No wrap'}
   });
   var req=app.artifactReq;
-  fetch('/api/artifacts/'+encodeURIComponent(name),{cache:'no-store'}).then(function(r){
+  fetch('/api/runs/'+encodeURIComponent(app.runId)+'/artifacts/'+encodeURIComponent(name),{cache:'no-store'}).then(function(r){
     var size=r.headers.get('X-Artifact-Size');var truncated=r.headers.get('X-Artifact-Truncated');
     if(req!==app.artifactReq)return null;
     var metaEl=id('artifact-meta');
@@ -125,6 +125,22 @@ function renderIdle(config,cwd,commands){
 // ── connection ───────────────────────────────────────────────
 function setConnection(s){app.connection=s;renderConnection()}
 
+function resetRunSelection(){
+  app.selectedAgent=null;app.selectedInvocation=null;app.agentMode='auto';app.lastFetchedAgent=null;app.currentTranscript=null;app.transcriptQuery='';app.selectedDiffFile=0;app.agentReq++;app.transcriptReq++;app.diffReq++
+}
+function loadRun(runId){
+  app.selectedRunId=runId;resetRunSelection();
+  fetch('/api/runs/'+encodeURIComponent(runId)+'/state',{cache:'no-store'}).then(function(r){if(!r.ok)throw new Error('HTTP '+r.status);return r.json()}).then(function(data){if(app.selectedRunId===runId)render(data)}).catch(function(){})
+}
+function renderRunPicker(runs){
+  var picker=id('run-picker');picker.innerHTML='';
+  if(!runs.length){picker.appendChild(el('option',{value:''},'No runs'));return}
+  runs.forEach(function(run){var label=(run.active?'● ':'')+run.status+' · '+trunc(run.request,58);picker.appendChild(el('option',{value:run.id},label))});
+  var desired=app.selectedRunId;if(!desired||!runs.some(function(run){return run.id===desired}))desired=(runs.find(function(run){return run.active})||runs[0]).id;app.selectedRunId=desired;picker.value=desired;
+  if(!app.snapshot||!app.snapshot.run||app.snapshot.run.id!==desired)loadRun(desired)
+}
+function loadRuns(){fetch('/api/runs',{cache:'no-store'}).then(function(r){if(!r.ok)throw new Error('HTTP '+r.status);return r.json()}).then(renderRunPicker).catch(function(){})}
+
 // ── init ─────────────────────────────────────────────────────
 // Section nav IntersectionObserver
 try{
@@ -143,11 +159,15 @@ try{
 
 // Load initial state, then start SSE
 fetch('/api/state',{cache:'no-store'}).then(function(r){if(!r.ok)throw new Error('HTTP '+r.status);return r.json()}).then(function(data){
-  if(data){render(data)}
+  if(data){app.liveSnapshot=data;app.selectedRunId=data.run&&data.run.id;render(data)}loadRuns()
 }).catch(function(){});
 
+id('run-picker').addEventListener('change',function(){if(this.value)loadRun(this.value)});
+id('refresh-runs').addEventListener('click',loadRuns);
+
 var es=new EventSource('/events');
-es.onopen=function(){setConnection('live')};
-es.onmessage=function(e){try{var data=JSON.parse(e.data);if(data)render(data)}catch(ex){}};
-es.onerror=function(){setConnection('reconnecting')};
-setTimeout(function(){if(app.connection==='reconnecting')setConnection('disconnected')},30000);`;
+var reconnectTimer=null;var lastRunStatus='';
+es.onopen=function(){if(reconnectTimer)clearTimeout(reconnectTimer);setConnection('live')};
+es.onmessage=function(e){try{var data=JSON.parse(e.data);if(data){app.liveSnapshot=data;var key=data.run?data.run.id+':'+data.run.runStatus:'';if(key!==lastRunStatus){lastRunStatus=key;loadRuns()}if(!app.selectedRunId||(data.run&&app.selectedRunId===data.run.id))render(data)}}catch(ex){}};
+es.onerror=function(){setConnection('reconnecting');if(reconnectTimer)clearTimeout(reconnectTimer);reconnectTimer=setTimeout(function(){if(app.connection==='reconnecting')setConnection('disconnected')},30000)};
+window.addEventListener('beforeunload',function(){if(app.timer)clearInterval(app.timer);if(reconnectTimer)clearTimeout(reconnectTimer);try{es.close()}catch(e){};try{observer.disconnect()}catch(e){}});`;

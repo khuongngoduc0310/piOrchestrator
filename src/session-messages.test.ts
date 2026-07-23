@@ -17,11 +17,13 @@ import {
   formatCompletedRun,
   formatDocumentationReport,
   formatFailedRun,
+  formatRepositoryReview,
   formatStartedRun,
   formatVerifiedImplementation
 } from "./session-messages.js";
 
 const samplePlan: PlannerOutput = {
+  route: "implementation",
   summary: "Add pause/resume to the simulation",
   assumptions: ["UI element is the only change needed"],
   acceptanceCriteria: ["Pause preserves state"],
@@ -53,6 +55,7 @@ const sampleCheck = (passed: boolean): CheckResult => ({
 });
 
 const sampleCompletionSummary = (overrides: Partial<CompletionSummary> = {}): CompletionSummary => ({
+  route: "implementation",
   request: "add feature",
   planSummary: "Implement the feature",
   changedFiles: ["src/index.ts"],
@@ -166,6 +169,18 @@ describe("session-messages", () => {
     expect(msg).toContain("Review revisions:** 2");
   });
 
+  it("formatRepositoryReview reports findings without approval semantics", () => {
+    const msg = formatRepositoryReview({
+      decision: "changes_requested",
+      blockingIssues: ["src/index.ts: unsafe behavior"],
+      suggestions: [],
+      evidence: [{ path: "src/index.ts", detail: "unsafe behavior" }]
+    });
+    expect(msg).toContain("Repository review complete");
+    expect(msg).toContain("1 blocking finding(s)");
+    expect(msg).toContain("src/index.ts: unsafe behavior");
+  });
+
   it("formatDocumentationReport includes summary and lesson status", () => {
     const output: DocumenterOutput = {
       summary: "Updated README",
@@ -249,6 +264,19 @@ describe("session-messages", () => {
     const msg = formatCompletedRun(summary);
     expect(msg).toContain("No file changes were reported");
     expect(msg).toContain("skipped");
+  });
+
+  it("formatCompletedRun describes review-only work without implementation claims", () => {
+    const msg = formatCompletedRun(sampleCompletionSummary({
+      route: "review_only",
+      changedFiles: [],
+      checks: [],
+      attempts: 0,
+      review: { outcome: "findings_reported", evidenceCount: 1, suggestions: [], blockingIssues: ["finding"], revisions: 0 }
+    }));
+    expect(msg).toContain("Documentation: skipped for review-only route");
+    expect(msg).not.toContain("Implementation attempts");
+    expect(msg).not.toContain("Baseline repaired");
   });
 
   it("formatCompletedRun includes warning", () => {

@@ -1,9 +1,10 @@
 export const DASHBOARD_CLIENT_CORE = `
 var app = {
-  snapshot: null, mode: null, runId: null,
+  snapshot: null, liveSnapshot: null, mode: null, runId: null, selectedRunId: null,
   connection: 'connecting', selectedAgent: null, agentMode: 'auto',
   selectedArtifact: null, agentReq: 0, artifactReq: 0,
   transcriptReq: 0, selectedInvocation: null,
+  diffReq: 0, inspectorTab: 'transcript', transcriptQuery: '', currentTranscript: null, invocations: [], selectedDiffFile: 0,
   lastTranscriptRevision: -1,
   timer: null, elapsedBase: 0, elapsedAt: 0,
   lastFetchedAgent: null,
@@ -21,7 +22,7 @@ function statusLabel(s){if(s==='completed'||s==='succeeded')return'✓ Succeeded
 // ── element helpers ─────────────────────────────────────────
 function el(tag,attrs,children){var e=document.createElement(tag);if(attrs)for(var k in attrs)if(k==='className')e.className=attrs[k];else if(k.startsWith('data'))e.setAttribute(k,attrs[k]);else if(k==='htmlFor')e.setAttribute('for',attrs[k]);else e.setAttribute(k,attrs[k]);if(children){if(typeof children==='string')e.textContent=children;else if(Array.isArray(children))children.forEach(function(c){if(c!=null)e.append(typeof c==='string'?document.createTextNode(c):c)})}return e}
 function btn(text,attrs,onclick){var b=el('button',Object.assign({type:'button',className:'close-btn'},attrs||{}));b.textContent=text;if(onclick)b.addEventListener('click',onclick);return b}
-function artBtn(name){return btn(esc(name),{className:'artifact-btn','data-artifact':esc(name)},function(){openArtifact(name)})}
+function artBtn(name){return btn(name,{className:'artifact-btn','data-artifact':name},function(){openArtifact(name)})}
 
 // ── render functions ────────────────────────────────────────
 function render(snapshot){
@@ -35,7 +36,7 @@ function render(snapshot){
   }
   var run=snapshot.run;app.mode=snapshot.mode;app.runId=run.id;
   // If run id changed, reset transient state
-  if(old&&old.run&&old.run.id!==run.id){app.selectedAgent=null;app.agentMode='auto';app.lastFetchedAgent=null;app.lastTranscriptRevision=-1;app.selectedArtifact=null;app.selectedInvocation=null;app.agentReq=0;app.artifactReq=0;app.transcriptReq=0}
+  if(old&&old.run&&old.run.id!==run.id){app.selectedAgent=null;app.agentMode='auto';app.lastFetchedAgent=null;app.lastTranscriptRevision=-1;app.selectedArtifact=null;app.selectedInvocation=null;app.currentTranscript=null;app.invocations=[];app.agentReq=0;app.artifactReq=0;app.transcriptReq=0;app.diffReq++;closeArtifact()}
   renderHeader(snapshot);
   renderConnection();
   renderPhases(run);
@@ -46,7 +47,7 @@ function render(snapshot){
   renderTimeline(snapshot.recentSteps||[]);
   renderArtifactList(snapshot);
   // Auto-follow active agent
-  if(!app.selectedAgent&&run.activeAgent){app.selectedAgent=run.activeAgent;app.agentMode='auto';updateAgentSelection(run.activeAgent)}
+  if(app.agentMode==='auto'&&run.activeAgent&&app.selectedAgent!==run.activeAgent){app.selectedAgent=run.activeAgent;app.selectedInvocation=null;app.lastFetchedAgent=null;updateAgentSelection(run.activeAgent)}
   else if(app.selectedAgent){updateAgentSelection(app.selectedAgent)}
   startElapsedTimer(run);
   id('section-nav').removeAttribute('hidden');
@@ -56,7 +57,7 @@ function renderHeader(snapshot){
   var badge=id('status-badge');
   badge.textContent=mode;
   badge.className='status-badge '+mode;
-  id('request-display').textContent=run?run.request||'':'';
+  id('request-display').textContent=run?(run.route?'['+run.route+'] ':'')+(run.request||''):'';
   id('run-id-display').textContent=run?run.id.slice(0,8):'';
 }
 function renderConnection(){
@@ -67,11 +68,13 @@ function renderConnection(){
 }
 function renderPhases(run){
   var pi=run.phaseIndex,pc=run.phaseCount||PHASES.length;
+  var skipped=run.skippedPhaseIndexes||[];
   var container=id('phases');container.innerHTML='';
   PHASES.forEach(function(p,i){
-    var cls='phase'+(i<pi?' done':i===pi?' active':' pending');
-    var icon=i<pi?'✓':i===pi?'→':'•';
-    var phaseEl=el('div',{className:cls,'aria-current':i===pi?'step':undefined,'aria-label':(i<pi?'Completed: ':i===pi?'Current: ':'Pending: ')+p},
+    var isSkipped=skipped.indexOf(i)>=0;
+    var cls='phase'+(isSkipped?' skipped':i<pi?' done':i===pi?' active':' pending');
+    var icon=isSkipped?'–':i<pi?'✓':i===pi?'→':'•';
+    var phaseEl=el('div',{className:cls,'aria-current':i===pi?'step':undefined,'aria-label':(isSkipped?'Skipped: ':i<pi?'Completed: ':i===pi?'Current: ':'Pending: ')+p},
       [el('span',{className:'phase-icon','aria-hidden':'true'},icon),' ',p]
     );
     container.appendChild(phaseEl)
@@ -79,30 +82,34 @@ function renderPhases(run){
 }
 function renderCallout(snapshot){
   var mode=snapshot.mode;var run=snapshot.run;var c=id('callout');
-  c.innerHTML='';c.removeAttribute('class');c.removeAttribute('role');
+  c.innerHTML='';c.hidden=false;c.removeAttribute('class');c.removeAttribute('role');
   if(mode==='waiting'&&run&&run.waitingFor){
     c.className='waiting';c.setAttribute('role','status');c.setAttribute('aria-live','polite');
     c.appendChild(el('div',{className:'callout-title'},'Waiting for input'));
-    c.appendChild(el('div',{className:'callout-body'},esc(run.waitingFor)));
+    c.appendChild(el('div',{className:'callout-body'},run.waitingFor));
     return
   }
   if(mode==='failed'&&run){
     c.className='failed';c.setAttribute('role','alert');
     c.appendChild(el('div',{className:'callout-title'},'Failed'));
-    if(run.message)c.appendChild(el('div',{className:'callout-body'},esc(run.message)));
+    if(run.message)c.appendChild(el('div',{className:'callout-body'},run.message));
     if(run.failedArtifact){var fab=btn('Open failed artifact',{className:'close-btn',style:'margin-top:6px'},function(){openArtifact(run.failedArtifact)});c.appendChild(fab)}
+    if(run.resumeCommand)c.appendChild(el('div',{className:'callout-body'},'Safe checkpoint: '+esc(run.checkpoint&&run.checkpoint.cursor||'available')+' · '+esc(run.resumeCommand)));
+    if(run.resumeBlockedReason)c.appendChild(el('div',{className:'callout-body'},'Resume unavailable: '+esc(run.resumeBlockedReason)));
     return
   }
   if(mode==='cancelled'&&run){
     c.className='failed';c.style.borderColor='var(--muted)';c.setAttribute('role','status');c.setAttribute('aria-live','polite');
     c.appendChild(el('div',{className:'callout-title'},'Cancelled'));
-    if(run.message)c.appendChild(el('div',{className:'callout-body'},esc(run.message)));
+    if(run.message)c.appendChild(el('div',{className:'callout-body'},run.message));
+    if(run.resumeCommand)c.appendChild(el('div',{className:'callout-body'},'Resume: '+esc(run.resumeCommand)));
+    if(run.resumeBlockedReason)c.appendChild(el('div',{className:'callout-body'},'Resume unavailable: '+esc(run.resumeBlockedReason)));
     return
   }
   if(mode==='completed'&&run){
     c.className='completed';c.setAttribute('role','status');c.setAttribute('aria-live','polite');
     c.appendChild(el('div',{className:'callout-title'},'Completed'));
-    if(run.message)c.appendChild(el('div',{className:'callout-body'},esc(run.message)));
+    if(run.message)c.appendChild(el('div',{className:'callout-body'},run.message));
     return
   }
   if(mode==='config_error'){
@@ -194,11 +201,11 @@ function updateAgentSelection(name){
   });
   var revision=app.snapshot&&app.snapshot.run&&app.snapshot.run.transcriptRevision||0;
   var summary=(app.snapshot&&app.snapshot.agents||[]).find(function(agent){return agent.name===name});
-  var fetchKey=name+':'+(summary&&summary.invocationCount||0);
+  var fetchKey=app.runId+':'+name+':'+(summary&&summary.invocationCount||0)+':'+(summary&&summary.status||'')+':'+revision;
   if(name&&app.agentMode!=='closed'&&fetchKey!==app.lastFetchedAgent){
     app.lastFetchedAgent=fetchKey;app.lastTranscriptRevision=revision;fetchAgent(name)
   }else if(name&&app.agentMode!=='closed'&&revision!==app.lastTranscriptRevision){
     app.lastTranscriptRevision=revision;
-    if(app.selectedInvocation){var bits=app.selectedInvocation.split(':');fetchTranscript(bits[0],Number(bits[1]))}
+    if(app.selectedInvocation){var bits=app.selectedInvocation.split(':');if(app.inspectorTab==='files')fetchDiff(bits[0],Number(bits[1]));else fetchTranscript(bits[0],Number(bits[1]))}
   }
 }`;

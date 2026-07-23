@@ -1,4 +1,6 @@
 import type { ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
+import { CONFIG_DIR_NAME } from "@earendil-works/pi-coding-agent";
+import { createHash } from "node:crypto";
 import { AgentCancelledError, AgentIncompleteResponseError, type AgentRunOptions } from "./agent-runner.js";
 import { AGENT_TASK_SCHEMA_VERSION, type AgentOutputMap, type AgentResult, type AgentTaskEnvelope, type AgentTaskMap, type AgentInvocationRecord, type AgentName, type AgentTranscript, type AgentTranscriptArtifact, type PlannerOutput, type Stage } from "./types.js";
 import { ValidationError } from "./validation.js";
@@ -7,6 +9,7 @@ import type { OrchestratorRuntime } from "./orchestrator-runtime.js";
 import { messageOf, projectTrusted, transcriptKey } from "./orchestrator-helpers.js";
 import { beginStep, persist, throttledPersist, throwIfAborted, transition, updateAgentActivity } from "./orchestrator-state.js";
 import { validateAgentMutation, workspaceExclusions } from "./orchestrator-workspace.js";
+import { captureGitTree, compareGitTrees } from "./git-tree-diff.js";
 
 const OUTPUT_CORRECTABLE_AGENTS = new Set<AgentName>(["explorer", "planner", "reviewer", "debugger"]);
 const CORRECTION_TOOLS = new Set(["read", "grep", "find", "ls"]);
@@ -74,6 +77,12 @@ export async function runAgentStep<A extends AgentName>(
       step.invocations ??= [];
       step.invocations.push(invocation);
       const key = transcriptKey(step.id, invocation.sequence);
+      const diffExclusions = [
+        ...workspaceExclusions(runtime, cwd),
+        `${CONFIG_DIR_NAME}/orchestrator/runs`,
+        `${CONFIG_DIR_NAME}/orchestrator/worktrees`
+      ];
+      const beforeTree = await captureGitTree(cwd, diffExclusions);
       let latestTranscript: AgentTranscript | undefined;
       let invocationStatus: "succeeded" | "failed" | "cancelled" = "succeeded";
       let invocationError: unknown;
@@ -100,6 +109,7 @@ export async function runAgentStep<A extends AgentName>(
       } finally {
         invocation.status = invocationStatus;
         invocation.completedAt = runtime.timestamp();
+        let persistenceError: unknown;
         try {
           if (latestTranscript) {
             invocation.messageCount = latestTranscript.messages.length;
@@ -119,11 +129,41 @@ export async function runAgentStep<A extends AgentName>(
             invocation.transcriptArtifact = await store.saveJson(transcriptName, transcriptArtifact);
           }
         } catch (transcriptError) {
-          if (invocationError === undefined) throw transcriptError;
+          persistenceError = transcriptError;
         } finally {
           runtime.activeTranscripts.delete(key);
           runtime.transcriptRevision++;
         }
+        try {
+          const afterTree = beforeTree.available ? await captureGitTree(cwd, diffExclusions) : beforeTree;
+          const diff = await compareGitTrees(beforeTree, afterTree);
+          if (diff.patch && diff.patch.length > 0) {
+            const patchName = store.artifactName({
+              ...qualifier,
+              sequence: step.sequence,
+              stage,
+              agent,
+              kind: `invocation-${invocation.sequence}-files`,
+              extension: "patch"
+            });
+            invocation.filePatchArtifact = await store.saveBuffer(patchName, diff.patch);
+            diff.metadata.patchArtifact = invocation.filePatchArtifact;
+            diff.metadata.patchDigest = createHash("sha256").update(diff.patch).digest("hex");
+          }
+          const diffName = store.artifactName({
+            ...qualifier,
+            sequence: step.sequence,
+            stage,
+            agent,
+            kind: `invocation-${invocation.sequence}-file-diff`
+          });
+          invocation.fileDiffArtifact = await store.saveJson(diffName, diff.metadata);
+          invocation.changedFileCount = diff.metadata.files.length;
+        } catch (diffError) {
+          invocation.fileDiffError = messageOf(diffError);
+          persistenceError ??= diffError;
+        }
+        if (invocationError === undefined && persistenceError !== undefined) throw persistenceError;
       }
     };
 

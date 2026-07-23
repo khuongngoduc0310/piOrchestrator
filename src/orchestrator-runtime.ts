@@ -1,6 +1,5 @@
 import { execSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { readFile } from "node:fs/promises";
 import path from "node:path";
 import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import { PiSdkAgentExecutor, type AgentExecutor } from "./agent-runner.js";
@@ -13,11 +12,13 @@ import { RunStore } from "./store.js";
 import { clearTerminal } from "./terminal-ui.js";
 import { loadMemory } from "./memory-store.js";
 import { selectMemoryLessons } from "./memory-selection.js";
-import { AGENT_NAMES, type AgentModelUpdates, type AgentName, type AgentTranscript, type AgentTranscriptArtifact, type ArtifactContent, type BaselineContext, type BaselineReviewContext, type BuilderOutput, type ConfigSummary, type OrchestratorConfig, type OrchestratorViewModel, type ThinkingLevel, type WorkflowState } from "./types.js";
+import { AGENT_NAMES, type AgentModelUpdates, type AgentName, type AgentTranscript, type ArtifactContent, type BaselineContext, type BaselineReviewContext, type BuilderOutput, type ConfigSummary, type DashboardRunHistoryItem, type InvocationDiffView, type OrchestratorConfig, type OrchestratorViewModel, type ThinkingLevel, type WorkflowState } from "./types.js";
 import type { CandidateLesson, CandidateLedger, MemoryDocument, MemoryLessonRef, PromotionResult } from "./memory-types.js";
 import type { CheckRunner, OrchestratorDependencies } from "./orchestrator-contracts.js";
 import { messageOf, projectTrusted, transcriptKey } from "./orchestrator-helpers.js";
 import { WorkflowCancelledError } from "./workflow-errors.js";
+import { DashboardRunRepository } from "./dashboard-run-repository.js";
+import { validateInvocationFileDiff, type InvocationFileDiff } from "./git-tree-diff.js";
 
 export class OrchestratorRuntime {
   state?: WorkflowState;
@@ -53,6 +54,7 @@ export class OrchestratorRuntime {
   mutationCommitStarted = false;
   activeTranscripts = new Map<string, AgentTranscript>();
   transcriptRevision = 0;
+  private dashboardCwd?: string;
 
   constructor(
     readonly pi: ExtensionAPI,
@@ -70,7 +72,13 @@ export class OrchestratorRuntime {
       getViewModel: () => this.getViewModel(),
       getAgentInspection: name => this.getAgentInspection(name),
       getAgentTranscript: (stepId, invocation) => this.getAgentTranscript(stepId, invocation),
-      readArtifact: name => this.readArtifact(name)
+      readArtifact: name => this.readArtifact(name),
+      listRuns: () => this.listDashboardRuns(),
+      getRunViewModel: runId => this.getRunViewModel(runId),
+      getRunAgentInspection: (runId, name) => this.getRunAgentInspection(runId, name),
+      getRunAgentTranscript: (runId, stepId, invocation) => this.getRunAgentTranscript(runId, stepId, invocation),
+      getInvocationDiff: (runId, stepId, invocation) => this.getInvocationDiff(runId, stepId, invocation),
+      readRunArtifact: (runId, name) => this.readRunArtifact(runId, name)
     });
   }
 
@@ -122,23 +130,64 @@ export class OrchestratorRuntime {
     const active = this.activeTranscripts.get(transcriptKey(stepId, invocationSequence));
     if (active) return active;
     if (!invocation.transcriptArtifact) return undefined;
-    try {
-      const raw = await readFile(path.join(this.state.runDir, path.basename(invocation.transcriptArtifact)), "utf8");
-      return JSON.parse(raw) as AgentTranscriptArtifact;
-    } catch {
-      return undefined;
-    }
+    return this.historyRepository()?.getInvocationTranscript(this.state.runId, stepId, invocationSequence);
   }
 
   async readArtifact(name: string): Promise<ArtifactContent | undefined> {
     if (!this.state) return undefined;
-    try {
-      const text = await readFile(path.join(this.state.runDir, path.basename(name)), "utf8");
-      const maxLen = 512 * 1024;
-      return { name, text: text.length > maxLen ? text.slice(0, maxLen) : text, truncated: text.length > maxLen, isJson: name.endsWith(".json"), size: text.length };
-    } catch {
-      return undefined;
+    return this.readRunArtifact(this.state.runId, path.basename(name));
+  }
+
+  async listDashboardRuns(): Promise<DashboardRunHistoryItem[]> {
+    const repository = this.historyRepository();
+    if (!repository) return [];
+    const activeId = this.state?.runId;
+    return (await repository.listRuns(100)).map(run => ({ ...run, active: run.id === activeId }));
+  }
+
+  async getRunViewModel(runId: string): Promise<OrchestratorViewModel | undefined> {
+    if (this.state?.runId === runId) return this.getViewModel();
+    const state = await this.historyRepository()?.loadRun(runId);
+    if (!state) return undefined;
+    const elapsedEnd = state.completedAt ?? state.updatedAt;
+    const elapsedMs = Math.max(0, new Date(elapsedEnd).getTime() - new Date(state.startedAt).getTime());
+    return buildRunViewModel(state, this.getConfigSummary(), state.cwd, elapsedMs, Math.max(1, state.attempt));
+  }
+
+  async getRunAgentInspection(runId: string, name: AgentName) {
+    if (this.state?.runId === runId) return this.getAgentInspection(name);
+    return this.historyRepository()?.getAgentInspection(runId, name);
+  }
+
+  async getRunAgentTranscript(runId: string, stepId: string, invocation: number): Promise<AgentTranscript | undefined> {
+    if (this.state?.runId === runId) {
+      const active = this.activeTranscripts.get(transcriptKey(stepId, invocation));
+      if (active) return active;
     }
+    return this.historyRepository()?.getInvocationTranscript(runId, stepId, invocation);
+  }
+
+  async getInvocationDiff(runId: string, stepId: string, invocationSequence: number): Promise<InvocationDiffView | undefined> {
+    const repository = this.historyRepository();
+    const state = this.state?.runId === runId ? this.state : await repository?.loadRun(runId);
+    const invocation = state?.steps.find(step => step.id === stepId)?.invocations?.find(item => item.sequence === invocationSequence);
+    if (!repository || !invocation?.fileDiffArtifact) return undefined;
+    const metadataArtifact = await repository.readArtifact(runId, invocation.fileDiffArtifact);
+    if (!metadataArtifact || metadataArtifact.truncated) return undefined;
+    const metadata = validateInvocationFileDiff(JSON.parse(metadataArtifact.text) as unknown);
+    if (metadata.patchArtifact !== invocation.filePatchArtifact) throw new Error("Invocation diff patch reference does not match workflow state");
+    const patchArtifact = invocation.filePatchArtifact ? await repository.readArtifact(runId, invocation.filePatchArtifact) : undefined;
+    return { metadata, patch: patchArtifact?.text ?? "", patchTruncated: patchArtifact?.truncated ?? false };
+  }
+
+  async readRunArtifact(runId: string, name: string): Promise<ArtifactContent | undefined> {
+    const artifact = await this.historyRepository()?.readArtifact(runId, name);
+    return artifact ? { name: artifact.name, text: artifact.text, truncated: artifact.truncated, isJson: artifact.isJson, size: artifact.sizeBytes } : undefined;
+  }
+
+  private historyRepository(): DashboardRunRepository | undefined {
+    const cwd = this.state?.cwd ?? this.dashboardCwd;
+    return cwd ? new DashboardRunRepository(cwd) : undefined;
   }
 
   async loadProjectMemory(cwd: string, ctx: ExtensionCommandContext): Promise<void> {
@@ -212,6 +261,7 @@ export class OrchestratorRuntime {
   }
 
   async startDashboard(cwd?: string): Promise<string> {
+    this.dashboardCwd = this.state?.cwd ?? cwd ?? this.dashboardCwd;
     const url = await this.dashboard.start(this.config?.dashboard.port ?? 0);
     if (this.state) {
       this.state.dashboardUrl = url;

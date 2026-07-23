@@ -14,10 +14,10 @@ async function prompt(name: string): Promise<string> {
 }
 
 describe("role prompt contracts", () => {
-  it("documents the common version-2 envelope in every prompt", async () => {
+  it("documents the common version-3 envelope in every prompt", async () => {
     for (const name of AGENT_NAMES) {
       const text = await prompt(name);
-      expect(text).toContain("taskSchemaVersion: 2");
+      expect(text).toContain("taskSchemaVersion: 3");
       expect(text).toContain("memoryContext");
       expect(text).toContain("repository-relative");
       expect(text).toContain("raw JSON object");

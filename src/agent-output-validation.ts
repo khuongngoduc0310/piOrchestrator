@@ -5,6 +5,7 @@ import {
   DEBUGGER_CATEGORIES,
   LESSON_CATEGORIES,
   PRE_IMPLEMENTATION_RESULTS,
+  WORKFLOW_ROUTES,
   type AcceptanceCoverage,
   type BuilderOutput,
   type CommandReport,
@@ -129,6 +130,7 @@ export function validatePlannerOutput(value: unknown, path = "plan"): PlannerOut
     if (tasks[index].verification.length === 0) throw new ValidationError(`${path}.tasks[${index}].verification`, "must not be empty");
   }
   return {
+    route: enumValue(item.route, `${path}.route`, WORKFLOW_ROUTES),
     summary: string(item.summary, `${path}.summary`),
     assumptions: strings(item.assumptions, `${path}.assumptions`),
     acceptanceCriteria,

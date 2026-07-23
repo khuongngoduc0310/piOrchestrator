@@ -10,8 +10,10 @@ import {
   validateTesterOutput,
   ValidationError
 } from "./validation.js";
+import { WORKFLOW_ROUTES } from "./types.js";
 
 const validPlan = {
+  route: "implementation",
   summary: "Do it safely",
   assumptions: [],
   acceptanceCriteria: ["Checks pass"],
@@ -39,6 +41,13 @@ describe("structured output validation", () => {
 
   it("validates a dependency graph", () => {
     expect(parsePlannerOutput(JSON.stringify(validPlan))).toEqual(validPlan);
+  });
+
+  it("accepts supported workflow routes and rejects missing or unknown routes", () => {
+    for (const route of WORKFLOW_ROUTES) expect(validatePlannerOutput({ ...validPlan, route }).route).toBe(route);
+    const { route: _route, ...missingRoute } = validPlan;
+    expect(() => validatePlannerOutput(missingRoute)).toThrow("plan.route");
+    expect(() => validatePlannerOutput({ ...validPlan, route: "arbitrary_agents" })).toThrow("plan.route");
   });
 
   it("reports duplicate task IDs with an exact path", () => {

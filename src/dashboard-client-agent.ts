@@ -1,118 +1,112 @@
 export const DASHBOARD_CLIENT_AGENT = `
+function runApi(suffix){return '/api/runs/'+encodeURIComponent(app.runId)+suffix}
 function selectAgent(name){
-  if(name===app.selectedAgent&&app.agentMode!=='closed'){closeAgent();return}
-  app.selectedAgent=name;app.selectedInvocation=null;app.agentMode='manual';app.lastFetchedAgent=null;
+  if(name===app.selectedAgent&&app.agentMode==='pinned'){closeAgent();return}
+  app.selectedAgent=name;app.selectedInvocation=null;app.agentMode='pinned';app.lastFetchedAgent=null;app.inspectorTab='transcript';app.currentTranscript=null;
   updateAgentSelection(name)
 }
+function setAgentAuto(){
+  app.agentMode='auto';var active=app.snapshot&&app.snapshot.run&&app.snapshot.run.activeAgent;
+  if(active){app.selectedAgent=active;app.selectedInvocation=null;app.lastFetchedAgent=null;updateAgentSelection(active)}
+}
 function fetchAgent(name){
-  app.agentReq++;var req=app.agentReq;
-  var panel=id('agent-inspector');
-  panel.innerHTML='<div class="closable-header" style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px"><h3>'+esc(name)+'</h3>'+'<button class="close-btn" id="close-inspector">Close</button></div><div class="empty-state"><p>Loading…</p></div>';
-  panel.removeAttribute('hidden');
-  id('close-inspector').addEventListener('click',closeAgent);
-  fetch('/api/agents/'+encodeURIComponent(name),{cache:'no-store'}).then(function(r){if(!r.ok)return null;return r.json()}).then(function(data){
+  app.agentReq++;var req=app.agentReq;var panel=id('agent-inspector');
+  panel.innerHTML='<div class="empty-state"><p>Loading agent history…</p></div>';panel.removeAttribute('hidden');id('agents').querySelector('.agents-layout').classList.add('show-inspector');
+  fetch(runApi('/agents/'+encodeURIComponent(name)),{cache:'no-store'}).then(function(r){if(!r.ok)return null;return r.json()}).then(function(data){
     if(req!==app.agentReq||app.selectedAgent!==name)return;
-    if(!data){panel.innerHTML='<div class="closable-header" style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px"><h3>'+esc(name)+'</h3><button class="close-btn" id="close-inspector">Close</button></div><div class="empty-state"><p>No data available</p></div>';id('close-inspector')&&id('close-inspector').addEventListener('click',closeAgent);return}
-    panel.innerHTML='<div class="closable-header" style="display:flex;justify-content:space-between;align-items:center"><h3>'+esc(data.name)+' <span class="muted">'+esc(data.status)+'</span></h3><button class="close-btn" id="close-inspector">Close</button></div>';
-    id('close-inspector').addEventListener('click',closeAgent);
-    if(data.model)panel.appendChild(el('div',{className:'meta'},'Model: '+esc(data.model)));
-    if(data.startedAt)panel.appendChild(el('div',{className:'meta'},'Started: '+esc(data.startedAt.slice(0,19).replace('T',' '))));
-    if(data.completedAt)panel.appendChild(el('div',{className:'meta'},'Completed: '+esc(data.completedAt.slice(0,19).replace('T',' '))));
-    if(data.summary){var sm=el('p',{className:'meta'});sm.textContent=trunc(data.summary,200);panel.appendChild(sm)}
-    if(data.error)panel.appendChild(el('p',{className:'error-text'},esc(data.error)));
-    if(data.currentTool){
-      var tc=data.toolStatus||'ok';var tool=el('div',{className:'tool-row'});
-      tool.innerHTML='<span class="tool-status-dot '+tc+'"></span> <b>Tool:</b> '+esc(data.currentTool)+(data.currentToolArgs?' <span class="muted">'+esc(trunc(data.currentToolArgs,120))+'</span>':'');
-      panel.appendChild(tool)
-    }
-    if(data.agentOutput&&data.agentOutput.length>0){
-      var out=el('div',{className:'output-box'});
-      data.agentOutput.forEach(function(l){out.appendChild(document.createTextNode(l))});
-      panel.appendChild(out)
-    }
-    var invocations=[];
-    (data.steps||[]).forEach(function(s){(s.invocations||[]).forEach(function(inv){invocations.push({step:s,inv:inv,key:s.id+':'+inv.sequence})})});
-    if(invocations.length>0){
-      if(app.agentMode==='auto'||!app.selectedInvocation||!invocations.some(function(item){return item.key===app.selectedInvocation}))app.selectedInvocation=invocations[invocations.length-1].key;
+    if(!data){panel.innerHTML='<div class="empty-state"><p>No agent history available</p></div>';return}
+    panel.innerHTML='';
+    var header=el('div',{className:'closable-header',style:'display:flex;justify-content:space-between;align-items:center;gap:8px'});
+    header.appendChild(el('h3',null,data.name+' '));header.querySelector('h3').appendChild(el('span',{className:'muted'},data.status));
+    var headerActions=el('div',{className:'inspector-controls'});
+    headerActions.appendChild(btn(app.agentMode==='auto'?'Following active':'Auto follow',{className:'close-btn'},setAgentAuto));
+    headerActions.appendChild(btn('Close',{className:'close-btn'},closeAgent));header.appendChild(headerActions);panel.appendChild(header);
+    if(data.model)panel.appendChild(el('div',{className:'meta'},'Model: '+data.model));
+    if(data.startedAt)panel.appendChild(el('div',{className:'meta'},'Started: '+data.startedAt.slice(0,19).replace('T',' ')));
+    if(data.completedAt)panel.appendChild(el('div',{className:'meta'},'Completed: '+data.completedAt.slice(0,19).replace('T',' ')));
+    if(data.summary)panel.appendChild(el('p',{className:'meta'},trunc(data.summary,200)));
+    if(data.error)panel.appendChild(el('p',{className:'error-text'},data.error));
+    if(data.currentTool)panel.appendChild(el('div',{className:'tool-row'},'Tool: '+data.currentTool+(data.currentToolArgs?' · '+trunc(data.currentToolArgs,120):'')));
+    var invocations=[];(data.steps||[]).forEach(function(step){(step.invocations||[]).forEach(function(inv){invocations.push({step:step,inv:inv,key:step.id+':'+inv.sequence})})});app.invocations=invocations;
+    if(invocations.length){
+      if(!app.selectedInvocation||!invocations.some(function(item){return item.key===app.selectedInvocation}))app.selectedInvocation=invocations[invocations.length-1].key;
       panel.appendChild(el('div',{className:'meta'},'Conversation history'));
-      var invList=el('div',{className:'invocation-list','aria-label':'Agent invocations'});
+      var list=el('div',{className:'invocation-list','aria-label':'Agent invocations'});
       invocations.forEach(function(item){
-        var label=item.step.label+' · '+item.inv.mode.replace('_',' ')+' #'+item.inv.sequence;
-        var ib=btn(label,{className:'invocation-btn'+(item.key===app.selectedInvocation?' selected':''),title:item.inv.status},function(){
-          app.selectedInvocation=item.key;app.agentMode='manual';
-          invList.querySelectorAll('.invocation-btn').forEach(function(node){node.classList.toggle('selected',node===ib)});
-          fetchTranscript(item.step.id,item.inv.sequence)
-        });
-        invList.appendChild(ib)
-      });
-      panel.appendChild(invList);
-      panel.appendChild(el('div',{id:'transcript-panel'},[el('div',{className:'empty-state'},'Loading conversation…')]));
-      var selected=invocations.find(function(item){return item.key===app.selectedInvocation})||invocations[invocations.length-1];
-      fetchTranscript(selected.step.id,selected.inv.sequence)
-    }else{
-      panel.appendChild(el('div',{className:'empty-state'},'No conversation captured for this agent yet'))
+        var files=item.inv.changedFileCount===undefined?'':' · '+item.inv.changedFileCount+' files';
+        var button=btn(item.step.label+' · '+item.inv.mode.replace('_',' ')+' #'+item.inv.sequence+files,{className:'invocation-btn'+(item.key===app.selectedInvocation?' selected':''),title:item.inv.status},function(){
+          app.selectedInvocation=item.key;app.agentMode='pinned';list.querySelectorAll('.invocation-btn').forEach(function(node){node.classList.toggle('selected',node===button)});renderInvocationViewer(item)
+        });list.appendChild(button)
+      });panel.appendChild(list);panel.appendChild(el('div',{id:'invocation-panel'}));
+      var selected=invocations.find(function(item){return item.key===app.selectedInvocation})||invocations[invocations.length-1];renderInvocationViewer(selected)
+    }else panel.appendChild(el('div',{className:'empty-state'},'No invocations captured for this agent'));
+    if(data.steps&&data.steps.length){
+      var details=el('details');details.appendChild(el('summary',null,'Steps ('+data.steps.length+')'));var listEl=el('ul',{className:'step-list'});
+      data.steps.forEach(function(step){var li=el('li',null,(step.startedAt?step.startedAt.slice(11,19)+' ':'')+step.label+(step.message?' · '+step.message:''));if(step.artifact)li.appendChild(artBtn(step.artifact));if(step.rawArtifact)li.appendChild(artBtn(step.rawArtifact));if(step.mutationArtifact)li.appendChild(artBtn(step.mutationArtifact));listEl.appendChild(li)});details.appendChild(listEl);panel.appendChild(details)
     }
-    if(data.steps&&data.steps.length>0){
-      var sum=el('details');var sumTitle=el('summary');sumTitle.textContent='Steps ('+data.steps.length+')';sum.appendChild(sumTitle);
-      var ul=el('ul',{className:'step-list'});
-      data.steps.forEach(function(s){
-        var li=el('li');
-        li.innerHTML='<span class="ts">'+(s.startedAt?esc(s.startedAt.slice(11,19)):'')+'</span> <b>'+esc(s.label)+'</b>'+(s.message?'<br><span class="muted">'+esc(s.message)+'</span>':'');
-        if(s.artifact){var ab=artBtn(s.artifact);li.appendChild(ab)}
-        if(s.rawArtifact){var rb=artBtn(s.rawArtifact);li.appendChild(rb)}
-        ul.appendChild(li)
-      });
-      sum.appendChild(ul);panel.appendChild(sum)
-    }
-  }).catch(function(){if(req===app.agentReq)panel.innerHTML='<div class="closable-header" style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px"><h3>'+esc(name)+'</h3><button class="close-btn" id="close-inspector">Close</button></div><p class="error-text">Failed to load agent details</p>';if(id('close-inspector'))id('close-inspector').addEventListener('click',closeAgent)})
+  }).catch(function(){if(req===app.agentReq)panel.innerHTML='<p class="error-text">Failed to load agent details</p>'})
+}
+function renderInvocationViewer(item){
+  var target=id('invocation-panel');if(!target)return;target.innerHTML='';
+  var controls=el('div',{className:'inspector-controls'});var tabs=el('div',{className:'inspector-tabs'});
+  var transcriptTab=btn('Transcript',{className:'close-btn inspector-tab'+(app.inspectorTab==='transcript'?' active':'')},function(){app.inspectorTab='transcript';renderInvocationViewer(item)});
+  var filesTab=btn('Files'+(item.inv.changedFileCount===undefined?'':' ('+item.inv.changedFileCount+')'),{className:'close-btn inspector-tab'+(app.inspectorTab==='files'?' active':'')},function(){app.inspectorTab='files';renderInvocationViewer(item)});
+  tabs.appendChild(transcriptTab);tabs.appendChild(filesTab);controls.appendChild(tabs);
+  if(app.inspectorTab==='transcript'){
+    var search=el('input',{className:'transcript-search',type:'search',placeholder:'Search transcript','aria-label':'Search transcript',value:app.transcriptQuery});search.value=app.transcriptQuery;
+    search.addEventListener('input',function(){app.transcriptQuery=this.value;if(app.currentTranscript)renderTranscript(id('invocation-content'),app.currentTranscript)});controls.appendChild(search)
+  }
+  target.appendChild(controls);target.appendChild(el('div',{id:'invocation-content'},[el('div',{className:'empty-state'},'Loading…')]));
+  if(app.inspectorTab==='files')fetchDiff(item.step.id,item.inv.sequence);else fetchTranscript(item.step.id,item.inv.sequence)
 }
 function fetchTranscript(stepId,sequence){
-  app.transcriptReq++;var req=app.transcriptReq;var target=id('transcript-panel');
-  if(!target)return;
-  target.innerHTML='<div class="empty-state">Loading conversation…</div>';
-  fetch('/api/steps/'+encodeURIComponent(stepId)+'/invocations/'+sequence+'/transcript',{cache:'no-store'}).then(function(r){if(!r.ok)throw new Error('HTTP '+r.status);return r.json()}).then(function(data){
-    if(req!==app.transcriptReq)return;renderTranscript(target,data)
-  }).catch(function(){if(req===app.transcriptReq&&target)target.innerHTML='<div class="empty-state">Conversation is not available yet</div>'})
+  app.transcriptReq++;var req=app.transcriptReq;var target=id('invocation-content');if(!target)return;
+  fetch(runApi('/steps/'+encodeURIComponent(stepId)+'/invocations/'+sequence+'/transcript'),{cache:'no-store'}).then(function(r){if(!r.ok)throw new Error('HTTP '+r.status);return r.json()}).then(function(data){if(req!==app.transcriptReq)return;app.currentTranscript=data;renderTranscript(target,data)}).catch(function(){if(req===app.transcriptReq&&target)target.innerHTML='<div class="empty-state">Conversation is not available</div>'})
+}
+function appendHighlighted(container,text){
+  var query=app.transcriptQuery.trim();if(!query){container.appendChild(document.createTextNode(text));return}
+  var lower=text.toLowerCase(),needle=query.toLowerCase(),offset=0,index;
+  while((index=lower.indexOf(needle,offset))>=0){if(index>offset)container.appendChild(document.createTextNode(text.slice(offset,index)));container.appendChild(el('mark',null,text.slice(index,index+query.length)));offset=index+query.length}
+  if(offset<text.length)container.appendChild(document.createTextNode(text.slice(offset)))
 }
 function renderTranscript(target,data){
-  var previous=target.querySelector('.transcript');var open={};var previousScroll=0;var followBottom=true;
-  if(previous){previous.querySelectorAll('details[open]').forEach(function(node){open[node.getAttribute('data-detail-key')]=true});previousScroll=previous.scrollTop;followBottom=previous.scrollHeight-previous.scrollTop-previous.clientHeight<40}
-  target.innerHTML='';
-  if(data.truncated)target.appendChild(el('div',{className:'transcript-note'},'Some conversation content was truncated for safe storage.'));
-  var transcript=el('div',{className:'transcript'});var results={};var calls={};
-  (data.messages||[]).forEach(function(m){(m.content||[]).forEach(function(part){if(part.type==='toolCall'&&part.toolCallId)calls[part.toolCallId]=true});if(m.role==='toolResult'&&m.toolCallId)results[m.toolCallId]=m});
-  (data.messages||[]).forEach(function(m,messageIndex){
-    if(m.role==='toolResult'&&m.toolCallId&&calls[m.toolCallId])return;
-    var box=el('article',{className:'message '+(m.role==='toolResult'?'tool-result':m.role)+(m.isError?' error':'')});
-    box.appendChild(el('div',{className:'message-role'},m.role==='toolResult'?'tool result':m.role));
-    renderMessageParts(box,m.content||[],results,'message-'+messageIndex);
-    if(m.errorMessage)box.appendChild(el('div',{className:'error-text'},m.errorMessage));
-    transcript.appendChild(box)
+  target.innerHTML='';if(data.truncated)target.appendChild(el('div',{className:'transcript-note'},'Some conversation content was truncated.'));
+  var transcript=el('div',{className:'transcript'});var results={},calls={};
+  (data.messages||[]).forEach(function(message){(message.content||[]).forEach(function(part){if(part.type==='toolCall'&&part.toolCallId)calls[part.toolCallId]=true});if(message.role==='toolResult'&&message.toolCallId)results[message.toolCallId]=message});
+  (data.messages||[]).forEach(function(message,messageIndex){
+    if(message.role==='toolResult'&&message.toolCallId&&calls[message.toolCallId])return;
+    var box=el('article',{className:'message '+(message.role==='toolResult'?'tool-result':message.role)+(message.isError?' error':'')});box.appendChild(el('div',{className:'message-role'},message.role==='toolResult'?'tool result':message.role));
+    renderMessageParts(box,message.content||[],results,'message-'+messageIndex);if(message.errorMessage)box.appendChild(el('div',{className:'error-text'},message.errorMessage));
+    if(!app.transcriptQuery||box.textContent.toLowerCase().indexOf(app.transcriptQuery.toLowerCase())>=0)transcript.appendChild(box)
   });
-  if(!transcript.childNodes.length)transcript.appendChild(el('div',{className:'empty-state'},'No messages captured'));
-  target.appendChild(transcript);transcript.querySelectorAll('details').forEach(function(node){if(open[node.getAttribute('data-detail-key')])node.open=true});transcript.scrollTop=followBottom?transcript.scrollHeight:previousScroll
+  if(!transcript.childNodes.length)transcript.appendChild(el('div',{className:'empty-state'},app.transcriptQuery?'No transcript matches':'No messages captured'));target.appendChild(transcript);transcript.scrollTop=transcript.scrollHeight
 }
 function renderMessageParts(container,parts,results,keyPrefix){
   parts.forEach(function(part,partIndex){
-    if(part.type==='text')container.appendChild(el('div',{className:'message-content'},part.text+(part.truncated?'\\n[content truncated]':'')));
-    else if(part.type==='thinking'){
-      var thinking=el('details',{className:'thinking','data-detail-key':keyPrefix+'-thinking-'+partIndex});thinking.appendChild(el('summary',null,'Thinking'));
-      thinking.appendChild(el('div',{className:'message-content'},part.text+(part.truncated?'\\n[content truncated]':'')));container.appendChild(thinking)
-    }else if(part.type==='toolCall'){
-      var tool=el('details',{className:'tool-call','data-detail-key':'tool-'+part.toolCallId});tool.appendChild(el('summary',null,part.toolName||'tool'));
-      tool.appendChild(el('div',{className:'message-content'},part.arguments||'{}'));
-      var result=results[part.toolCallId];if(result){
-        var resultBox=el('div',{className:'message tool-result'+(result.isError?' error':'')});
-        resultBox.appendChild(el('div',{className:'message-role'},result.isError?'tool error':'tool result'));
-        renderMessageParts(resultBox,result.content||[],{},keyPrefix+'-result-'+partIndex);tool.appendChild(resultBox)
-      }
-      container.appendChild(tool)
-    }else if(part.type==='image')container.appendChild(el('div',{className:'muted'},'[image '+(part.mimeType||'')+']'))
+    if(part.type==='text'){var text=el('div',{className:'message-content'});appendHighlighted(text,part.text+(part.truncated?'\\n[content truncated]':''));container.appendChild(text)}
+    else if(part.type==='thinking'){var thinking=el('details',{className:'thinking','data-detail-key':keyPrefix+'-thinking-'+partIndex});thinking.appendChild(el('summary',null,'Thinking'));var thought=el('div',{className:'message-content'});appendHighlighted(thought,part.text+(part.truncated?'\\n[content truncated]':''));thinking.appendChild(thought);container.appendChild(thinking)}
+    else if(part.type==='toolCall'){var tool=el('details',{className:'tool-call','data-detail-key':'tool-'+part.toolCallId});tool.appendChild(el('summary',null,part.toolName||'tool'));var args=el('div',{className:'message-content'});appendHighlighted(args,part.arguments||'{}');tool.appendChild(args);var result=results[part.toolCallId];if(result){var resultBox=el('div',{className:'message tool-result'+(result.isError?' error':'')});resultBox.appendChild(el('div',{className:'message-role'},result.isError?'tool error':'tool result'));renderMessageParts(resultBox,result.content||[],{},keyPrefix+'-result-'+partIndex);tool.appendChild(resultBox)}container.appendChild(tool)}
+    else if(part.type==='image')container.appendChild(el('div',{className:'muted'},'[image '+(part.mimeType||'')+']'))
   })
 }
+function fetchDiff(stepId,sequence){
+  app.diffReq++;var req=app.diffReq;var target=id('invocation-content');if(!target)return;
+  fetch(runApi('/steps/'+encodeURIComponent(stepId)+'/invocations/'+sequence+'/diff'),{cache:'no-store'}).then(function(r){if(!r.ok)throw new Error('HTTP '+r.status);return r.json()}).then(function(data){if(req===app.diffReq)renderDiff(target,data)}).catch(function(){if(req===app.diffReq)target.innerHTML='<div class="empty-state">File diff is not available for this invocation</div>'})
+}
+function patchSections(patch){
+  var lines=patch.split('\\n'),sections=[],current=[];lines.forEach(function(line){if(line.indexOf('diff --git ')===0&&current.length){sections.push(current.join('\\n'));current=[]}current.push(line)});if(current.length&&current.some(function(line){return line.length}))sections.push(current.join('\\n'));return sections
+}
+function diffPath(file){return file.status.charAt(0)==='D'?(file.oldPath||''):(file.newPath||file.oldPath||'')}
+function renderDiff(target,data){
+  target.innerHTML='';var metadata=data.metadata||{};
+  if(metadata.status!=='available'){target.appendChild(el('div',{className:'empty-state'},metadata.unavailableReason||'Textual diff is unavailable'));return}
+  if(data.patchTruncated)target.appendChild(el('div',{className:'transcript-note'},'Patch preview was truncated. The persisted artifact remains authoritative.'));
+  if(!metadata.files||!metadata.files.length){target.appendChild(el('div',{className:'empty-state'},'No file changes in this invocation'));return}
+  if(app.selectedDiffFile>=metadata.files.length)app.selectedDiffFile=0;var layout=el('div',{className:'diff-layout'}),tree=el('div',{className:'diff-files'}),viewer=el('div',{className:'unified-diff','aria-label':'Unified diff'}),sections=patchSections(data.patch||'');
+  function show(index){app.selectedDiffFile=index;tree.querySelectorAll('.diff-file').forEach(function(button,i){button.classList.toggle('selected',i===index)});viewer.innerHTML='';var file=metadata.files[index];if(file.binary){viewer.appendChild(el('span',{className:'diff-line meta'},'Binary change · '+file.status+' · '+diffPath(file)));return}var section=sections[index]||'';if(!section){viewer.appendChild(el('span',{className:'diff-line meta'},'No textual patch for '+diffPath(file)));return}section.split('\\n').forEach(function(line){var cls='diff-line';if(line.indexOf('@@')===0)cls+=' hunk';else if(line.charAt(0)==='+'&&line.indexOf('+++')!==0)cls+=' add';else if(line.charAt(0)==='-'&&line.indexOf('---')!==0)cls+=' del';else if(line.indexOf('diff --git')===0||line.indexOf('index ')===0||line.indexOf('---')===0||line.indexOf('+++')===0)cls+=' meta';viewer.appendChild(el('span',{className:cls},line+'\\n'))})}
+  metadata.files.forEach(function(file,index){var button=btn(file.status+' '+diffPath(file),{className:'diff-file'+(index===app.selectedDiffFile?' selected':'')},function(){show(index)});tree.appendChild(button)});layout.appendChild(tree);layout.appendChild(viewer);target.appendChild(layout);show(app.selectedDiffFile)
+}
 function closeAgent(){
-  app.selectedAgent=null;app.selectedInvocation=null;app.agentMode='closed';app.lastFetchedAgent=null;app.lastTranscriptRevision=-1;app.transcriptReq++;
-  var panel=id('agent-inspector');panel.hidden=true;
-  id('agent-grid').querySelectorAll('.agent-card').forEach(function(c){c.className='agent-card';c.setAttribute('aria-pressed','false')});
-  var agentsEl=id('agents');if(agentsEl&&document.activeElement&&agentsEl.contains(document.activeElement)){} // don't force focus
+  app.selectedAgent=null;app.selectedInvocation=null;app.agentMode='closed';app.lastFetchedAgent=null;app.lastTranscriptRevision=-1;app.currentTranscript=null;app.agentReq++;app.transcriptReq++;app.diffReq++;
+  var panel=id('agent-inspector');panel.hidden=true;panel.innerHTML='';id('agents').querySelector('.agents-layout').classList.remove('show-inspector');id('agent-grid').querySelectorAll('.agent-card').forEach(function(card){card.className='agent-card';card.setAttribute('aria-pressed','false')})
 }`;

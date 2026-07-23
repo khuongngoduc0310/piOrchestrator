@@ -1,8 +1,9 @@
 import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
-import type { AgentModelUpdates, AgentName, OrchestratorConfig, ThinkingLevel, WorkflowState } from "./types.js";
+import type { AgentModelUpdates, AgentName, OrchestratorConfig, ThinkingLevel, WorkflowRequest, WorkflowState } from "./types.js";
 import { OrchestratorRuntime } from "./orchestrator-runtime.js";
 import { runWorkflow } from "./orchestrator-workflow.js";
 import type { OrchestratorDependencies } from "./orchestrator-contracts.js";
+import { resumeWorkflow } from "./orchestrator-resume.js";
 
 export type { CheckRunner, OrchestratorDependencies } from "./orchestrator-contracts.js";
 
@@ -16,12 +17,25 @@ export class Orchestrator {
   getState(): WorkflowState | undefined { return this.runtime.state; }
   isRunning(): boolean { return this.runtime.activeRun !== undefined; }
 
-  start(request: string, ctx: ExtensionCommandContext): Promise<void> {
+  start(input: WorkflowRequest, ctx: ExtensionCommandContext): Promise<void> {
     if (this.runtime.activeRun) return Promise.reject(new Error("A workflow is already running"));
     if (this.runtime.settingsUpdateActive) return Promise.reject(new Error("Agent model settings are being validated and saved"));
     const controller = new AbortController();
     this.runtime.controller = controller;
-    const running = runWorkflow(this.runtime, request, ctx, controller);
+    const running = runWorkflow(this.runtime, input, ctx, controller);
+    const tracked = running.finally(() => {
+      if (this.runtime.activeRun === tracked) this.runtime.activeRun = undefined;
+    });
+    this.runtime.activeRun = tracked;
+    return tracked;
+  }
+
+  resume(runId: string, ctx: ExtensionCommandContext): Promise<void> {
+    if (this.runtime.activeRun) return Promise.reject(new Error("A workflow is already running"));
+    if (this.runtime.settingsUpdateActive) return Promise.reject(new Error("Agent model settings are being validated and saved"));
+    const controller = new AbortController();
+    this.runtime.controller = controller;
+    const running = resumeWorkflow(this.runtime, runId, ctx, controller);
     const tracked = running.finally(() => {
       if (this.runtime.activeRun === tracked) this.runtime.activeRun = undefined;
     });

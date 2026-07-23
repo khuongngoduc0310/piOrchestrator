@@ -47,6 +47,10 @@ export interface AgentInvocationRecord {
   startedAt: string;
   completedAt?: string;
   transcriptArtifact?: string;
+  fileDiffArtifact?: string;
+  filePatchArtifact?: string;
+  fileDiffError?: string;
+  changedFileCount?: number;
   messageCount: number;
   truncated: boolean;
 }

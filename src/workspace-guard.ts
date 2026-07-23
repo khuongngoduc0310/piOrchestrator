@@ -4,7 +4,7 @@ import { createReadStream } from "node:fs";
 import { lstat, opendir, readlink, realpath } from "node:fs/promises";
 import path from "node:path";
 import { promisify } from "node:util";
-import type { AgentName, PlannerOutput } from "./types.js";
+import type { AgentName, PlannerOutput, WorkflowRoute } from "./types.js";
 import { normalizeRepositoryPath } from "./path-validation.js";
 import { ROLE_MUTATION_KINDS, type MutationKind } from "./role-capabilities.js";
 
@@ -31,6 +31,43 @@ export interface WorkspaceSnapshot {
   readonly files: Readonly<Record<string, WorkspaceFileSnapshot>>;
   readonly fileCount: number;
   readonly totalBytes: number;
+}
+
+function canonicalJson(value: unknown, seen = new Set<object>()): string {
+  if (value === null || typeof value === "string" || typeof value === "boolean") return JSON.stringify(value);
+  if (typeof value === "number" && Number.isFinite(value)) return JSON.stringify(value);
+  if (Array.isArray(value)) {
+    if (seen.has(value)) throw new WorkspaceGuardError("cannot hash a cyclic value");
+    seen.add(value);
+    const result = `[${value.map(item => canonicalJson(item, seen)).join(",")}]`;
+    seen.delete(value);
+    return result;
+  }
+  if (typeof value === "object") {
+    if (seen.has(value)) throw new WorkspaceGuardError("cannot hash a cyclic value");
+    seen.add(value);
+    const object = value as Record<string, unknown>;
+    const entries = Object.keys(object).sort().map(key => {
+      if (object[key] === undefined) throw new WorkspaceGuardError("cannot hash undefined values");
+      return `${JSON.stringify(key)}:${canonicalJson(object[key], seen)}`;
+    });
+    seen.delete(value);
+    return `{${entries.join(",")}}`;
+  }
+  throw new WorkspaceGuardError(`cannot hash ${typeof value} values`);
+}
+
+/** Hash a JSON-compatible value independently of object insertion order. */
+export function canonicalSha256(value: unknown): string {
+  return createHash("sha256").update(canonicalJson(value), "utf8").digest("hex");
+}
+
+/** Stable content identity; the machine-specific absolute root is intentionally excluded. */
+export function workspaceSnapshotDigest(snapshot: WorkspaceSnapshot): string {
+  return canonicalSha256({
+    kind: snapshot.kind,
+    files: Object.keys(snapshot.files).sort().map(file => ({ file, ...snapshot.files[file] }))
+  });
 }
 
 export interface WorkspaceDelta {
@@ -81,7 +118,16 @@ export function isDocumentationPath(file: string): boolean {
 
 /** Derive exact file sets from plan task declarations; no directory or glob expansion occurs. */
 export function deriveMutationPathScope(plan: PlannerOutput): MutationPathScope {
+  if (!["implementation", "bug_fix", "quick_implementation", "tests_only", "documentation_only"].includes(plan.route)) {
+    throw new WorkspaceGuardError(`Workflow route ${JSON.stringify(plan.route)} does not authorize mutations`);
+  }
   const planFiles = normalizedUnique(plan.tasks.flatMap(task => task.files));
+  if (plan.route === "tests_only" && planFiles.some(file => !isTestPath(file))) {
+    throw new WorkspaceGuardError("tests_only plans may contain only test-classified files");
+  }
+  if (plan.route === "documentation_only" && planFiles.some(file => !isDocumentationPath(file))) {
+    throw new WorkspaceGuardError("documentation_only plans may contain only documentation-classified files");
+  }
   return Object.freeze({
     planFiles: Object.freeze(planFiles),
     testFiles: Object.freeze(planFiles.filter(isTestPath)),
@@ -99,7 +145,20 @@ export function mutationPathsForKind(scope: MutationPathScope, kind: MutationKin
 }
 
 export function deriveRoleMutationPaths(role: AgentName, plan: PlannerOutput): readonly string[] {
+  if (!routeAuthorizesRole(plan.route, role)) {
+    throw new WorkspaceGuardError(`Workflow route ${JSON.stringify(plan.route)} does not authorize ${role} mutations`);
+  }
   return mutationPathsForKind(deriveMutationPathScope(plan), ROLE_MUTATION_KINDS[role]);
+}
+
+function routeAuthorizesRole(route: WorkflowRoute, role: AgentName): boolean {
+  if (ROLE_MUTATION_KINDS[role] === "none") return true;
+  if (route === "tests_only") return role === "tester";
+  if (route === "documentation_only") return role === "documenter";
+  if (route === "implementation" || route === "bug_fix" || route === "quick_implementation") {
+    return role === "tester" || role === "builder" || role === "documenter";
+  }
+  return false;
 }
 
 function positiveBound(value: number | undefined, fallback: number, name: string): number {

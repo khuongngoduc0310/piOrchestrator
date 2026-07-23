@@ -6,10 +6,13 @@ import { afterEach, describe, expect, it } from "vitest";
 import type { PlannerOutput } from "./types.js";
 import {
   compareWorkspaceSnapshots,
+  canonicalSha256,
   createWorkspaceSnapshot,
   deriveMutationPathScope,
+  deriveRoleMutationPaths,
   isDocumentationPath,
   isTestPath,
+  workspaceSnapshotDigest,
   validateReportedFileSet,
   validateRoleDelta
 } from "./workspace-guard.js";
@@ -28,6 +31,7 @@ afterEach(async () => {
 
 function plan(files: string[]): PlannerOutput {
   return {
+    route: "implementation",
     summary: "guarded change",
     assumptions: [],
     acceptanceCriteria: ["works"],
@@ -37,6 +41,11 @@ function plan(files: string[]): PlannerOutput {
 }
 
 describe("mutation path scopes", () => {
+  it("rejects mutation scope derivation for review-only plans", () => {
+    expect(() => deriveMutationPathScope({ ...plan(["src/code.ts"]), route: "review_only" }))
+      .toThrow("does not authorize mutations");
+  });
+
   it("normalizes, deduplicates, and conservatively classifies exact planned files", () => {
     const scope = deriveMutationPathScope(plan([
       "src\\feature.ts",
@@ -71,6 +80,20 @@ describe("mutation path scopes", () => {
     expect(() => validateRoleDelta("reviewer", planned, delta)).toThrow("outside its none scope");
   });
 
+  it("enforces specialized route and role scopes", () => {
+    const testsPlan = { ...plan(["test/code.test.ts"]), route: "tests_only" as const };
+    expect(deriveRoleMutationPaths("tester", testsPlan)).toEqual(["test/code.test.ts"]);
+    expect(() => deriveRoleMutationPaths("builder", testsPlan)).toThrow("does not authorize builder");
+    expect(() => deriveMutationPathScope({ ...testsPlan, tasks: [{ ...testsPlan.tasks[0], files: ["src/code.ts"] }] }))
+      .toThrow("only test-classified files");
+
+    const docsPlan = { ...plan(["README.md"]), route: "documentation_only" as const };
+    expect(deriveRoleMutationPaths("documenter", docsPlan)).toEqual(["README.md"]);
+    expect(() => deriveRoleMutationPaths("tester", docsPlan)).toThrow("does not authorize tester");
+    expect(() => deriveMutationPathScope({ ...docsPlan, tasks: [{ ...docsPlan.tasks[0], files: ["src/code.ts"] }] }))
+      .toThrow("only documentation-classified files");
+  });
+
   it("requires exact normalized reported and actual sets", () => {
     expect(() => validateReportedFileSet(["src\\a.ts", "src/b.ts"], ["src/b.ts", "src/a.ts"])).not.toThrow();
     expect(() => validateReportedFileSet(["src/a.ts"], ["src/a.ts", "src/b.ts"])).toThrow("unreported: src/b.ts");
@@ -82,6 +105,22 @@ describe("mutation path scopes", () => {
 });
 
 describe("workspace snapshots", () => {
+  it("uses canonical hashes and stable snapshot digests", () => {
+    expect(canonicalSha256({ b: 2, a: 1 })).toBe(canonicalSha256({ a: 1, b: 2 }));
+    const snapshot = {
+      root: "C:/first",
+      kind: "filesystem" as const,
+      files: { "a.txt": { hash: "content", mode: 0o644 } },
+      fileCount: 1,
+      totalBytes: 7
+    };
+    expect(workspaceSnapshotDigest(snapshot)).toBe(workspaceSnapshotDigest({ ...snapshot, root: "D:/other" }));
+    expect(workspaceSnapshotDigest(snapshot)).not.toBe(workspaceSnapshotDigest({
+      ...snapshot,
+      files: { "a.txt": { hash: "changed", mode: 0o644 } }
+    }));
+  });
+
   it("compares content hashes, additions, and deletions", async () => {
     const root = await temporaryDirectory("workspace-guard-fs-");
     await mkdir(path.join(root, "src"));

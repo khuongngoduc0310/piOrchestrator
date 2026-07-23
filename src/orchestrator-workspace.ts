@@ -128,7 +128,7 @@ export async function validateAgentMutation<A extends AgentName>(
     violations.push(messageOf(error));
   }
   const artifact = store.artifactName({ sequence: step.sequence, stage: step.stage, agent, attempt: step.attempt, revision: step.revision, kind: "mutation" });
-  await store.saveJson(artifact, { role: agent, policy: mutation, allowed: plan ? deriveRoleMutationPaths(agent, plan) : [], reported, actual: delta, violations });
+  step.mutationArtifact = await store.saveJson(artifact, { role: agent, policy: mutation, allowed: plan ? deriveRoleMutationPaths(agent, plan) : [], reported, actual: delta, violations });
   if (violations.length > 0) throw new MutationBoundaryError(violations.join("; "));
   for (const file of delta.changedFiles) runtime.validatedChangedFiles.add(file);
 }

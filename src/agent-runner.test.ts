@@ -36,6 +36,28 @@ function assistantEvent(
 }
 
 describe("PiSdkAgentExecutor", () => {
+  it("preflights only agents required by the selected route", async () => {
+    const config = structuredClone(DEFAULT_CONFIG);
+    config.agents.builder.model = "invalid/model";
+    const executor = new PiSdkAgentExecutor({
+      runtime: async () => runtime,
+      resolveModel: agentConfig => agentConfig.model === "invalid/model"
+        ? { model: undefined, thinkingLevel: undefined, warning: undefined, error: "invalid model" }
+        : resolved
+    });
+
+    await expect(executor.preflight(
+      config,
+      process.cwd(),
+      path.resolve("."),
+      new AbortController().signal,
+      100,
+      ["explorer", "planner", "reviewer"]
+    )).resolves.toBeUndefined();
+    await expect(executor.preflight(config, process.cwd(), path.resolve(".")))
+      .rejects.toThrow("Invalid model for builder");
+  });
+
   it("normalizes Pi user, assistant, reasoning, tool call, and tool result messages", () => {
     const transcript = normalizeAgentTranscript([
       { role: "user", content: "Find the issue", timestamp: 1 },

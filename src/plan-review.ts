@@ -25,7 +25,11 @@ function topologicalSort(tasks: PlanTask[]): PlanTask[] {
 export function formatPlanForReview(plan: PlannerOutput): string {
   const lines: string[] = [];
 
-  lines.push("# Implementation Plan");
+  const title = plan.route === "review_only" ? "Review" : plan.route === "investigation_only" ? "Investigation" : plan.route === "planning_only" ? "Planning" : "Implementation";
+  lines.push(`# ${title} Plan`);
+  lines.push("");
+
+  lines.push(`**Route:** ${plan.route} (selected by user)`);
   lines.push("");
 
   lines.push("## Summary");

@@ -246,6 +246,7 @@ export function renderViewModelLines(vm: OrchestratorViewModel, theme: WidgetThe
       lines.push(row(theme, D(truncate(lastLine.replace(/\n/g, "↵"), INNER - 4))));
     }
     lines.push(row(theme, `${M("Request")} ${truncate(run.request, INNER - 10)}`));
+    if (run.route) lines.push(row(theme, `${M("Route")}   ${A(run.route)}`));
     const recent = vm.recentSteps.slice(-4);
     if (recent.length > 0) {
       const recentLine = recent.map(s =>
@@ -274,6 +275,10 @@ export function renderViewModelLines(vm: OrchestratorViewModel, theme: WidgetThe
       lines.push(row(theme, `${A(String(vm.config.checkCount))}/${A(String(vm.config.checkCount))} ${S("checks passed")} · ${S("workflow completed")}`));
     }
     if (run.warning) lines.push(row(theme, `${W("⚠")} ${truncate(run.warning, INNER - 5)}`));
+    if (run.checkpoint && run.resumeCommand && vm.mode !== "completed") {
+      lines.push(row(theme, `${M("Checkpoint")} ${L(run.checkpoint.cursor)} · ${L(run.resumeCommand)}`));
+    }
+    if (run.resumeBlockedReason) lines.push(row(theme, `${W("Resume unavailable")} ${truncate(run.resumeBlockedReason, INNER - 21)}`));
     if (run.dashboardUrl) lines.push(row(theme, `${M("Dashboard")}  ${L(truncate(run.dashboardUrl, INNER - 14))}`));
     lines.push(row(theme, `${M("Inspect")}  ${L(`/orchestrator-inspect ${run.id.slice(0, 8)}`)}`));
     lines.push(row(theme, `${M("New run")}   ${L("/orchestrate")} <request>`));
@@ -314,6 +319,6 @@ const UI_PHASE_LABELS = [
   "Baseline",
   "Tests",
   "Implementation",
-  "Code review",
+  "Review",
   "Finalize"
 ];

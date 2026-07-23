@@ -1,6 +1,6 @@
 import { createServer, type Server, type ServerResponse } from "node:http";
 import path from "node:path";
-import type { AgentInspection, AgentName, AgentTranscript, ArtifactContent, OrchestratorViewModel } from "./types.js";
+import type { AgentInspection, AgentName, AgentTranscript, ArtifactContent, DashboardRunHistoryItem, InvocationDiffView, OrchestratorViewModel } from "./types.js";
 import { DASHBOARD_HTML } from "./dashboard-page.js";
 
 export interface DashboardDataProvider {
@@ -8,11 +8,22 @@ export interface DashboardDataProvider {
   getAgentInspection(name: AgentName): Promise<AgentInspection | undefined>;
   getAgentTranscript?(stepId: string, invocation: number): Promise<AgentTranscript | undefined>;
   readArtifact(name: string): Promise<ArtifactContent | undefined>;
+  listRuns?(): Promise<DashboardRunHistoryItem[]>;
+  getRunViewModel?(runId: string): Promise<OrchestratorViewModel | undefined>;
+  getRunAgentInspection?(runId: string, name: AgentName): Promise<AgentInspection | undefined>;
+  getRunAgentTranscript?(runId: string, stepId: string, invocation: number): Promise<AgentTranscript | undefined>;
+  getInvocationDiff?(runId: string, stepId: string, invocation: number): Promise<InvocationDiffView | undefined>;
+  readRunArtifact?(runId: string, name: string): Promise<ArtifactContent | undefined>;
 }
 
 const ARTIFACT_PATH_RE = /^\/api\/artifacts\/(.+)$/;
 const AGENT_PATH_RE = /^\/api\/agents\/([a-z]+)$/;
 const TRANSCRIPT_PATH_RE = /^\/api\/steps\/(step-\d+)\/invocations\/(\d+)\/transcript$/;
+const RUN_STATE_RE = /^\/api\/runs\/([^/]+)\/state$/;
+const RUN_AGENT_RE = /^\/api\/runs\/([^/]+)\/agents\/([a-z]+)$/;
+const RUN_TRANSCRIPT_RE = /^\/api\/runs\/([^/]+)\/steps\/(step-\d+)\/invocations\/(\d+)\/transcript$/;
+const RUN_DIFF_RE = /^\/api\/runs\/([^/]+)\/steps\/(step-\d+)\/invocations\/(\d+)\/diff$/;
+const RUN_ARTIFACT_RE = /^\/api\/runs\/([^/]+)\/artifacts\/([^/]+)$/;
 
 export class DashboardServer {
   private clients = new Set<ServerResponse>();
@@ -35,14 +46,15 @@ export class DashboardServer {
         return;
       }
       const method = req.method;
-      const url = req.url ?? "/";
+      const url = new URL(req.url ?? "/", "http://localhost");
+      const pathname = url.pathname;
       try {
-        if (method === "GET" && url === "/api/state") {
+        if (method === "GET" && pathname === "/api/state") {
           res.setHeader("content-type", "application/json; charset=utf-8");
           res.end(JSON.stringify(this.provider.getViewModel() ?? this.lastState ?? null));
           return;
         }
-        if (method === "GET" && url === "/events") {
+        if (method === "GET" && pathname === "/events") {
           res.writeHead(200, {
             "content-type": "text/event-stream; charset=utf-8",
             "cache-control": "no-cache, no-store",
@@ -59,14 +71,57 @@ export class DashboardServer {
           res.on("error", remove);
           return;
         }
-        if (method === "GET" && (url === "/" || url === "/index.html")) {
+        if (method === "GET" && (pathname === "/" || pathname === "/index.html")) {
           res.setHeader("content-type", "text/html; charset=utf-8");
           res.setHeader("content-security-policy", "default-src 'self'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; connect-src 'self'");
           res.end(DASHBOARD_HTML);
           return;
         }
         if (method === "GET") {
-          const transcriptMatch = url.match(TRANSCRIPT_PATH_RE);
+          if (pathname === "/api/runs") {
+            res.setHeader("content-type", "application/json; charset=utf-8");
+            res.end(JSON.stringify(await this.provider.listRuns?.() ?? []));
+            return;
+          }
+          const runStateMatch = pathname.match(RUN_STATE_RE);
+          if (runStateMatch) {
+            const data = await this.provider.getRunViewModel?.(decodeURIComponent(runStateMatch[1]));
+            if (!data) return notFound(res);
+            res.setHeader("content-type", "application/json; charset=utf-8");
+            res.end(JSON.stringify(data));
+            return;
+          }
+          const runTranscriptMatch = pathname.match(RUN_TRANSCRIPT_RE);
+          if (runTranscriptMatch) {
+            const data = await this.provider.getRunAgentTranscript?.(decodeURIComponent(runTranscriptMatch[1]), runTranscriptMatch[2], Number(runTranscriptMatch[3]));
+            if (!data) return notFound(res);
+            res.setHeader("content-type", "application/json; charset=utf-8");
+            res.end(JSON.stringify(data));
+            return;
+          }
+          const runDiffMatch = pathname.match(RUN_DIFF_RE);
+          if (runDiffMatch) {
+            const data = await this.provider.getInvocationDiff?.(decodeURIComponent(runDiffMatch[1]), runDiffMatch[2], Number(runDiffMatch[3]));
+            if (!data) return notFound(res);
+            res.setHeader("content-type", "application/json; charset=utf-8");
+            res.end(JSON.stringify(data));
+            return;
+          }
+          const runAgentMatch = pathname.match(RUN_AGENT_RE);
+          if (runAgentMatch) {
+            const data = await this.provider.getRunAgentInspection?.(decodeURIComponent(runAgentMatch[1]), runAgentMatch[2] as AgentName);
+            res.setHeader("content-type", "application/json; charset=utf-8");
+            res.end(JSON.stringify(data ?? null));
+            return;
+          }
+          const runArtifactMatch = pathname.match(RUN_ARTIFACT_RE);
+          if (runArtifactMatch) {
+            const data = await this.provider.readRunArtifact?.(decodeURIComponent(runArtifactMatch[1]), decodeURIComponent(runArtifactMatch[2]));
+            if (!data) return notFound(res);
+            sendArtifact(res, data);
+            return;
+          }
+          const transcriptMatch = pathname.match(TRANSCRIPT_PATH_RE);
           if (transcriptMatch) {
             const data = await this.provider.getAgentTranscript?.(transcriptMatch[1], Number(transcriptMatch[2]));
             if (!data) {
@@ -78,14 +133,14 @@ export class DashboardServer {
             res.end(JSON.stringify(data));
             return;
           }
-          const agentMatch = url.match(AGENT_PATH_RE);
+          const agentMatch = pathname.match(AGENT_PATH_RE);
           if (agentMatch) {
             res.setHeader("content-type", "application/json; charset=utf-8");
             const data = await this.provider.getAgentInspection(agentMatch[1] as AgentName);
             res.end(JSON.stringify(data ?? null));
             return;
           }
-          const artMatch = url.match(ARTIFACT_PATH_RE);
+          const artMatch = pathname.match(ARTIFACT_PATH_RE);
           if (artMatch) {
             const decoded = decodeURIComponent(artMatch[1]);
             const artName = path.basename(decoded);
@@ -95,10 +150,7 @@ export class DashboardServer {
               res.end("Not found");
               return;
             }
-            res.setHeader("content-type", data.isJson ? "application/json; charset=utf-8" : "text/plain; charset=utf-8");
-            if (data.size !== undefined) res.setHeader("x-artifact-size", String(data.size));
-            if (data.truncated !== undefined) res.setHeader("x-artifact-truncated", String(data.truncated));
-            res.end(data.text);
+            sendArtifact(res, data);
             return;
           }
         }
@@ -169,6 +221,18 @@ export class DashboardServer {
       }
     }
   }
+}
+
+function notFound(res: ServerResponse): void {
+  res.statusCode = 404;
+  res.end("Not found");
+}
+
+function sendArtifact(res: ServerResponse, data: ArtifactContent): void {
+  res.setHeader("content-type", data.isJson ? "application/json; charset=utf-8" : "text/plain; charset=utf-8");
+  res.setHeader("x-artifact-size", String(data.size));
+  res.setHeader("x-artifact-truncated", String(data.truncated));
+  res.end(data.text);
 }
 
 function isLocalDashboardRequest(host: string | undefined, origin: string | undefined): boolean {

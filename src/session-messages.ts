@@ -1,4 +1,4 @@
-import type { BuilderOutput, CheckResult, CompletionSummary, DebuggerOutput, DocumenterOutput, PlannerOutput, ReviewApprovalSource, ReviewOutput } from "./types.js";
+import type { BuilderOutput, CheckResult, CompletionSummary, DebuggerOutput, DocumenterOutput, PlannerOutput, ReviewApprovalSource, ReviewOutput, WorkflowRoute } from "./types.js";
 import { formatPlanForReview } from "./plan-review.js";
 
 const MAX_BYTES = 8192;
@@ -39,9 +39,9 @@ function evidenceSummary(evidence: Array<{ path: string; detail: string }>): str
   return evidence.map(e => `- \`${e.path}\` — ${e.detail}`).join("\n");
 }
 
-export function formatStartedRun(request: string, runId: string, runDir: string): string {
+export function formatStartedRun(request: string, runId: string, runDir: string, route?: WorkflowRoute): string {
   return truncateToBytes(
-    `## Workflow started\n\n**Request:** ${request}\n\n**Run:** \`${runId}\`\n\n**Artifacts:** \`${runDir}\`\n`,
+    `## Workflow started\n\n**Request:** ${request}\n\n${route ? `**Route:** ${route}\n\n` : ""}**Run:** \`${runId}\`\n\n**Artifacts:** \`${runDir}\`\n`,
     MAX_BYTES
   );
 }
@@ -113,6 +113,15 @@ export function formatApprovedReview(
   return truncateToBytes(text, MAX_BYTES);
 }
 
+export function formatRepositoryReview(review: ReviewOutput): string {
+  const outcome = review.decision === "approved" ? "No blocking findings" : `${review.blockingIssues.length} blocking finding(s)`;
+  let text = `## Repository review complete\n\n**Outcome:** ${outcome}\n`;
+  if (review.blockingIssues.length > 0) text += `\n### Findings\n\n${review.blockingIssues.map(issue => `- ${issue}`).join("\n")}\n`;
+  if (review.evidence.length > 0) text += `\n### Evidence\n\n${evidenceSummary(review.evidence)}\n`;
+  if (review.suggestions.length > 0) text += `\n### Suggestions\n\n${review.suggestions.map(item => `- ${item}`).join("\n")}\n`;
+  return truncateToBytes(text, MAX_BYTES);
+}
+
 export function formatDocumentationReport(
   output: DocumenterOutput,
   lessonStatus: "approved" | "rejected" | "skipped",
@@ -164,7 +173,7 @@ export function formatCompletedRun(
     ? msToElapsed(Math.max(...summary.checks.map(c => c.completedAt ? new Date(c.completedAt).getTime() : 0)) - Math.min(...summary.checks.map(c => c.startedAt ? new Date(c.startedAt).getTime() : 0)))
     : "—";
 
-  let text = `## Workflow completed\n\n**Request:** ${summary.request}\n\n**Result:** completed in ${elapsed}\n\n`;
+  let text = `## Workflow completed\n\n**Request:** ${summary.request}\n\n**Route:** ${summary.route}\n\n**Result:** completed in ${elapsed}\n\n`;
 
   text += `### Delivered\n\n${summary.planSummary}\n\n`;
 
@@ -196,7 +205,9 @@ export function formatCompletedRun(
   text += `- Revisions: ${summary.review.revisions}\n\n`;
 
   text += `### Documentation and lessons\n\n`;
-  text += `- Documentation: ${summary.documentation.changed ? "updated" : "reviewed; no changes required"}\n`;
+  text += ["review_only", "investigation_only", "planning_only", "tests_only"].includes(summary.route)
+    ? `- Documentation: skipped for ${summary.route === "review_only" ? "review-only" : summary.route} route\n`
+    : `- Documentation: ${summary.documentation.changed ? "updated" : "reviewed; no changes required"}\n`;
   text += `- Lesson screening: ${summary.lessons.status}\n`;
   if (summary.lessons.count > 0) {
     text += `- Lessons proposed: ${summary.lessons.count}\n`;
@@ -219,8 +230,10 @@ export function formatCompletedRun(
     text += `\n**Memory:** disabled\n`;
   }
   text += `\n### Run details\n\n`;
-  text += `- Baseline repaired: ${summary.baselineRepaired ? "yes" : "no"}\n`;
-  text += `- Implementation attempts: ${summary.attempts}\n`;
+  if (["implementation", "bug_fix", "quick_implementation"].includes(summary.route)) {
+    text += `- Baseline repaired: ${summary.baselineRepaired ? "yes" : "no"}\n`;
+    text += `- Implementation attempts: ${summary.attempts}\n`;
+  }
   if (extensionVersion) text += `- Extension version: ${extensionVersion}\n`;
   if (dashboardUrl) text += `- Dashboard: \`${dashboardUrl}\`\n`;
   if (runDir) text += `- Artifacts: \`${runDir}\`\n`;

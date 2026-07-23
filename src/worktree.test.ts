@@ -3,7 +3,7 @@ import { mkdir, mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promi
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { collectWorktreeChanges, createWorktree, removeWorktree, syncWorktreeChanges, type WorktreeHandle } from "./worktree.js";
+import { attachWorktree, collectWorktreeChanges, createWorktree, removeWorktree, syncWorktreeChanges, type WorktreeHandle } from "./worktree.js";
 
 const directories: string[] = [];
 
@@ -71,6 +71,58 @@ describe("worktree", () => {
     const directory = await mkdtemp(path.join(os.tmpdir(), "pi-no-repo-"));
     directories.push(directory);
     await expect(createWorktree(directory, "failure")).rejects.toThrow("Not a git repository");
+  });
+
+  it("attaches a valid persisted detached worktree and validates its snapshot digest", async () => {
+    const repository = await initGitRepo();
+    const project = path.join(repository, "packages", "app");
+    await mkdir(project, { recursive: true });
+    await writeFile(path.join(project, "app.txt"), "app\n");
+    const handle = await createWorktree(project, "attach-run");
+    const digest = async (effectiveCwd: string) => (await readFile(path.join(effectiveCwd, "app.txt"), "utf8")).replace(/\r\n/g, "\n");
+
+    const attached = await attachWorktree({
+      ...handle,
+      repositoryRoot: path.join(handle.repositoryRoot, "."),
+      sourceCwd: path.join(handle.sourceCwd, "."),
+      worktreeRoot: path.join(handle.worktreeRoot, "."),
+      effectiveCwd: path.join(handle.effectiveCwd, "."),
+    }, { expectedWorkspaceSnapshotDigest: "app\n", workspaceSnapshotDigest: digest });
+
+    expect(attached).toEqual(handle);
+    await expect(attachWorktree(handle, {
+      expectedWorkspaceSnapshotDigest: "wrong",
+      workspaceSnapshotDigest: digest,
+    })).rejects.toThrow("workspace snapshot digest does not match");
+  });
+
+  it("rejects a missing or unregistered persisted worktree", async () => {
+    const repository = await initGitRepo();
+    const handle = await create(repository, "missing-attach-run");
+    const missing = { ...handle, worktreeRoot: path.join(repository, "missing"), effectiveCwd: path.join(repository, "missing") };
+
+    await expect(attachWorktree(missing)).rejects.toThrow("worktreeRoot does not exist");
+
+    git(repository, "worktree", "remove", "--force", handle.worktreeRoot);
+    git(repository, "clone", repository, handle.worktreeRoot);
+    git(handle.worktreeRoot, "fetch", repository, handle.baselineCommit);
+    git(handle.worktreeRoot, "checkout", "--detach", handle.baselineCommit);
+    await expect(attachWorktree(handle)).rejects.toThrow("worktree is not registered");
+  });
+
+  it("rejects a persisted worktree with the wrong HEAD or project path", async () => {
+    const repository = await initGitRepo();
+    const project = path.join(repository, "packages", "app");
+    await mkdir(project, { recursive: true });
+    await writeFile(path.join(project, "app.txt"), "app\n");
+    const handle = await createWorktree(project, "invalid-attach-run");
+
+    await expect(attachWorktree({ ...handle, projectRelativePath: "packages" })).rejects.toThrow("projectRelativePath does not match sourceCwd");
+
+    await writeFile(path.join(handle.worktreeRoot, "README.md"), "different HEAD\n");
+    git(handle.worktreeRoot, "add", "README.md");
+    git(handle.worktreeRoot, "commit", "-m", "move detached HEAD");
+    await expect(attachWorktree(handle)).rejects.toThrow("worktree HEAD does not match baselineCommit");
   });
 
   it("collects additions, modifications, deletions, renames, and binary patches", async () => {

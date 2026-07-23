@@ -12,7 +12,7 @@ import type {
 import { AGENT_NAMES, UI_PHASE_LABELS } from "./types.js";
 
 const COMMANDS = [
-  "/orchestrate <request>",
+  "/orchestrate --route <route> <request>",
   "/orchestrator-settings"
 ];
 
@@ -91,10 +91,12 @@ export function buildRunViewModel(
   const runSummary: RunSummary = {
     id: state.runId,
     request: state.request,
+    route: state.route,
     runStatus: state.status,
     stage: state.stage,
     phaseIndex,
     phaseCount,
+    skippedPhaseIndexes: skippedPhaseIndexes(state.route),
     activeAgent: state.activeAgent,
     attempt: state.attempt,
     maxAttempts,
@@ -110,6 +112,10 @@ export function buildRunViewModel(
     toolStatus: state.toolStatus,
     dashboardUrl: state.dashboardUrl,
     extensionVersion: state.extensionVersion,
+    checkpoint: state.latestCheckpoint,
+    resumeCommand: (state.status === "failed" || state.status === "cancelled") && state.latestCheckpoint && !state.resumeBlockedReason ? `/orchestrator-resume ${state.runId}` : undefined,
+    resumeCount: state.resumeCount,
+    resumeBlockedReason: state.resumeBlockedReason,
   };
 
   const visibleSteps = state.steps.slice(-12);
@@ -124,8 +130,22 @@ export function buildRunViewModel(
     run: runSummary,
     agents,
     recentSteps: visibleSteps,
-    commands: state.status === "completed" ? COMMANDS : ["/orchestrator-status", "/orchestrator-cancel"]
+    commands: state.status === "completed"
+      ? COMMANDS
+      : state.status === "running"
+        ? ["/orchestrator-status", "/orchestrator-cancel"]
+        : state.latestCheckpoint
+          ? [`/orchestrator-resume ${state.runId}`, `/orchestrator-inspect ${state.runId}`]
+          : [`/orchestrator-inspect ${state.runId}`]
   };
+}
+
+function skippedPhaseIndexes(route: WorkflowState["route"]): number[] | undefined {
+  if (route === "review_only" || route === "investigation_only") return [3, 4, 5];
+  if (route === "planning_only") return [3, 4, 5, 6];
+  if (route === "documentation_only") return [4, 5, 6];
+  if (route === "tests_only") return [5, 6];
+  return undefined;
 }
 
 export function phaseProgress(phaseIndex: number, attempts?: string): string {
@@ -159,7 +179,8 @@ function stageToPhaseIndex(stage: Stage, steps: StepRecord[], failedStage?: Stag
     case "implementing":
     case "debugging": return 5;
     case "testing": return testingPhaseIndex(steps);
-    case "reviewing_code": return 6;
+    case "reviewing_code":
+    case "reviewing_repository": return 6;
     case "documenting":
     case "screening_lessons":
     case "human_review_lessons":

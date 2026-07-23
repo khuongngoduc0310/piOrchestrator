@@ -74,7 +74,8 @@ async function listRuns(cwd: string, runDirs: string[], ctx: ExtensionCommandCon
       const stateText = await readFile(path.join(runDir, "state.json"), "utf8");
       const state = JSON.parse(stateText);
       const request = state.request ? ` — ${truncate(String(state.request), 50)}` : "";
-      return `${dir}${request}`;
+      const checkpoint = state.latestCheckpoint?.cursor ? ` · checkpoint: ${state.latestCheckpoint.cursor}` : "";
+      return `${dir}${request}${checkpoint}`;
     } catch {
       return dir;
     }
@@ -101,6 +102,11 @@ async function inspectRunSteps(cwd: string, runId: string, stepFilter: string, c
 
   const state = JSON.parse(stateText);
   const steps = state.steps ?? [];
+  if (!stepFilter && (state.status === "failed" || state.status === "cancelled") && state.latestCheckpoint?.cursor && !state.resumeBlockedReason) {
+    ctx.ui.notify(`Run ${runId} can be resumed from ${state.latestCheckpoint.cursor}: /orchestrator-resume ${runId}`, "info");
+  } else if (!stepFilter && state.resumeBlockedReason) {
+    ctx.ui.notify(`Run ${runId} cannot be resumed: ${state.resumeBlockedReason}`, "warning");
+  }
 
   if (stepFilter) {
     // Show a specific step

@@ -8,7 +8,8 @@ import { handleMemoryCommand } from "./memory-commands.js";
 import { openBrowser } from "./open-browser.js";
 import { Orchestrator } from "./orchestrator.js";
 import { UiController } from "./ui-controller.js";
-import { AGENT_NAMES, THINKING_LEVELS, type AgentName, type ThinkingLevel } from "./types.js";
+import { AGENT_NAMES, THINKING_LEVELS, WORKFLOW_ROUTES, type AgentName, type ThinkingLevel } from "./types.js";
+import { ORCHESTRATE_USAGE, parseWorkflowRequest } from "./route-selection.js";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const agents = new Set<AgentName>(AGENT_NAMES);
@@ -38,16 +39,18 @@ export default function piOrchestrator(pi: ExtensionAPI): void {
   });
 
   pi.registerCommand("orchestrate", {
-    description: "Run the multi-agent coding workflow",
+    description: `Run a selected workflow: ${ORCHESTRATE_USAGE}`,
+    getArgumentCompletions: prefix => {
+      const match = prefix.match(/^--route\s+(\S*)$/);
+      if (!match) return prefix.trim() ? null : WORKFLOW_ROUTES.map(route => ({ value: `--route ${route} `, label: route }));
+      const routes = WORKFLOW_ROUTES.filter(route => route.startsWith(match[1]));
+      return routes.length ? routes.map(route => ({ value: `--route ${route} `, label: route })) : null;
+    },
     handler: async (args: string, ctx: ExtensionCommandContext) => {
-      if (!args.trim()) {
-        ctx.ui.notify("Usage: /orchestrate <request>", "warning");
-        return;
-      }
       try {
-        await engine.start(args.trim(), ctx);
+        await engine.start(parseWorkflowRequest(args), ctx);
       } catch (error) {
-        ctx.ui.notify(messageOf(error), "error");
+        ctx.ui.notify(messageOf(error), args.trim() ? "error" : "warning");
       }
     }
   });
@@ -65,6 +68,22 @@ export default function piOrchestrator(pi: ExtensionAPI): void {
       const artifact = lastFailed?.artifact ?? lastFailed?.rawArtifact;
       const location = artifact ? ` · ${path.join(state.runDir, artifact)}` : ` · ${state.runDir}`;
       ctx.ui.notify(`${state.stage} · ${state.status}${failed}${location}${state.dashboardUrl ? ` · ${state.dashboardUrl}` : ""}`, state.status === "failed" ? "error" : "info");
+    }
+  });
+
+  pi.registerCommand("orchestrator-resume", {
+    description: "Resume a workflow from its latest safe checkpoint: /orchestrator-resume <run-id>",
+    handler: async (args: string, ctx: ExtensionCommandContext) => {
+      const parts = args.trim().split(/\s+/).filter(Boolean);
+      if (parts.length !== 1) {
+        ctx.ui.notify("Usage: /orchestrator-resume <exact-run-id>", "warning");
+        return;
+      }
+      try {
+        await engine.resume(parts[0], ctx);
+      } catch (error) {
+        ctx.ui.notify(`Resume failed: ${messageOf(error)}`, "error");
+      }
     }
   });
 

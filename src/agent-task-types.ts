@@ -2,7 +2,7 @@ import type { AgentName } from "./agent-types.js";
 import type { MemoryContext } from "./memory-types.js";
 import type { BaselineReviewContext, CheckResult } from "./workflow-types.js";
 
-export const AGENT_TASK_SCHEMA_VERSION = 2 as const;
+export const AGENT_TASK_SCHEMA_VERSION = 3 as const;
 
 export const COMMAND_STATUSES = ["passed", "failed", "timed_out", "cancelled"] as const;
 export type CommandStatus = (typeof COMMAND_STATUSES)[number];
@@ -36,6 +36,22 @@ export const LESSON_CATEGORIES = [
 export type LessonCategory = (typeof LESSON_CATEGORIES)[number];
 
 export type ReviewApprovalSource = "reviewer" | "user_override";
+export const WORKFLOW_ROUTES = [
+  "implementation",
+  "review_only",
+  "documentation_only",
+  "tests_only",
+  "investigation_only",
+  "bug_fix",
+  "quick_implementation",
+  "planning_only"
+] as const;
+export type WorkflowRoute = (typeof WORKFLOW_ROUTES)[number];
+
+export interface WorkflowRequest {
+  route: WorkflowRoute;
+  request: string;
+}
 
 export interface RepositoryEvidence {
   path: string;
@@ -81,6 +97,7 @@ export interface PlanTask {
 }
 
 export interface PlannerOutput {
+  route: WorkflowRoute;
   summary: string;
   assumptions: string[];
   acceptanceCriteria: string[];
@@ -89,19 +106,21 @@ export interface PlannerOutput {
 }
 
 export interface ExplorerTask {
+  route: WorkflowRoute;
   request: string;
 }
 
 export type PlannerTask =
-  | { action: "create_plan"; request: string; exploration: ExplorerOutput }
+  | { action: "create_plan"; route: WorkflowRoute; request: string; exploration: ExplorerOutput }
   | {
       action: "revise_plan";
+      route: WorkflowRoute;
       request: string;
       exploration: ExplorerOutput;
       previousPlan: PlannerOutput;
       feedback: { source: "human"; text: string } | { source: "reviewer"; review: ReviewOutput };
     }
-  | { action: "repair_baseline"; request: string; diagnosis: DebuggerOutput; checkFailures: CheckResult[] };
+  | { action: "repair_baseline"; route: "implementation"; request: string; diagnosis: DebuggerOutput; checkFailures: CheckResult[] };
 
 export type ReviewDecision = "approved" | "changes_requested";
 
@@ -115,13 +134,20 @@ export interface ReviewOutput {
 export type ReviewerTask =
   | { reviewType: "plan"; request: string; exploration: ExplorerOutput; plan: PlannerOutput }
   | {
+      reviewType: "repository";
+      request: string;
+      exploration: ExplorerOutput;
+      plan: PlannerOutput;
+      baseline: BaselineReviewContext;
+    }
+  | {
       reviewType: "code";
       request: string;
       exploration: ExplorerOutput;
       plan: PlannerOutput;
       baseline: BaselineReviewContext;
       implementationChecks: CheckResult[];
-      tester: TesterOutput;
+      tester?: TesterOutput;
       builderOutputs: BuilderOutput[];
       priorReviews: ReviewOutput[];
     }
@@ -158,6 +184,7 @@ export interface TesterTask {
   plan: PlannerOutput;
   acceptanceCriteria: Array<{ index: number; text: string }>;
   baselineChecks: CheckResult[];
+  diagnosis?: DebuggerOutput;
 }
 
 export interface BuilderOutput {
@@ -170,12 +197,12 @@ export interface BuilderOutput {
 
 export type BuilderTask =
   | { action: "repair_baseline"; request: string; fixPlan: PlannerOutput; attempt: number }
-  | { action: "implement"; request: string; plan: PlannerOutput; tester: TesterOutput; checks: CheckResult[]; attempt: number }
+  | { action: "implement"; request: string; plan: PlannerOutput; tester?: TesterOutput; checks: CheckResult[]; diagnosis?: DebuggerOutput; attempt: number }
   | {
       action: "fix_failure";
       request: string;
       plan: PlannerOutput;
-      tester: TesterOutput;
+      tester?: TesterOutput;
       checks: CheckResult[];
       diagnosis: DebuggerOutput;
       attempt: number;
@@ -201,6 +228,7 @@ export interface DebuggerOutput {
 
 export type DebuggerTask =
   | { action: "diagnose_baseline"; request: string; checks: CheckResult[] }
+  | { action: "diagnose_bug"; request: string; plan: PlannerOutput; exploration: ExplorerOutput; checks: CheckResult[] }
   | { action: "diagnose_implementation"; request: string; plan: PlannerOutput; checks: CheckResult[]; attempt: number };
 
 export interface ProposedLesson {
@@ -224,17 +252,24 @@ export interface DocumenterOutput {
   unresolvedIssues: string[];
 }
 
-export interface DocumenterTask {
-  action: "document";
-  request: string;
-  plan: PlannerOutput;
-  baselineChecks: CheckResult[];
-  implementationChecks: CheckResult[];
-  codeReview: ReviewOutput;
-  approvalSource: ReviewApprovalSource;
-  builderOutputs: BuilderOutput[];
-  tester: TesterOutput;
-}
+export type DocumenterTask =
+  | {
+      action: "document";
+      request: string;
+      plan: PlannerOutput;
+      baselineChecks: CheckResult[];
+      implementationChecks: CheckResult[];
+      codeReview: ReviewOutput;
+      approvalSource: ReviewApprovalSource;
+      builderOutputs: BuilderOutput[];
+      tester?: TesterOutput;
+    }
+  | {
+      action: "document_only";
+      request: string;
+      plan: PlannerOutput;
+      baselineChecks: CheckResult[];
+    };
 
 export interface AgentTaskMap {
   explorer: ExplorerTask;

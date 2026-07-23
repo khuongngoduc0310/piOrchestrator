@@ -1,5 +1,7 @@
 import type { AgentName } from "./agent-types.js";
+import type { WorkflowRoute } from "./agent-task-types.js";
 import type { Stage, StepRecord, WorkflowState } from "./workflow-types.js";
+import type { InvocationFileDiff } from "./git-tree-diff.js";
 
 export const UI_PHASE_LABELS = [
   "Setup / preflight",
@@ -8,7 +10,7 @@ export const UI_PHASE_LABELS = [
   "Baseline",
   "Tests",
   "Implementation",
-  "Code review",
+  "Review",
   "Finalize"
 ] as const;
 export type UiPhase = (typeof UI_PHASE_LABELS)[number];
@@ -23,10 +25,12 @@ export interface ConfigSummary {
 export interface RunSummary {
   id: string;
   request: string;
+  route?: WorkflowRoute;
   runStatus: WorkflowState["status"];
   stage: Stage;
   phaseIndex: number;
   phaseCount: number;
+  skippedPhaseIndexes?: number[];
   activeAgent?: AgentName;
   attempt: number;
   maxAttempts: number;
@@ -43,6 +47,10 @@ export interface RunSummary {
   dashboardUrl?: string;
   extensionVersion?: string;
   transcriptRevision?: number;
+  checkpoint?: { number: number; cursor: string; createdAt: string };
+  resumeCommand?: string;
+  resumeCount?: number;
+  resumeBlockedReason?: string;
 }
 
 export interface AgentSummary {
@@ -97,4 +105,22 @@ export interface ArtifactContent {
   truncated: boolean;
   isJson: boolean;
   size: number;
+}
+
+export interface DashboardRunHistoryItem {
+  id: string;
+  request: string;
+  route?: WorkflowRoute;
+  status: WorkflowState["status"];
+  stage: Stage;
+  startedAt: string;
+  updatedAt: string;
+  completedAt?: string;
+  active: boolean;
+}
+
+export interface InvocationDiffView {
+  metadata: InvocationFileDiff;
+  patch: string;
+  patchTruncated: boolean;
 }

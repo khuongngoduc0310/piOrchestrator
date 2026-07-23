@@ -8,21 +8,41 @@ import { runCheckStep } from "./orchestrator-workspace.js";
 import { promptHumanReviewDecision, runRequiredHumanGate } from "./orchestrator-human-gates.js";
 import { publishSessionMessage } from "./orchestrator-state.js";
 import { WorkflowCancelledError } from "./workflow-errors.js";
+import { saveWorkflowCheckpoint } from "./orchestrator-checkpoints.js";
+
+export interface ReviewContinuation {
+  point: "review_fix_completed";
+  finalImplChecks: ImplementationResult["finalImplChecks"];
+  codeReview: ReviewOutput;
+  priorCodeReviews: ReviewOutput[];
+  completedFix: number;
+  allowedReviewFixes: number;
+}
 
 export async function runReviewPhase(
   runtime: OrchestratorRuntime,
   workflow: WorkflowContext,
-  implementation: ImplementationResult
+  implementation: ImplementationResult,
+  continuation?: ReviewContinuation
 ): Promise<ReviewResult> {
   const { request, ctx, config } = workflow;
   const { plan, exploration, tester } = implementation;
-  let finalImplChecks = implementation.finalImplChecks;
-  let codeReview: ReviewOutput | undefined;
+  let finalImplChecks = continuation?.finalImplChecks ?? implementation.finalImplChecks;
+  let codeReview: ReviewOutput | undefined = continuation?.codeReview;
   let reviewApproved = false;
   let reviewApprovalSource: ReviewApprovalSource = "reviewer";
-  const priorCodeReviews: ReviewOutput[] = [];
-  let allowedReviewFixes = config.limits.reviewRevisions;
-  for (let fixes = 0; fixes <= allowedReviewFixes; fixes++) {
+  const priorCodeReviews: ReviewOutput[] = continuation?.priorCodeReviews.slice() ?? [];
+  let allowedReviewFixes = continuation?.allowedReviewFixes ?? config.limits.reviewRevisions;
+  let firstReview = 0;
+  if (continuation) {
+    finalImplChecks = await runCheckStep(runtime, "testing", `Run checks after review fix ${continuation.completedFix}`, workflow.mutationCwd, ctx, {
+      requireGreen: true,
+      revision: continuation.completedFix,
+      kind: "review-fix"
+    });
+    firstReview = continuation.completedFix;
+  }
+  for (let fixes = firstReview; fixes <= allowedReviewFixes; fixes++) {
     codeReview = await runAgentStep(
       runtime,
       "reviewer",
@@ -79,6 +99,23 @@ export async function runReviewPhase(
       { revision: fixes + 1, mutationPlan: plan }
     );
     runtime.builderSessionOutputs.push(reviewOut);
+    await saveWorkflowCheckpoint(runtime, workflow, "review_fix_completed", {
+      implementation,
+      finalImplChecks,
+      codeReview,
+      priorCodeReviews,
+      completedFix: fixes + 1,
+      allowedReviewFixes
+    }, {
+      exploration,
+      plan,
+      baselineChecks: implementation.baseline,
+      tester,
+      builderOutputs: runtime.builderSessionOutputs,
+      implementationChecks: finalImplChecks,
+      codeReview,
+      priorCodeReviews
+    });
     finalImplChecks = await runCheckStep(runtime, "testing", `Run checks after review fix ${fixes + 1}`, workflow.mutationCwd, ctx, {
       requireGreen: true,
       revision: fixes + 1,
@@ -86,5 +123,17 @@ export async function runReviewPhase(
     });
   }
   if (!reviewApproved || !codeReview) throw new Error("Code review was not approved within the revision limit");
-  return { ...implementation, finalImplChecks, codeReview, reviewApprovalSource, priorCodeReviews };
+  const result = { ...implementation, finalImplChecks, codeReview, reviewApprovalSource, priorCodeReviews };
+  await saveWorkflowCheckpoint(runtime, workflow, "review_approved", result, {
+    exploration,
+    plan,
+    baselineChecks: implementation.baseline,
+    tester,
+    builderOutputs: runtime.builderSessionOutputs,
+    implementationChecks: finalImplChecks,
+    codeReview,
+    priorCodeReviews,
+    reviewApprovalSource
+  });
+  return result;
 }

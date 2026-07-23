@@ -1,30 +1,28 @@
 import path from "node:path";
 import type { ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
-import { ensureChecksConfigured } from "./check-setup.js";
 import { loadConfig } from "./config.js";
-import { AGENT_NAMES, SCHEMA_VERSION } from "./types.js";
+import { AGENT_NAMES, SCHEMA_VERSION, type WorkflowRequest } from "./types.js";
 import { removeWorktree } from "./worktree.js";
 import type { WorkflowContext } from "./orchestrator-context.js";
 import type { OrchestratorRuntime } from "./orchestrator-runtime.js";
 import { EXTENSION_VERSION, messageOf } from "./orchestrator-helpers.js";
 import { shouldSuggestHumanTouchpoints, suggestHumanTouchpoints } from "./orchestrator-human-gates.js";
 import { runPlanningPhase } from "./orchestrator-planning.js";
-import { runImplementationPhase } from "./orchestrator-implementation.js";
-import { runReviewPhase } from "./orchestrator-review.js";
-import { runFinalizationPhase } from "./orchestrator-finalization.js";
+import { runSelectedRoute } from "./orchestrator-routes.js";
 import { fail, publishSessionMessage } from "./orchestrator-state.js";
 import { formatStartedRun } from "./session-messages.js";
+import { CheckpointStore } from "./checkpoint-store.js";
+import { currentWorkspaceDigest } from "./orchestrator-checkpoints.js";
 
 export async function runWorkflow(
   runtime: OrchestratorRuntime,
-  request: string,
+  input: WorkflowRequest,
   ctx: ExtensionCommandContext,
   controller: AbortController
 ): Promise<void> {
+  const { request, route } = input;
   const cwd = ctx.cwd ?? process.cwd();
-  const loadedConfig = await loadConfig(cwd);
-  const config = await ensureChecksConfigured(cwd, loadedConfig, ctx);
-  if (!config) return;
+  const config = await loadConfig(cwd);
   runtime.config = config;
   if (controller.signal.aborted) throw new Error("Workflow cancelled");
   await runtime.loadProjectMemory(cwd, ctx);
@@ -32,6 +30,7 @@ export async function runWorkflow(
   const store = runtime.storeFactory(cwd, runId);
   runtime.store = store;
   await store.init();
+  const lease = await store.acquireLease();
   runtime.activeTranscripts.clear();
   runtime.transcriptRevision = 0;
   const agents = Object.fromEntries(AGENT_NAMES.map(name => [name, { status: "idle", model: config.agents[name].model }])) as NonNullable<typeof runtime.state>["agents"];
@@ -40,6 +39,7 @@ export async function runWorkflow(
     extensionVersion: EXTENSION_VERSION,
     runId,
     request,
+    route,
     cwd,
     runDir: store.runDir,
     stage: "idle",
@@ -71,6 +71,7 @@ export async function runWorkflow(
     }
   };
   const workflow: WorkflowContext = {
+    route,
     request,
     ctx,
     cwd,
@@ -94,16 +95,25 @@ export async function runWorkflow(
         runtime.state.warning = `Dashboard unavailable: ${messageOf(error)}`;
       }
     }
-    publishSessionMessage(runtime, formatStartedRun(request, runId, store.runDir), { kind: "started" });
+    publishSessionMessage(runtime, formatStartedRun(request, runId, store.runDir, route), { kind: "started" });
     const planning = await runPlanningPhase(runtime, workflow);
-    const implementation = await runImplementationPhase(runtime, workflow, planning);
-    const review = await runReviewPhase(runtime, workflow, implementation);
-    await runFinalizationPhase(runtime, workflow, review);
+    await runSelectedRoute(runtime, workflow, planning);
   } catch (error) {
     await fail(runtime, error, ctx);
   } finally {
     if (runtime.persistTimer) clearTimeout(runtime.persistTimer);
     runtime.persistTimer = undefined;
+    if (workflow.worktreeHandle && !workflow.worktreeSynced && !workflow.retainWorktree) {
+      try {
+        const checkpoint = await new CheckpointStore(store.runDir, runId).loadLatest();
+        if (checkpoint && checkpoint.worktreeHandle && checkpoint.workspaceDigest === await currentWorkspaceDigest(runtime, workflow.worktreeHandle.effectiveCwd)) {
+          workflow.retainWorktree = true;
+          runtime.requireState().warning = `Resumable mutation worktree retained at ${workflow.worktreeHandle.worktreeRoot}`;
+        }
+      } catch {
+        // An unverifiable worktree is removed below.
+      }
+    }
     if (workflow.worktreeHandle && !workflow.worktreeSynced && !workflow.retainWorktree) {
       await removeWorktree(workflow.worktreeHandle).catch(error => {
         ctx.ui.notify(`Failed to remove mutation worktree: ${messageOf(error)}`, "warning");
@@ -112,5 +122,6 @@ export async function runWorkflow(
     await store.flush().catch(error => {
       ctx.ui.notify(`Failed to flush run artifacts: ${messageOf(error)}`, "error");
     });
+    await lease.release().catch(() => false);
   }
 }

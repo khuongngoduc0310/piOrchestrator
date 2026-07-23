@@ -18,6 +18,7 @@ export type Stage =
   | "testing"
   | "debugging"
   | "reviewing_code"
+  | "reviewing_repository"
   | "documenting"
   | "screening_lessons"
   | "human_review_lessons"
@@ -51,6 +52,7 @@ export interface StepRecord {
   completedAt?: string;
   artifact?: string;
   rawArtifact?: string;
+  mutationArtifact?: string;
   message?: string;
   invocations?: AgentInvocationRecord[];
 }
@@ -60,6 +62,7 @@ export interface WorkflowState {
   extensionVersion: string;
   runId: string;
   request: string;
+  route?: import("./agent-task-types.js").WorkflowRoute;
   cwd: string;
   runDir: string;
   stage: Stage;
@@ -79,6 +82,15 @@ export interface WorkflowState {
   termination?: WorkflowTermination;
   memoryMode?: "untrusted" | "disabled" | "empty" | "valid" | "invalid" | "scope_mismatch" | "unsupported";
   memoryRevision?: number;
+  latestCheckpoint?: {
+    number: number;
+    cursor: import("./checkpoint-types.js").CheckpointCursorKind;
+    createdAt: string;
+  };
+  resumeCount?: number;
+  resumedAt?: string;
+  resumedFromCheckpoint?: import("./checkpoint-types.js").CheckpointCursorKind;
+  resumeBlockedReason?: string;
   currentTool?: string;
   currentToolArgs?: string;
   agentOutput?: string[];
@@ -133,6 +145,7 @@ export interface HumanReviewDecision {
 
 export interface CompletionSummary {
   request: string;
+  route: import("./agent-task-types.js").WorkflowRoute;
   planSummary: string;
   changedFiles: string[];
   testsAdded: string[];
@@ -140,7 +153,7 @@ export interface CompletionSummary {
   attempts: number;
   baselineRepaired: boolean;
   review: {
-    outcome: "reviewer_approved" | "accepted_by_user";
+    outcome: "reviewer_approved" | "accepted_by_user" | "no_findings" | "findings_reported" | "not_run";
     evidenceCount: number;
     suggestions: string[];
     blockingIssues: string[];

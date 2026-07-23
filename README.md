@@ -33,7 +33,7 @@ When Pi starts, piOrchestrator shows an adaptive terminal panel in the Pi widget
 ┌ piOrchestrator ───────────────────────────────────────┐
 │ IDLE · ready                                         │
 │ Project: 7 agents configured · 2 checks              │
-│ /orchestrate <request> · /orchestrator-settings      │
+│ /orchestrate --route <route> <request>               │
 └───────────────────────────────────────────────────────┘
 ```
 
@@ -65,8 +65,9 @@ The panel persists across workflow runs and clears only on Pi session shutdown.
 ## Commands
 
 ```text
-/orchestrate Add validation to the transaction API
+/orchestrate --route implementation Add validation to the transaction API
 /orchestrator-status
+/orchestrator-resume <exact-run-id>
 /orchestrator-ui
 /orchestrator-cancel
 /orchestrator-settings
@@ -84,6 +85,8 @@ The panel persists across workflow runs and clears only on Pi session shutdown.
 `/orchestrator-settings` opens a project-local wizard for choosing the model and compatible thinking level for every role. It lists only models currently authenticated and available through Pi, stages any number of changes, shows an old → new review, and validates all roles before one atomic save. Cancelling or a failed validation writes nothing. **Use model default** removes that role's explicit thinking override.
 
 `/agent-model` remains the direct single-role shortcut. `retain` keeps the role's current thinking setting; `clear` removes the explicit setting. Both commands resolve and check the complete role configuration before writing. These settings affect orchestrator-created role sessions only; they do not change the active parent chat model selected by Pi's `/model` command.
+
+`/orchestrator-resume <exact-run-id>` continues a failed or cancelled run from its latest validated checkpoint. Resume requires the same project path, extension version, normalized configuration, project-memory content, and workspace contents. Isolated runs additionally require their original registered detached worktree at the expected commit. The command never accepts an abbreviated run ID and never repeats a Tester, Builder, review fix, or Documenter that completed at the checkpoint.
 
 ## Configuration
 
@@ -128,15 +131,30 @@ read, write, edit, grep, find, ls
 
 Custom project/global extension tool names are rejected with a migration error. SDK role sessions disable nested extension, skill, and prompt-template discovery for deterministic execution while retaining repository context files. Role capabilities are enforced at configuration, session, tool-call, and post-session filesystem-diff boundaries. Explorer, Planner, Reviewer, and Debugger are read-only. Tester, Builder, and Documenter can modify only exact paths authorized by the approved plan. Agents do not receive shell access; project checks remain orchestrator-owned. These controls are not an OS sandbox.
 
+### Workflow routes
+
+The user selects one validated route with `/orchestrate --route <route> <request>`. The Planner must preserve that route while the orchestrator owns its phase sequence:
+
+- `implementation` runs check setup, baseline verification, Tester, Builder and retries, code review and fixes, documentation, final checks, and optional worktree synchronization.
+- `review_only` runs Explorer, Planner approval, and a repository Reviewer, then reports findings without project checks or mutation-capable agents. A reviewer `changes_requested` decision is a successful findings report on this route and never invokes Builder.
+- `documentation_only` permits only Documenter changes to documentation-classified plan files, with green baseline and final checks.
+- `tests_only` permits only Tester changes to test-classified plan files, with green baseline and final checks.
+- `investigation_only` runs a read-only evidence and diagnosis workflow without checks or mutation agents.
+- `bug_fix` requires a green baseline, diagnoses root cause before regression tests, then runs Builder, review, documentation, and final checks.
+- `quick_implementation` skips test-first generation but retains baseline, Builder verification, code review, documentation, and final checks.
+- `planning_only` completes after exploration and approved planning without checks or mutation agents.
+
+Task `files` are exact mutation authorization paths for mutating routes and inspection targets for read-only routes. Unknown routes, Planner route changes, role/route mismatches, and attempts to derive mutation scope from read-only plans fail closed.
+
 ## Reliability policy
 
-- Every role receives the same version-2 task envelope with an authoritative `task` object and nullable advisory `memoryContext`.
+- Every role receives the same version-3 task envelope with an authoritative `task` object and nullable advisory `memoryContext`.
 - Every structured role response is parsed as raw JSON or exactly one fenced JSON block and validated with dependency-free, role-specific validators. Incidental prose around one fence is ignored; ambiguous multiple fences are rejected.
 - A malformed read-only role response receives one correction attempt with mutation-capable tools removed. Tester, Builder, and Documenter are never rerun for output correction because their first session may already have changed files.
 - Plans require unique task IDs, valid dependencies, and an acyclic graph.
 - Tester reports map every approved acceptance criterion to explicit coverage and the observed pre-implementation result; code review receives that coverage directly.
 - Discovered checks are never executed or saved without explicit approval. Existing non-empty checks bypass discovery and are never rewritten.
-- All configured baseline commands must pass before Tester/Builder mutation. Cancelled setup, empty checks, or red baselines stop safely; pre-existing failures are not auto-repaired or ignored.
+- Mutation routes require all configured baseline commands to pass before agent mutation. Check setup is deferred until after route approval, so read-only routes do not require or execute project checks. Cancelled setup, empty checks, or red baselines stop specialized mutation and bug-fix workflows safely.
 - Every Tester, Builder, review-fix, and Documenter mutation is followed by saved checks before further mutation or completion; the final check set runs after all agent sessions.
 - With worktree isolation enabled, the complete mutation phase runs from an exact snapshot of the current Git workspace. The main workspace is updated only after final checks and mutation-policy validation pass. Additions, deletions, renames, binaries, modes, and symlinks are synchronized conflict-safely; a conflicting worktree is retained with a recovery patch.
 - The extension never deletes project files based on temporary-looking filenames. Unexpected mutations are reported and, when isolation is enabled, discarded with the worktree.
@@ -169,8 +187,16 @@ Important files include:
 - `plan.json`, `proposed-lessons.json`, and lesson review status
 - `candidate-ledger.json`: validated per-candidate machine review, human decision, and promotion lifecycle
 - `worktree.json` and `worktree-final.patch` when mutation isolation is enabled
+- immutable `checkpoint-*.json` files plus `checkpoint-latest.json` for validated continuation state
+- `finalization-intent.json` and completion markers around worktree synchronization and memory promotion
 
 Repeated planner, builder, debugger, and reviewer calls never overwrite earlier artifacts. `/orchestrator-status` reports the failed stage and artifact directory.
+
+### Checkpoint resume
+
+Checkpoints are written only after a role output and its workspace delta have both passed validation, or after a phase reaches another stable boundary. A resumed run appends to the original step and event history and marks stale running records as interrupted.
+
+Resume fails closed when any safety binding differs, an artifact or checkpoint digest is invalid, a worktree is missing or changed, another process owns the run lease, or finalization may already have applied external side effects. In those cases, use `/orchestrator-inspect <run-id>` and the retained artifacts or recovery worktree; the extension does not guess, silently roll back, or replay uncertain synchronization and memory-promotion operations.
 
 ## Browser dashboard
 
@@ -183,7 +209,9 @@ Key areas:
 - **Status header** — workflow mode, connection indicator (Live/Reconnecting/Disconnected), elapsed time, run ID, and request.
 - **Current activity callout** — most important state first: waiting-for-input (amber), failure (red), completed (green), or normal progress.
 - **Workflow phases** — eight canonical phases with complete/current/pending visual state. Review-fix and final checks map to the correct phase without regression.
-- **Agent grid and inspector** — per-agent status, model, and summary. Click any agent to select an individual invocation and inspect its live or persisted Pi-style conversation. Reasoning is collapsed by default, and tool results are displayed with their matching tool calls. The active agent is auto-followed until you manually select or close the inspector.
+- **Run history** — switch between the active workflow and validated persisted runs without leaving the dashboard. Historical state, transcripts, diffs, and artifacts are read through bounded nonsymlink-safe endpoints.
+- **Agent grid and inspector** — per-agent status, model, and summary. Auto-follow the active agent, pin an agent manually, or close the inspector. Each invocation has searchable transcript and file tabs.
+- **Invocation file diffs** — every successful, failed, timed-out, or cancelled invocation records structured Git-tree metadata and a binary-capable patch without changing the real index. The viewer provides a changed-file tree and highlighted unified diff; non-Git workspaces retain changed-file audit metadata but report textual patches unavailable.
 - **Recent timeline** — keyed step updates that preserve DOM state. Each entry shows time, status, label, agent, attempt, message, and artifact controls.
 - **Artifact viewer** — recent artifact list with size and truncation metadata. The viewer supports line wrapping and persistent content across workflow updates.
 
@@ -199,9 +227,9 @@ Candidates move through durable machine-review, pending, declined, promotion, du
 
 ## Current limitations and next milestones
 
-- Sequential execution only; no parallel tasks or full resume command yet.
+- Sequential execution only; checkpoint resume does not introduce parallel tasks.
 - Worktree isolation requires Git and an existing `HEAD`. Submodule mutation is not supported.
 - Permanent-memory promotion always requires explicit human approval.
 - Tool and diff restrictions do not provide an operating-system sandbox.
 
-Recommended follow-ups are git-aware snapshots and isolated builder worktrees, then checkpoint-validated resume/run history, followed by token/cost/model-quality telemetry.
+Recommended follow-ups are token/cost/model-quality telemetry and safe parallelization of independent read-only work.

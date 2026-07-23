@@ -11,6 +11,7 @@ import { countCandidateStates, EXTENSION_VERSION, projectTrusted } from "./orche
 import { runAgentStep } from "./orchestrator-agent-step.js";
 import { promptHumanMemoryApproval } from "./orchestrator-human-gates.js";
 import { persist, publishSessionMessage } from "./orchestrator-state.js";
+import { saveWorkflowCheckpoint } from "./orchestrator-checkpoints.js";
 
 export interface LessonPreparation {
   documentation: DocumenterOutput;
@@ -29,14 +30,27 @@ export interface LessonCounts {
   pendingCount: number;
 }
 
+export interface SerializedLessonPreparation extends Omit<LessonPreparation, "duplicateCandidateIds"> {
+  duplicateCandidateIds: string[];
+}
+
+export function serializeLessonPreparation(value: LessonPreparation): SerializedLessonPreparation {
+  return { ...value, duplicateCandidateIds: [...value.duplicateCandidateIds] };
+}
+
+export function hydrateLessonPreparation(value: SerializedLessonPreparation): LessonPreparation {
+  return { ...value, duplicateCandidateIds: new Set(value.duplicateCandidateIds) };
+}
+
 export async function prepareLessons(
   runtime: OrchestratorRuntime,
   workflow: WorkflowContext,
-  review: ReviewResult
+  review: ReviewResult,
+  restoredDocumentation?: DocumenterOutput
 ): Promise<LessonPreparation> {
   const { request, ctx, store, runId } = workflow;
   const { plan, baseline, codeReview, reviewApprovalSource, finalImplChecks, tester } = review;
-  const documentation = await runAgentStep(
+  const documentation = restoredDocumentation ?? await runAgentStep(
     runtime,
     "documenter",
     "documenting",
@@ -57,6 +71,19 @@ export async function prepareLessons(
     parseDocumenterOutput,
     { mutationPlan: plan }
   );
+  if (!restoredDocumentation) {
+    await saveWorkflowCheckpoint(runtime, workflow, "documenter_completed", { review, documentation }, {
+      exploration: review.exploration,
+      plan,
+      baselineChecks: baseline,
+      tester,
+      builderOutputs: runtime.builderSessionOutputs,
+      implementationChecks: finalImplChecks,
+      codeReview,
+      priorCodeReviews: review.priorCodeReviews,
+      reviewApprovalSource
+    });
+  }
 
   runtime.candidateLessons = validateCandidates(documentation.proposedLessons.map((lesson, index) => ({
     id: candidateLessonId(runId, index + 1),
@@ -106,7 +133,19 @@ export async function prepareLessons(
     }
   }
   publishSessionMessage(runtime, formatDocumentationReport(documentation, runtime.lessonStatus), { kind: "documentation_updated" });
-  return { documentation, proposedCandidates, duplicateCandidateIds, machineEligibleCount, machineRejectedCount, duplicateCount };
+  const result = { documentation, proposedCandidates, duplicateCandidateIds, machineEligibleCount, machineRejectedCount, duplicateCount };
+  await saveWorkflowCheckpoint(runtime, workflow, "lessons_screened", { review, preparation: serializeLessonPreparation(result) }, {
+    exploration: review.exploration,
+    plan,
+    baselineChecks: baseline,
+    tester,
+    builderOutputs: runtime.builderSessionOutputs,
+    implementationChecks: finalImplChecks,
+    codeReview,
+    priorCodeReviews: review.priorCodeReviews,
+    reviewApprovalSource
+  });
+  return result;
 }
 
 export async function persistAndPromoteLessons(

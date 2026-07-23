@@ -1,7 +1,7 @@
 import vm from "node:vm";
 import { describe, expect, it } from "vitest";
 import { DashboardServer } from "./dashboard.js";
-import type { AgentInspection, AgentTranscript, ArtifactContent, OrchestratorViewModel } from "./types.js";
+import type { AgentInspection, AgentTranscript, ArtifactContent, DashboardRunHistoryItem, InvocationDiffView, OrchestratorViewModel } from "./types.js";
 
 const emptyProvider = {
   getViewModel: () => undefined,
@@ -32,6 +32,26 @@ const testTranscript: AgentTranscript = {
   schemaVersion: 1,
   messages: [{ role: "user", content: [{ type: "text", text: "Inspect this repository" }] }],
   truncated: false
+};
+
+const testDiff: InvocationDiffView = {
+  metadata: {
+    schemaVersion: 1,
+    status: "available",
+    beforeTree: "a",
+    afterTree: "b",
+    changedFiles: ["src/a.ts"],
+    files: [{ status: "M", oldPath: "src/a.ts", newPath: "src/a.ts", oldMode: "100644", newMode: "100644", oldBlob: "a", newBlob: "b", binary: false }],
+    patchArtifact: "files.patch",
+    patchBytes: 10
+  },
+  patch: "diff --git a/src/a.ts b/src/a.ts",
+  patchTruncated: false
+};
+
+const testRun: DashboardRunHistoryItem = {
+  id: "test-123", request: "test", status: "running", stage: "exploring",
+  startedAt: "2026-01-01T00:00:00.000Z", updatedAt: "2026-01-01T00:00:01.000Z", active: true
 };
 
 const sampleViewModel: OrchestratorViewModel = {
@@ -68,6 +88,12 @@ function providerWith(vm: OrchestratorViewModel | undefined, agent?: AgentInspec
     getAgentInspection: async (_name: string) => agent ?? testAgent,
     getAgentTranscript: async (_stepId: string, _invocation: number) => testTranscript,
     readArtifact: async (_name: string) => artifact ?? testArtifact,
+    listRuns: async () => [testRun],
+    getRunViewModel: async (_runId: string) => vm,
+    getRunAgentInspection: async (_runId: string, _name: string) => agent ?? testAgent,
+    getRunAgentTranscript: async (_runId: string, _stepId: string, _invocation: number) => testTranscript,
+    getInvocationDiff: async (_runId: string, _stepId: string, _invocation: number) => testDiff,
+    readRunArtifact: async (_runId: string, _name: string) => artifact ?? testArtifact,
   };
 }
 
@@ -92,6 +118,8 @@ describe("DashboardServer", () => {
     expect(html).toContain("piOrchestrator");
     expect(html).toContain("Conversation history");
     expect(html).toContain("Thinking");
+    expect(html).toContain("Run history");
+    expect(html).toContain("Unified diff");
     const stateResponse = await fetch(`${url}/api/state`);
     expect(stateResponse.status).toBe(200);
     const body = await stateResponse.json();
@@ -206,6 +234,18 @@ describe("DashboardServer", () => {
     const response = await fetch(`${url}/api/steps/step-001/invocations/1/transcript`);
     expect(response.status).toBe(200);
     expect(await response.json()).toEqual(testTranscript);
+    await dashboard.stop();
+  });
+
+  it("serves run history and run-scoped agent resources", async () => {
+    const dashboard = new DashboardServer(providerWith(sampleViewModel));
+    const url = await dashboard.start(0);
+    expect(await (await fetch(`${url}/api/runs`)).json()).toEqual([testRun]);
+    expect((await (await fetch(`${url}/api/runs/test-123/state`)).json()).run.id).toBe("test-123");
+    expect((await (await fetch(`${url}/api/runs/test-123/agents/planner`)).json()).name).toBe("planner");
+    expect(await (await fetch(`${url}/api/runs/test-123/steps/step-001/invocations/1/transcript`)).json()).toEqual(testTranscript);
+    expect(await (await fetch(`${url}/api/runs/test-123/steps/step-001/invocations/1/diff`)).json()).toEqual(testDiff);
+    expect(await (await fetch(`${url}/api/runs/test-123/artifacts/test.json`)).text()).toBe(testArtifact.text);
     await dashboard.stop();
   });
 

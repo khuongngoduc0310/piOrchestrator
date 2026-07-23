@@ -64,7 +64,8 @@ export class PiSdkAgentExecutor implements AgentExecutor {
     _cwd: string,
     extensionRoot: string,
     signal: AbortSignal = new AbortController().signal,
-    timeoutMs = config.limits.agentTimeoutMs
+    timeoutMs = config.limits.agentTimeoutMs,
+    agents?: readonly AgentName[]
   ): Promise<void> {
     if (signal.aborted) throw new Error("Agent preflight cancelled");
     const generation = ++this.preflightGeneration;
@@ -79,7 +80,9 @@ export class PiSdkAgentExecutor implements AgentExecutor {
       const runtime = await bounded(this.runtime());
       const available = await bounded(runtime.getAvailable());
       const next = new Map<AgentName, ResolvedAgent>();
-      for (const [name, agentConfig] of Object.entries(config.agents) as [AgentName, AgentConfig][]) {
+      const selected = agents ?? (Object.keys(config.agents) as AgentName[]);
+      for (const name of selected) {
+        const agentConfig = config.agents[name];
         const resolved = this.modelResolver(agentConfig, runtime);
         if (!resolved.model || resolved.error) {
           throw new Error(`Invalid model for ${name}: ${resolved.error ?? agentConfig.model}`);

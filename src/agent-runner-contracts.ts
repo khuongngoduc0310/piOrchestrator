@@ -47,7 +47,8 @@ export interface AgentExecutor {
     cwd: string,
     extensionRoot: string,
     signal?: AbortSignal,
-    timeoutMs?: number
+    timeoutMs?: number,
+    agents?: readonly AgentName[]
   ): Promise<void>;
   run(options: AgentRunOptions): Promise<AgentResult>;
 }
