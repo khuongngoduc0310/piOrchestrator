@@ -103,7 +103,7 @@ function renderIdle(config,cwd,commands){
   }else if(config.status==='missing'){
     callout.className='waiting';
     callout.appendChild(el('div',{className:'callout-title'},'Setup required'));
-    callout.appendChild(el('div',{className:'callout-body'},'Project checks are not configured. Run <code>/orchestrate &lt;request&gt;</code> to begin setup.'));
+    callout.appendChild(el('div',{className:'callout-body'},'Project checks are not configured. Run <code>/orchestrate</code> to begin setup.'));
   }else{
     callout.className='completed';
     callout.appendChild(el('div',{className:'callout-title'},'Ready'));

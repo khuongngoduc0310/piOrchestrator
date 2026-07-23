@@ -33,7 +33,7 @@ When Pi starts, piOrchestrator shows an adaptive terminal panel in the Pi widget
 ┌ piOrchestrator ───────────────────────────────────────┐
 │ IDLE · ready                                         │
 │ Project: 7 agents configured · 2 checks              │
-│ /orchestrate --route <route> <request>               │
+│ /orchestrate                                         │
 └───────────────────────────────────────────────────────┘
 ```
 
@@ -65,7 +65,7 @@ The panel persists across workflow runs and clears only on Pi session shutdown.
 ## Commands
 
 ```text
-/orchestrate --route implementation Add validation to the transaction API
+/orchestrate
 /orchestrator-status
 /orchestrator-resume <exact-run-id>
 /orchestrator-ui
@@ -133,7 +133,7 @@ Custom project/global extension tool names are rejected with a migration error. 
 
 ### Workflow routes
 
-The user selects one validated route with `/orchestrate --route <route> <request>`. The Planner must preserve that route while the orchestrator owns its phase sequence:
+Run `/orchestrate`, select one validated route, then enter the request in the interactive prompt. The Planner must preserve that route while the orchestrator owns its phase sequence:
 
 - `implementation` runs check setup, baseline verification, Tester, Builder and retries, code review and fixes, documentation, final checks, and optional worktree synchronization.
 - `review_only` runs Explorer, Planner approval, and a repository Reviewer, then reports findings without project checks or mutation-capable agents. A reviewer `changes_requested` decision is a successful findings report on this route and never invokes Builder.

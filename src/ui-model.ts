@@ -12,7 +12,7 @@ import type {
 import { AGENT_NAMES, UI_PHASE_LABELS } from "./types.js";
 
 const COMMANDS = [
-  "/orchestrate --route <route> <request>",
+  "/orchestrate",
   "/orchestrator-settings"
 ];
 

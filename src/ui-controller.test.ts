@@ -103,6 +103,8 @@ describe("renderViewModelLines", () => {
     const joined = lines.join(" ");
     expect(joined).toContain("[accent]●[/]");
     expect(joined).toContain("Project checks are not configured");
+    expect(joined).toContain("/orchestrate");
+    expect(joined).not.toContain("<request>");
   });
 
   it("produces a bordered box for idle mode with valid config", () => {
@@ -112,6 +114,7 @@ describe("renderViewModelLines", () => {
     expect(joined).toContain("agents configured");
     expect(joined).toContain("checks");
     expect(joined).toContain("/orchestrator-settings");
+    expect(joined).not.toContain("<request>");
   });
 
   it("produces a bordered box for config_error mode", () => {
@@ -237,6 +240,8 @@ describe("renderViewModelLines", () => {
     expect(joined).toContain("http://127.0.0.1:61290");
     expect(joined).toContain("[muted]Inspect[/]");
     expect(joined).toContain("orchestrator-inspect test-abc");
+    expect(joined).toContain("[mdLink]/orchestrate[/]");
+    expect(joined).not.toContain("<request>");
   });
 
   it("renders waiting mode with dashboard url", () => {

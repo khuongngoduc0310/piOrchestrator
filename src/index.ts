@@ -8,8 +8,8 @@ import { handleMemoryCommand } from "./memory-commands.js";
 import { openBrowser } from "./open-browser.js";
 import { Orchestrator } from "./orchestrator.js";
 import { UiController } from "./ui-controller.js";
-import { AGENT_NAMES, THINKING_LEVELS, WORKFLOW_ROUTES, type AgentName, type ThinkingLevel } from "./types.js";
-import { ORCHESTRATE_USAGE, parseWorkflowRequest } from "./route-selection.js";
+import { AGENT_NAMES, THINKING_LEVELS, type AgentName, type ThinkingLevel } from "./types.js";
+import { collectWorkflowRequest, ORCHESTRATE_USAGE } from "./route-selection.js";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const agents = new Set<AgentName>(AGENT_NAMES);
@@ -39,18 +39,17 @@ export default function piOrchestrator(pi: ExtensionAPI): void {
   });
 
   pi.registerCommand("orchestrate", {
-    description: `Run a selected workflow: ${ORCHESTRATE_USAGE}`,
-    getArgumentCompletions: prefix => {
-      const match = prefix.match(/^--route\s+(\S*)$/);
-      if (!match) return prefix.trim() ? null : WORKFLOW_ROUTES.map(route => ({ value: `--route ${route} `, label: route }));
-      const routes = WORKFLOW_ROUTES.filter(route => route.startsWith(match[1]));
-      return routes.length ? routes.map(route => ({ value: `--route ${route} `, label: route })) : null;
-    },
+    description: "Select a workflow route and enter a request",
     handler: async (args: string, ctx: ExtensionCommandContext) => {
+      if (args.trim()) {
+        ctx.ui.notify(`Usage: ${ORCHESTRATE_USAGE}`, "warning");
+        return;
+      }
       try {
-        await engine.start(parseWorkflowRequest(args), ctx);
+        const workflow = await collectWorkflowRequest(ctx);
+        if (workflow) await engine.start(workflow, ctx);
       } catch (error) {
-        ctx.ui.notify(messageOf(error), args.trim() ? "error" : "warning");
+        ctx.ui.notify(messageOf(error), "error");
       }
     }
   });

@@ -201,10 +201,10 @@ export function renderViewModelLines(vm: OrchestratorViewModel, theme: WidgetThe
     ];
     if (vm.config.status === "missing") {
       lines.push(row(theme, "Project checks are not configured"));
-      lines.push(row(theme, `Run ${L("/orchestrate")} <request> to begin setup`));
+      lines.push(row(theme, `Run ${L("/orchestrate")} to begin setup`));
     } else {
       lines.push(row(theme, `Project: ${A(String(vm.config.agentCount))} agents configured · ${A(String(vm.config.checkCount))} checks`));
-      lines.push(row(theme, `${L("/orchestrate")} <request> · ${L("/orchestrator-settings")}`));
+      lines.push(row(theme, `${L("/orchestrate")} · ${L("/orchestrator-settings")}`));
     }
     lines.push(bottomBorder(theme));
     return lines;
@@ -281,7 +281,7 @@ export function renderViewModelLines(vm: OrchestratorViewModel, theme: WidgetThe
     if (run.resumeBlockedReason) lines.push(row(theme, `${W("Resume unavailable")} ${truncate(run.resumeBlockedReason, INNER - 21)}`));
     if (run.dashboardUrl) lines.push(row(theme, `${M("Dashboard")}  ${L(truncate(run.dashboardUrl, INNER - 14))}`));
     lines.push(row(theme, `${M("Inspect")}  ${L(`/orchestrator-inspect ${run.id.slice(0, 8)}`)}`));
-    lines.push(row(theme, `${M("New run")}   ${L("/orchestrate")} <request>`));
+    lines.push(row(theme, `${M("New run")}   ${L("/orchestrate")}`));
   }
 
   lines.push(bottomBorder(theme));

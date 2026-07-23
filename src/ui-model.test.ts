@@ -57,6 +57,8 @@ describe("UiModel", () => {
       expect(vm.config.status).toBe("valid");
       expect(vm.run).toBeUndefined();
       expect(vm.recentSteps).toEqual([]);
+      expect(vm.commands).toContain("/orchestrate");
+      expect(vm.commands.join(" ")).not.toContain("--route");
     });
 
     it("returns idle mode with missing config", () => {

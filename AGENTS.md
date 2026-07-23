@@ -11,6 +11,7 @@
 ## Architecture
 
 - `src/index.ts` is the Pi extension entrypoint and owns lifecycle hooks and slash-command registration.
+- `/orchestrate` is an interactive, argument-free command: collect the workflow route with `ctx.ui.select`, then collect the request with `ctx.ui.input`; keep controller and dashboard guidance consistent with that flow.
 - `src/orchestrator.ts` is a thin public facade. Mutable services/state live in `src/orchestrator-runtime.ts`; workflow phases are split across `src/orchestrator-*.ts` modules.
 - All user-selected routes share exploration/planning, then dispatch through fixed route templates. Check setup is deferred until a mutation route is approved; read-only and planning-only routes run neither checks nor mutation agents.
 - `prompts/*.md` are runtime contracts, not documentation. Changes to agent tasks or responses usually require coordinated edits to `src/agent-task-types.ts`, `src/agent-output-validation.ts`, the relevant prompt, and contract tests such as `src/prompts.test.ts` and `src/validation.test.ts`.
