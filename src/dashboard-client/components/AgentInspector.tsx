@@ -22,6 +22,7 @@ interface AgentInspectorProps {
   transcriptQuery: string;
   selectedDiffFile: number;
   dispatch: React.Dispatch<DashboardAction>;
+  onOpenArtifact: (name: string) => void;
 }
 
 interface FlattenedInvocation {
@@ -44,6 +45,7 @@ export function AgentInspector({
   transcriptQuery,
   selectedDiffFile,
   dispatch,
+  onOpenArtifact,
 }: AgentInspectorProps) {
   const [inspection, setInspection] = useState<AgentInspection | null>(null);
   const [loading, setLoading] = useState(false);
@@ -259,13 +261,13 @@ export function AgentInspector({
                     {step.label}
                     {step.message ? ` · ${step.message}` : ""}
                     {step.artifact && (
-                      <ArtifactBtn name={step.artifact} />
+                      <ArtifactBtn name={step.artifact} onOpen={onOpenArtifact} />
                     )}
                     {step.rawArtifact && (
-                      <ArtifactBtn name={step.rawArtifact} />
+                      <ArtifactBtn name={step.rawArtifact} onOpen={onOpenArtifact} />
                     )}
                     {step.mutationArtifact && (
-                      <ArtifactBtn name={step.mutationArtifact} />
+                      <ArtifactBtn name={step.mutationArtifact} onOpen={onOpenArtifact} />
                     )}
                   </li>
                 ))}
@@ -278,13 +280,20 @@ export function AgentInspector({
   );
 }
 
-function ArtifactBtn({ name }: { name: string }) {
+function ArtifactBtn({
+  name,
+  onOpen,
+}: {
+  name: string;
+  onOpen: (name: string) => void;
+}) {
   return (
     <button
       type="button"
       className="artifact-btn"
       data-artifact={name}
       style={{ marginLeft: 6 }}
+      onClick={() => onOpen(name)}
     >
       {name}
     </button>

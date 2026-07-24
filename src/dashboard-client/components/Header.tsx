@@ -1,4 +1,4 @@
-import { useCallback, useEffect } from "react";
+import { useCallback } from "react";
 import type {
   DashboardRunHistoryItem,
   OrchestratorViewModel,
@@ -91,6 +91,15 @@ export function Header({
           <span className="run-id muted">{run.id.slice(0, 8)}</span>
         )}
       </div>
+      {connection !== "live" && (
+        <div className={`connection-note ${connection}`} role="status" aria-live="polite">
+          {connection === "connecting"
+            ? "Connecting to live workflow updates…"
+            : connection === "reconnecting"
+              ? "Live updates were interrupted. Reconnecting automatically…"
+              : "Live updates are unavailable. The dashboard will keep retrying automatically."}
+        </div>
+      )}
       {run && (
         <div className="request" role="status">
           {run.route ? `[${run.route}] ` : ""}

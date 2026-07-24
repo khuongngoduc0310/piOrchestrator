@@ -132,6 +132,7 @@ export function App() {
               transcriptQuery={state.transcriptQuery}
               selectedDiffFile={state.selectedDiffFile}
               dispatch={dispatchAction}
+              onOpenArtifact={handleOpenArtifact}
             />
           </div>
         </section>

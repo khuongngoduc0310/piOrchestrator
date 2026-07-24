@@ -45,8 +45,13 @@ export function Overview({ snapshot, onSelectAgent }: OverviewProps) {
           </div>
         </div>
         <div id="run-details" className="panel">
-          <div className="empty-state">
-            <p className="muted">No active workflow</p>
+          <div className="getting-started">
+            <div className="getting-started-title">What appears here</div>
+            <ol>
+              <li>Exploration and an implementation plan</li>
+              <li>Live agent activity, tools, and decisions</li>
+              <li>Checks, file changes, and saved artifacts</li>
+            </ol>
           </div>
         </div>
       </>

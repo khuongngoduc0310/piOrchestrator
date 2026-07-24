@@ -66,9 +66,11 @@ describe("agent model settings", () => {
       ],
       [
         choices => choices.find(choice => choice.startsWith("builder —")),
+        "openai",
         "openai/coder — Coder",
         "max",
         choices => choices.find(choice => choice.startsWith("documenter —")),
+        "anthropic",
         "anthropic/claude",
         "Use model default",
         "Save changes"
@@ -88,6 +90,52 @@ describe("agent model settings", () => {
     });
     expect(ui.confirm.mock.calls[0][1]).toContain("builder:");
     expect(ui.confirm.mock.calls[0][1]).toContain("documenter:");
+  });
+
+  it("selects providers before models and returns to providers when model selection is cancelled", async () => {
+    const cwd = await project();
+    const ui = context(
+      [model("anthropic", "claude"), model("openai", "coder"), model("openai", "fast")],
+      [
+        choices => choices.find(choice => choice.startsWith("builder —")),
+        choices => {
+          expect(choices).toEqual(["anthropic", "openai"]);
+          return "openai";
+        },
+        choices => {
+          expect(choices).toEqual(["openai/coder", "openai/fast"]);
+          return undefined;
+        },
+        "anthropic",
+        choices => {
+          expect(choices).toEqual(["anthropic/claude"]);
+          return "anthropic/claude";
+        },
+        "Use model default",
+        "Save changes"
+      ]
+    );
+    const save = vi.fn(async (_cwd: string, _updates: AgentModelUpdates) => structuredClone(DEFAULT_CONFIG));
+
+    expect(await configureAgentModels(cwd, ui.ctx, { isRunning: () => false, save })).toBe("saved");
+    expect(save.mock.calls[0][1]).toEqual({ builder: { model: "anthropic/claude" } });
+  });
+
+  it("skips provider selection when only one provider is available", async () => {
+    const cwd = await project();
+    const ui = context([model("openai", "coder")], [
+      choices => choices.find(choice => choice.startsWith("builder —")),
+      choices => {
+        expect(choices).toEqual(["openai/coder"]);
+        return "openai/coder";
+      },
+      "Use model default",
+      "Save changes"
+    ]);
+    const save = vi.fn(async (_cwd: string, _updates: AgentModelUpdates) => structuredClone(DEFAULT_CONFIG));
+
+    expect(await configureAgentModels(cwd, ui.ctx, { isRunning: () => false, save })).toBe("saved");
+    expect(save.mock.calls[0][1]).toEqual({ builder: { model: "openai/coder" } });
   });
 
   it("cancels without writing the config", async () => {

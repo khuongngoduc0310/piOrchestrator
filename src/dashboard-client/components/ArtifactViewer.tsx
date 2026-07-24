@@ -1,5 +1,5 @@
-import { useCallback, useEffect, useRef, useState } from "react";
-import { getArtifact, getRunState } from "../api.js";
+import React, { useCallback, useEffect, useRef, useState } from "react";
+import { getArtifact } from "../api.js";
 import type { OrchestratorViewModel } from "../../dashboard-types.js";
 
 interface ArtifactViewerProps {
@@ -15,6 +15,7 @@ export function ArtifactViewer({
   selectedArtifact,
   runId,
   onCloseArtifact,
+  onOpenArtifact,
 }: ArtifactViewerProps) {
   if (!snapshot) return null;
 
@@ -47,7 +48,7 @@ export function ArtifactViewer({
               key={name}
               name={name}
               runId={runId}
-              onOpenArtifact={onCloseArtifact}
+              onOpenArtifact={onOpenArtifact}
             />
           ))
         )}

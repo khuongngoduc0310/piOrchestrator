@@ -64,6 +64,7 @@ export async function configureAgentModels(
   const initial = selectionsFrom(config);
   const staged = structuredClone(initial);
   const modelChoices = new Map(catalog.map(option => [option.label, option]));
+  const providers = [...new Set(catalog.map(option => option.model.provider))];
 
   while (true) {
     const roleChoices = new Map<string, AgentName>();
@@ -101,9 +102,24 @@ export async function configureAgentModels(
 
     const agent = roleChoices.get(action);
     if (!agent) continue;
-    const selectedLabel = await ctx.ui.select(`Choose a model for ${agent}`, catalog.map(option => option.label));
-    if (!selectedLabel) continue;
-    const selectedModel = modelChoices.get(selectedLabel);
+    let selectedModel: AvailableModelOption | undefined;
+    while (!selectedModel) {
+      const provider = providers.length === 1
+        ? providers[0]
+        : await ctx.ui.select(`Choose a provider for ${agent}`, providers);
+      if (!provider) break;
+
+      const providerModels = catalog.filter(option => option.model.provider === provider);
+      const selectedLabel = await ctx.ui.select(
+        `Choose a model for ${agent} (${provider})`,
+        providerModels.map(option => option.label)
+      );
+      if (!selectedLabel) {
+        if (providers.length > 1) continue;
+        break;
+      }
+      selectedModel = modelChoices.get(selectedLabel);
+    }
     if (!selectedModel) continue;
     const supportedThinking = supportedThinkingLevels(selectedModel.model);
     const thinkingChoice = await ctx.ui.select(

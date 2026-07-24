@@ -136,7 +136,20 @@ export function AgentHistory({ runId, revision }: AgentHistoryProps) {
             <tbody>
               {filtered.map(item => (
                 <tr key={item.key} className={selectedKey === item.key ? "selected" : ""} onClick={() => setSelectedKey(item.key)}>
-                  <td><strong>{item.agent}</strong><span>{item.stepLabel} · {item.mode.replace("_", " ")} #{item.sequence}</span></td>
+                  <td>
+                    <button
+                      type="button"
+                      className="history-invocation-button"
+                      aria-pressed={selectedKey === item.key}
+                      onClick={(event) => {
+                        event.stopPropagation();
+                        setSelectedKey(item.key);
+                      }}
+                    >
+                      <strong>{item.agent}</strong>
+                      <span>{item.stepLabel} · {item.mode.replace("_", " ")} #{item.sequence}</span>
+                    </button>
+                  </td>
                   <td>{item.model ?? "Unknown"}<span>{item.provider ?? ""}</span></td>
                   <td><span className={`status-text ${item.status}`}>{item.status}</span></td>
                   <td>{item.usage ? formatTokens(tokenTotal(item.usage)) : "Unavailable"}</td>
