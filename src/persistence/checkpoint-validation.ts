@@ -7,6 +7,8 @@ import {
   type WorkflowCheckpoint
 } from "./checkpoint-types.js";
 import { ValidationError, array, boolean, enumValue, integer, record, string } from "../validation-core.js";
+import { normalizeRepositoryPath } from "../workspace/path-validation.js";
+import type { ValidatedFileAttestation } from "../workspace/workspace-attestation.js";
 
 const STAGES = [
   "idle", "preflight", "exploring", "planning", "reviewing_plan", "human_review_plan",
@@ -59,6 +61,76 @@ function validateUsage(value: unknown, path: string): void {
       nonNegativeNumber(costs[field], `${path}.costBreakdown.${field}`);
     }
   }
+}
+
+function repositoryPath(value: unknown, path: string): string {
+  const result = string(value, path);
+  try {
+    const normalized = normalizeRepositoryPath(result);
+    if (normalized !== result) throw new ValidationError(path, "must be a normalized repository-relative path");
+    return normalized;
+  } catch (error) {
+    if (error instanceof ValidationError) throw error;
+    throw new ValidationError(path, error instanceof Error ? error.message : String(error));
+  }
+}
+
+function validateBaselineContext(value: unknown, path: string): WorkflowCheckpoint["baselineContext"] {
+  const baseline = record(value, path);
+  optionalString(baseline.gitHead, `${path}.gitHead`);
+  boolean(baseline.hasUncommittedChanges, `${path}.hasUncommittedChanges`);
+  boolean(baseline.hasStagedChanges, `${path}.hasStagedChanges`);
+  for (const field of ["diffVsHead", "stagedDiff", "diffArtifact", "stagedArtifact", "statusPorcelain"] as const) {
+    optionalString(baseline[field], `${path}.${field}`);
+  }
+  array(baseline.untrackedFiles, `${path}.untrackedFiles`, (entry, entryPath) => string(entry, entryPath));
+  return value as WorkflowCheckpoint["baselineContext"];
+}
+
+function validateBaselineReviewContext(value: unknown, path: string): WorkflowCheckpoint["baselineReviewContext"] {
+  const review = record(value, path);
+  validateBaselineContext(review.summary, `${path}.summary`);
+  const artifacts = record(review.artifacts, `${path}.artifacts`);
+  string(artifacts.baselineJson, `${path}.artifacts.baselineJson`);
+  optionalString(artifacts.headDiffPatch, `${path}.artifacts.headDiffPatch`);
+  optionalString(artifacts.stagedDiffPatch, `${path}.artifacts.stagedDiffPatch`);
+  return value as WorkflowCheckpoint["baselineReviewContext"];
+}
+
+function validateWorktreeHandle(value: unknown, path: string): WorkflowCheckpoint["worktreeHandle"] {
+  if (value === undefined) return undefined;
+  const handle = record(value, path);
+  for (const field of ["repositoryRoot", "sourceCwd", "worktreeRoot", "effectiveCwd", "baselineCommit"] as const) {
+    string(handle[field], `${path}.${field}`);
+  }
+  string(handle.projectRelativePath, `${path}.projectRelativePath`, true);
+  return value as WorkflowCheckpoint["worktreeHandle"];
+}
+
+function validateFileAttestation(value: unknown, path: string): ValidatedFileAttestation {
+  const attestation = record(value, path);
+  const state = enumValue(attestation.state, `${path}.state`, ["present", "deleted"] as const);
+  const result: ValidatedFileAttestation = {
+    path: repositoryPath(attestation.path, `${path}.path`),
+    state,
+    agent: enumValue(attestation.agent, `${path}.agent`, AGENT_NAMES),
+    stepId: string(attestation.stepId, `${path}.stepId`),
+    invocation: integer(attestation.invocation, `${path}.invocation`, 1)
+  };
+  if (state === "present") {
+    return {
+      ...result,
+      hash: sha256(attestation.hash, `${path}.hash`),
+      mode: integer(attestation.mode, `${path}.mode`),
+      ...(attestation.symlinkTarget === undefined
+        ? {}
+        : { symlinkTarget: string(attestation.symlinkTarget, `${path}.symlinkTarget`, true) })
+    };
+  }
+  if (attestation.hash !== undefined || attestation.mode !== undefined || attestation.symlinkTarget !== undefined) {
+    throw new ValidationError(path, "deleted attestations must not contain file content fields");
+  }
+  return result;
 }
 
 export function validateWorkflowStateForResume(value: unknown, path = "state"): WorkflowState {
@@ -194,7 +266,29 @@ export function validateWorkflowCheckpoint(value: unknown, path = "checkpoint"):
     ? undefined
     : enumValue(checkpoint.memoryMode, `${path}.memoryMode`, ["untrusted", "disabled", "empty", "valid", "invalid", "scope_mismatch", "unsupported"] as const);
   const selectedMemoryIds = array(checkpoint.selectedMemoryIds, `${path}.selectedMemoryIds`, (entry, entryPath) => string(entry, entryPath));
-  const validatedChangedFiles = array(checkpoint.validatedChangedFiles, `${path}.validatedChangedFiles`, (entry, entryPath) => string(entry, entryPath));
+  const validatedChangedFiles = array(checkpoint.validatedChangedFiles, `${path}.validatedChangedFiles`, repositoryPath);
+  const validatedFileAttestations = array(
+    checkpoint.validatedFileAttestations,
+    `${path}.validatedFileAttestations`,
+    validateFileAttestation
+  );
+  const attestationPaths = new Set<string>();
+  for (const [index, attestation] of validatedFileAttestations.entries()) {
+    if (attestationPaths.has(attestation.path)) {
+      throw new ValidationError(`${path}.validatedFileAttestations[${index}].path`, "must be unique");
+    }
+    attestationPaths.add(attestation.path);
+  }
+  const changedFileSet = new Set(validatedChangedFiles);
+  if (changedFileSet.size !== validatedChangedFiles.length) {
+    throw new ValidationError(`${path}.validatedChangedFiles`, "must contain unique paths");
+  }
+  if (
+    changedFileSet.size !== attestationPaths.size
+    || [...changedFileSet].some(file => !attestationPaths.has(file))
+  ) {
+    throw new ValidationError(`${path}.validatedChangedFiles`, "must exactly match validated file attestations");
+  }
   return {
     schemaVersion: CHECKPOINT_SCHEMA_VERSION,
     checkpointNumber: integer(checkpoint.checkpointNumber, `${path}.checkpointNumber`, 1),
@@ -209,14 +303,15 @@ export function validateWorkflowCheckpoint(value: unknown, path = "checkpoint"):
     memoryDigest: sha256(checkpoint.memoryDigest, `${path}.memoryDigest`),
     selectedMemoryIds,
     validatedChangedFiles,
+    validatedFileAttestations,
     baselineRepaired: boolean(checkpoint.baselineRepaired, `${path}.baselineRepaired`),
-    baselineContext: checkpoint.baselineContext as WorkflowCheckpoint["baselineContext"],
-    baselineReviewContext: checkpoint.baselineReviewContext as WorkflowCheckpoint["baselineReviewContext"],
+    baselineContext: validateBaselineContext(checkpoint.baselineContext, `${path}.baselineContext`),
+    baselineReviewContext: validateBaselineReviewContext(checkpoint.baselineReviewContext, `${path}.baselineReviewContext`),
     lessonStatus: enumValue(checkpoint.lessonStatus, `${path}.lessonStatus`, ["approved", "rejected", "skipped"] as const),
     mutationConfirmed: checkpoint.mutationConfirmed !== undefined
       ? boolean(checkpoint.mutationConfirmed, `${path}.mutationConfirmed`)
       : false,
-    worktreeHandle: checkpoint.worktreeHandle as WorkflowCheckpoint["worktreeHandle"],
+    worktreeHandle: validateWorktreeHandle(checkpoint.worktreeHandle, `${path}.worktreeHandle`),
     state,
     cursor: checkpoint.cursor as WorkflowCheckpoint["cursor"],
     bindings: checkpoint.bindings as WorkflowCheckpoint["bindings"]

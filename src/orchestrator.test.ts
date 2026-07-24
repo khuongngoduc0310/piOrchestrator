@@ -25,6 +25,7 @@ afterEach(async () => {
 function defaultTestConfig(): OrchestratorConfig {
   const config = structuredClone(DEFAULT_CONFIG);
   config.humanInTheLoop.importantDecisions = false;
+  config.limits.worktreeIsolation = false;
   return config;
 }
 
@@ -1090,10 +1091,11 @@ describe("Orchestrator", () => {
     expect(paused.status).toBe("paused");
     expect(paused.pendingDecision?.kind).toBe("final_delivery");
 
-    const resumedAgent = new QueueAgent([plan, builder, approved, documenter, approved]);
+    const resumedAgent = new QueueAgent([plan, tester, builder, approved, documenter, approved]);
     const checks = [[check(true)], [check(true)]];
     const select = vi.fn()
       .mockResolvedValueOnce("Request changes")
+      .mockResolvedValueOnce("Approve revised plan")
       .mockResolvedValueOnce("Finish delivery");
     const input = vi.fn(async () => "Tighten the final behavior before delivery");
     const pi = { appendEntry: vi.fn(), exec: vi.fn(), sendMessage: vi.fn() } as unknown as ExtensionAPI;
@@ -1119,8 +1121,8 @@ describe("Orchestrator", () => {
     await resumed.resume(paused.runId, ctx);
 
     expect(resumed.getState()?.status).toBe("completed");
-    expect(select).toHaveBeenCalledTimes(2);
-    expect(resumedAgent.calls.map(call => call.name)).toEqual(["planner", "builder", "reviewer", "documenter", "reviewer"]);
+    expect(select).toHaveBeenCalledTimes(3);
+    expect(resumedAgent.calls.map(call => call.name)).toEqual(["planner", "tester", "builder", "reviewer", "documenter", "reviewer"]);
     const plannerTask = JSON.parse(resumedAgent.calls[0].task).task;
     expect(plannerTask).toMatchObject({
       action: "revise_plan",
@@ -1547,6 +1549,43 @@ describe("Orchestrator", () => {
     expect(agent.calls.some(call => call.name === "tester" || call.name === "builder")).toBe(false);
   });
 
+  it("pauses instead of approving when the workspace changes during a human gate", async () => {
+    const cwd = await mkdtemp(path.join(os.tmpdir(), "pi-orchestrator-human-drift-"));
+    directories.push(cwd);
+    const config = defaultTestConfig();
+    config.checks = ["check"];
+    config.dashboard.enabled = false;
+    config.humanInTheLoop.planApproval = true;
+    await saveConfig(cwd, config);
+    const agent = new QueueAgent([explorer, plan]);
+    const select = vi.fn(async () => {
+      await writeFile(path.join(cwd, "drift.txt"), "changed while awaiting approval");
+      return "Approve plan";
+    });
+    const ctx = {
+      cwd,
+      hasUI: true,
+      isProjectTrusted: () => true,
+      ui: {
+        select,
+        editor: vi.fn(async () => "viewed"),
+        input: vi.fn(),
+        confirm: vi.fn(),
+        notify: vi.fn(),
+        setStatus: vi.fn(),
+        setWidget: vi.fn()
+      }
+    } as unknown as ExtensionCommandContext;
+    const pi = { appendEntry: vi.fn(), exec: vi.fn() } as unknown as ExtensionAPI;
+    const engine = new Orchestrator(pi, path.resolve("."), { agentExecutor: agent });
+
+    await engine.start({ route: "implementation", request: "request" }, ctx);
+
+    expect(engine.getState()?.status).toBe("paused");
+    expect(engine.getState()?.warning).toContain("workspace changed while awaiting");
+    expect(agent.calls).toHaveLength(2);
+  });
+
   it("pauses before mutation when confirmation requires an interactive UI", async () => {
     const { engine, agent } = await scenario(
       [explorer, plan, approved],
@@ -1897,6 +1936,7 @@ describe("Orchestrator", () => {
     const config = structuredClone(DEFAULT_CONFIG);
     config.checks = ["check"];
     config.dashboard.enabled = false;
+    config.limits.worktreeIsolation = false;
     config.limits.reviewRevisions = 0;
     await saveConfig(cwd, config);
     const agent = new QueueAgent([
@@ -1937,6 +1977,7 @@ describe("Orchestrator", () => {
     const config = structuredClone(DEFAULT_CONFIG);
     config.checks = ["check"];
     config.dashboard.enabled = false;
+    config.limits.worktreeIsolation = false;
     config.limits.reviewRevisions = 0;
     await saveConfig(cwd, config);
     const agent = new QueueAgent([

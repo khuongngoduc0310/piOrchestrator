@@ -5,7 +5,7 @@ import { runCheckStep } from "./orchestrator-workspace.js";
 import { parseDebuggerOutput, parseDocumenterOutput, parsePlannerOutput, parseTesterOutput } from "../validation.js";
 import { saveWorkflowCheckpoint } from "./orchestrator-checkpoints.js";
 import { runSpecializedMutationFinalization } from "./orchestrator-finalization.js";
-import type { CheckResult, DocumenterOutput, TesterOutput } from "../types.js";
+import type { CheckResult, DocumenterOutput, PlannerOutput, TesterOutput } from "../types.js";
 import { assertDocumenterComplete, assertTesterComplete } from "./mutation-completion.js";
 import { allGreen } from "./orchestrator-helpers.js";
 import { deriveRoleMutationPaths } from "../workspace/workspace-guard.js";
@@ -151,20 +151,72 @@ export async function runSpecializedMutationRoute(
       answer => ({ action: answer.action === "finish" ? "finish" : "request_changes", feedback: answer.feedback })
     );
     if (decision.action === "request_changes") {
-      const nextRound = changeRound + 1;
-      if (nextRound > workflow.config.limits.planRevisions + 1) throw new Error("Final change request limit was exhausted");
-      const plan = await runAgentStep(runtime, "planner", "planning", "Plan requested final changes", {
-        action: "revise_plan",
-        route: workflow.route,
-        request: workflow.request,
-        exploration: result.exploration,
-        previousPlan: result.plan,
-        feedback: { source: "human", text: decision.feedback ?? "" }
-      }, workflow.mutationCwd, workflow.ctx, parsePlannerOutput, { revision: nextRound });
-      if (plan.route !== workflow.route) throw new Error(`Planner returned route ${plan.route}; user selected ${workflow.route}`);
-      await runSpecializedMutationRoute(runtime, workflow, { ...result, plan }, undefined, undefined, undefined, nextRound);
+      await applySpecializedFinalChangeRequest(
+        runtime,
+        workflow,
+        result,
+        decision.feedback ?? "",
+        changeRound + 1
+      );
       return;
     }
   }
   await runSpecializedMutationFinalization(runtime, workflow, result, finalChecks);
+}
+
+export async function applySpecializedFinalChangeRequest(
+  runtime: OrchestratorRuntime,
+  workflow: WorkflowContext,
+  result: SpecializedMutationResult,
+  feedback: string,
+  changeRound: number,
+  proposedPlan?: PlannerOutput,
+  approved = false
+): Promise<void> {
+  if (result.scopeRevisionCount >= workflow.config.limits.planRevisions) {
+    throw new Error("Final change request limit was exhausted");
+  }
+  const plan = proposedPlan ?? await runAgentStep(runtime, "planner", "planning", "Plan requested final changes", {
+    action: "revise_plan",
+    route: workflow.route,
+    request: workflow.request,
+    exploration: result.exploration,
+    previousPlan: result.plan,
+    feedback: { source: "human", text: feedback }
+  }, workflow.mutationCwd, workflow.ctx, parsePlannerOutput, { revision: changeRound });
+  if (plan.route !== workflow.route) throw new Error(`Planner returned route ${plan.route}; user selected ${workflow.route}`);
+  if (!approved) {
+    await runDurableHumanGate(
+      runtime,
+      workflow,
+      "final_revision_approval",
+      "Final revision plan approval",
+      { point: "final_revision_decision", mode: "specialized", changeRound },
+      {
+        exploration: result.exploration,
+        plan,
+        baselineChecks: result.baseline,
+        ...(result.route === "tests_only" ? { tester: result.tester } : { documentation: result.documentation }),
+        decisionContext: { mode: "specialized", result, plan, feedback, changeRound }
+      },
+      async signal => {
+        const answer = await workflow.ctx.ui.select(
+          `Approve final revision plan: ${plan.summary}?`,
+          ["Approve revised plan", "Cancel workflow"],
+          { signal }
+        );
+        return answer === undefined ? undefined : { action: answer === "Approve revised plan" ? "approve" as const : "cancel" as const };
+      },
+      () => ({ approved: true })
+    );
+  }
+  await runSpecializedMutationRoute(
+    runtime,
+    workflow,
+    { ...result, plan, scopeRevisionCount: result.scopeRevisionCount + 1 },
+    undefined,
+    undefined,
+    undefined,
+    changeRound
+  );
 }

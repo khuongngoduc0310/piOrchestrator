@@ -22,16 +22,18 @@ export function DiffViewer({
   const reqRef = useRef(0);
 
   useEffect(() => {
+    const controller = new AbortController();
     const req = ++reqRef.current;
     setData(null);
     setError(false);
-    getDiff(runId, stepId, sequence)
+    getDiff(runId, stepId, sequence, controller.signal)
       .then((result) => {
         if (req === reqRef.current) setData(result);
       })
       .catch(() => {
-        if (req === reqRef.current) setError(true);
+        if (req === reqRef.current && !controller.signal.aborted) setError(true);
       });
+    return () => controller.abort();
   }, [runId, stepId, sequence]);
 
   if (error) {

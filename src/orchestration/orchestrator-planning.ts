@@ -19,13 +19,18 @@ import { deriveRoleMutationPaths } from "../workspace/workspace-guard.js";
 export async function runPlanningPhase(runtime: OrchestratorRuntime, workflow: WorkflowContext): Promise<PlanningResult> {
   const { request, ctx, cwd, config, controller } = workflow;
   await transition(runtime, "preflight", undefined, "Validating configuration and models", ctx);
+  const planningAgents: AgentName[] = ["explorer", "planner"];
+  if (!config.humanInTheLoop.planApproval
+    || (config.limits.planRevisions > 0 && !config.humanInTheLoop.planRevisionApproval)) {
+    planningAgents.push("reviewer");
+  }
   await runtime.agents.preflight(
     config,
     cwd,
     runtime.extensionRoot,
     controller.signal,
     config.limits.agentTimeoutMs,
-    ["explorer", "planner", "reviewer"]
+    planningAgents
   );
 
   const exploration = await runAgentStep(runtime, "explorer", "exploring", "Explore repository", { route: workflow.route, request }, cwd, ctx, parseExplorerOutput);

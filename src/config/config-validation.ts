@@ -73,7 +73,7 @@ export function validateOrchestratorConfig(value: unknown, path = "config"): Orc
       agentTimeoutMs: boundedInteger(limits.agentTimeoutMs, `${path}.limits.agentTimeoutMs`, 1, 2_147_483_647),
       checkTimeoutMs: boundedInteger(limits.checkTimeoutMs, `${path}.limits.checkTimeoutMs`, 1, 2_147_483_647),
       maxOutputBytes: boundedInteger(limits.maxOutputBytes, `${path}.limits.maxOutputBytes`, 1, 100_000_000),
-      worktreeIsolation: boolean(limits.worktreeIsolation ?? false, `${path}.limits.worktreeIsolation`)
+      worktreeIsolation: boolean(limits.worktreeIsolation ?? true, `${path}.limits.worktreeIsolation`)
     },
     agents,
     humanInTheLoop: {

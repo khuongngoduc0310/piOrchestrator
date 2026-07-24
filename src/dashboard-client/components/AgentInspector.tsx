@@ -51,20 +51,25 @@ export function AgentInspector({
   const [loading, setLoading] = useState(false);
   const [invocations, setInvocations] = useState<FlattenedInvocation[]>([]);
   const reqRef = useRef(0);
-  const [selectedItem, setSelectedItem] = useState<FlattenedInvocation | null>(null);
+  const selectedItem = invocations.find(item => item.key === selectedInvocation) ?? null;
 
   const agents = snapshot?.agents ?? [];
   const summary = agents.find((a) => a.name === selectedAgent);
 
   useEffect(() => {
     if (!selectedAgent || !runId || agentMode === "closed") {
+      reqRef.current += 1;
       setInspection(null);
       setInvocations([]);
+      setLoading(false);
       return;
     }
+    const controller = new AbortController();
     const req = ++reqRef.current;
+    setInspection(null);
+    setInvocations([]);
     setLoading(true);
-    getAgentInspection(runId, selectedAgent)
+    getAgentInspection(runId, selectedAgent, controller.signal)
       .then((data) => {
         if (req === reqRef.current) {
           setInspection(data);
@@ -91,11 +96,13 @@ export function AgentInspector({
         }
       })
       .catch(() => {
-        if (req === reqRef.current) {
+        if (req === reqRef.current && !controller.signal.aborted) {
           setLoading(false);
           setInspection(null);
+          setInvocations([]);
         }
       });
+    return () => controller.abort();
   }, [runId, selectedAgent, agentMode, summary?.invocationCount, summary?.status]);
 
   const handleClose = useCallback(() => {
@@ -103,12 +110,11 @@ export function AgentInspector({
   }, [dispatch]);
 
   const handleAutoFollow = useCallback(() => {
-    dispatch({ type: "agentAutoFollowed" });
-  }, [dispatch]);
+    dispatch({ type: "agentAutoFollowed", agent: snapshot?.run?.activeAgent ?? null });
+  }, [dispatch, snapshot?.run?.activeAgent]);
 
   const handleSelectInvocation = useCallback(
     (item: FlattenedInvocation) => {
-      setSelectedItem(item);
       dispatch({ type: "invocationSelected", key: item.key });
     },
     [dispatch],

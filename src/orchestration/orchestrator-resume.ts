@@ -5,7 +5,7 @@ import { validateCheckResults, validateCheckResultsAgainstCommands, validateWork
 import type { WorkflowCheckpoint } from "../persistence/checkpoint-types.js";
 import { loadConfig } from "../config/config.js";
 import type { ImplementationPlanningResult, ImplementationResult, PlanningResult, ReadOnlyReviewResult, ReviewResult, SpecializedMutationResult, WorkflowContext } from "./orchestrator-context.js";
-import { runFinalizationPhase, runReadOnlyFinalizationPhase, type FinalizationContinuation } from "./orchestrator-finalization.js";
+import { applyFinalChangeRequest, runFinalizationPhase, runReadOnlyFinalizationPhase, type FinalizationContinuation } from "./orchestrator-finalization.js";
 import { requestImplementationBudgetExtension, runImplementationPhase, type ImplementationContinuation } from "./orchestrator-implementation.js";
 import { hydrateLessonPreparation, type SerializedLessonPreparation } from "./orchestrator-lessons.js";
 import { continueBaselineRepair, continuePlanningDecision, enterMutationPhase, prepareImplementationPhase } from "./orchestrator-planning.js";
@@ -16,7 +16,7 @@ import { fail, persist } from "./orchestrator-state.js";
 import { WorkflowPausedError } from "./workflow-errors.js";
 import { runCheckStep } from "./orchestrator-workspace.js";
 import { runSelectedRoute } from "./orchestrator-routes.js";
-import { runSpecializedMutationRoute } from "./orchestrator-specialized-routes.js";
+import { applySpecializedFinalChangeRequest, runSpecializedMutationRoute } from "./orchestrator-specialized-routes.js";
 import { RunStore, type RunLease } from "../persistence/store.js";
 import type { BuilderOutput, DocumenterOutput, ReviewApprovalSource, ReviewOutput, WorkflowState } from "../types.js";
 import {
@@ -82,6 +82,7 @@ export async function resumeWorkflow(
     runtime.lessonStatus = checkpoint.lessonStatus;
     runtime.builderSessionOutputs = (checkpoint.bindings.builderOutputs ?? []).map((value, index) => validateBuilderOutput(value, `checkpoint.bindings.builderOutputs[${index}]`));
     runtime.validatedChangedFiles = new Set(checkpoint.validatedChangedFiles);
+    runtime.validatedFileAttestations = new Map(checkpoint.validatedFileAttestations.map(attestation => [attestation.path, attestation]));
     runtime.selectedMemoryIds = new Set(checkpoint.selectedMemoryIds);
     runtime.explorerRelevantFiles = checkpoint.bindings.exploration?.relevantFiles.slice() ?? [];
     runtime.mutationCommitStarted = false;
@@ -743,6 +744,27 @@ async function continueHumanDecision(
       await runFinalizationPhase(runtime, workflow, review);
       return;
     }
+    if (request.resume.point === "final_revision_decision") {
+      const context = objectValue(checkpoint.bindings.decisionContext, "final revision decision context");
+      const mode = stringValue(context.mode, "final revision decision mode");
+      if (mode !== request.resume.mode) throw new Error("Final revision mode does not match its decision context");
+      const changeRound = nonNegativeInteger(context.changeRound, "changeRound");
+      if (changeRound !== request.resume.changeRound) throw new Error("Final revision change round does not match its decision context");
+      const feedback = context.feedback;
+      if (typeof feedback !== "string") throw new Error("Final revision feedback must be a string");
+      const plan = validatePlannerOutput(context.plan);
+      runtime.requireState().pendingDecision = recorded ? undefined : request;
+      const approval = recorded ? planReviewDecision(recorded) : undefined;
+      if (approval && !approval.approved) throw new Error("Final revision decisions can only approve or cancel the proposed plan");
+      if (mode === "specialized") {
+        const result = specializedMutationResult(context.result);
+        await applySpecializedFinalChangeRequest(runtime, workflow, result, feedback, changeRound, plan, approval?.approved === true);
+        return;
+      }
+      const review = reviewResult(context.review);
+      await applyFinalChangeRequest(runtime, workflow, review, feedback, changeRound, plan, approval?.approved === true);
+      return;
+    }
     if (request.resume.point === "final_delivery") {
       const context = objectValue(checkpoint.bindings.decisionContext, "final delivery decision context");
       const mode = stringValue(context.mode, "final delivery decision mode");
@@ -936,7 +958,7 @@ function pendingHumanDecision(value: unknown): PendingHumanDecision {
   const item = objectValue(value, "pending human decision");
   if (item.schemaVersion !== 1) throw new Error("Pending human decision schemaVersion must be 1");
   const kind = stringValue(item.kind, "pending human decision kind") as PendingHumanDecision["kind"];
-  if (!["plan_approval", "plan_revision_approval", "baseline_repair_approval", "mutation_confirmation", "scope_expansion", "code_review_rejection", "repair_budget_exhausted", "final_delivery"].includes(kind)) {
+  if (!["plan_approval", "plan_revision_approval", "baseline_repair_approval", "mutation_confirmation", "scope_expansion", "code_review_rejection", "repair_budget_exhausted", "final_revision_approval", "final_delivery"].includes(kind)) {
     throw new Error("Pending human decision kind is invalid");
   }
   const resumeValue = objectValue(item.resume, "pending human decision resume point");
@@ -978,6 +1000,10 @@ function pendingHumanDecision(value: unknown): PendingHumanDecision {
       allowedAttempts: positiveInteger(resumeValue.allowedAttempts, "allowedAttempts"),
       scopeRevisionCount: nonNegativeInteger(resumeValue.scopeRevisionCount, "scopeRevisionCount")
     };
+  } else if (point === "final_revision_decision") {
+    const mode = stringValue(resumeValue.mode, "final revision mode");
+    if (mode !== "review" && mode !== "specialized") throw new Error("Final revision mode is invalid");
+    resume = { point, mode, changeRound: positiveInteger(resumeValue.changeRound, "changeRound") };
   } else if (point === "final_delivery") {
     const mode = stringValue(resumeValue.mode, "final delivery mode");
     if (mode !== "review" && mode !== "specialized") throw new Error("Final delivery mode is invalid");

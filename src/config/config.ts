@@ -27,7 +27,7 @@ export const DEFAULT_CONFIG: OrchestratorConfig = {
     agentTimeoutMs: 20 * 60 * 1000,
     checkTimeoutMs: 10 * 60 * 1000,
     maxOutputBytes: 256 * 1024,
-    worktreeIsolation: false
+    worktreeIsolation: true
   },
   agents: {
     explorer: { model: "anthropic/claude-sonnet-4-5", thinking: "low", tools: ["read", "grep", "find", "ls"], promptFile: "explorer.md" },

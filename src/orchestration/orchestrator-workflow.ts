@@ -32,61 +32,62 @@ export async function runWorkflow(
   runtime.store = store;
   await store.init();
   const lease = await store.acquireLease();
-  runtime.activeTranscripts.clear();
-  runtime.transcriptRevision = 0;
-  const agents = Object.fromEntries(AGENT_NAMES.map(name => [name, { status: "idle", model: config.agents[name].model }])) as NonNullable<typeof runtime.state>["agents"];
-  runtime.state = {
-    schemaVersion: SCHEMA_VERSION,
-    extensionVersion: EXTENSION_VERSION,
-    runId,
-    request,
-    route,
-    cwd,
-    runDir: store.runDir,
-    stage: "idle",
-    status: "running",
-    attempt: 0,
-    startedAt: runtime.timestamp(),
-    updatedAt: runtime.timestamp(),
-    agents,
-    steps: []
-  };
-  runtime.builderSessionOutputs = [];
-  runtime.baselineRepaired = false;
-  runtime.lessonStatus = "skipped";
-  runtime.selectedMemoryIds.clear();
-  runtime.candidateLessons = [];
-  runtime.candidateLedger = undefined;
-  runtime.promotionResult = undefined;
-  runtime.validatedChangedFiles.clear();
-  runtime.mutationCommitStarted = false;
-  runtime.baselineContext = await runtime.captureBaseline(cwd, store);
-  await store.saveJson("baseline.json", runtime.baselineContext);
-  const artifactRoot = path.relative(cwd, store.runDir).split(path.sep).join("/");
-  runtime.baselineReviewContext = {
-    summary: runtime.baselineContext,
-    artifacts: {
-      baselineJson: `${artifactRoot}/baseline.json`,
-      ...(runtime.baselineContext.diffArtifact ? { headDiffPatch: `${artifactRoot}/${runtime.baselineContext.diffArtifact}` } : {}),
-      ...(runtime.baselineContext.stagedArtifact ? { stagedDiffPatch: `${artifactRoot}/${runtime.baselineContext.stagedArtifact}` } : {})
-    }
-  };
-  const workflow: WorkflowContext = {
-    route,
-    request,
-    ctx,
-    cwd,
-    mutationCwd: cwd,
-    runId,
-    store,
-    config,
-    controller,
-    worktreeSynced: false,
-    retainWorktree: false,
-    mutationConfirmed: false
-  };
-
+  let workflow: WorkflowContext | undefined;
   try {
+    runtime.activeTranscripts.clear();
+    runtime.transcriptRevision = 0;
+    const agents = Object.fromEntries(AGENT_NAMES.map(name => [name, { status: "idle", model: config.agents[name].model }])) as NonNullable<typeof runtime.state>["agents"];
+    runtime.state = {
+      schemaVersion: SCHEMA_VERSION,
+      extensionVersion: EXTENSION_VERSION,
+      runId,
+      request,
+      route,
+      cwd,
+      runDir: store.runDir,
+      stage: "idle",
+      status: "running",
+      attempt: 0,
+      startedAt: runtime.timestamp(),
+      updatedAt: runtime.timestamp(),
+      agents,
+      steps: []
+    };
+    runtime.builderSessionOutputs = [];
+    runtime.baselineRepaired = false;
+    runtime.lessonStatus = "skipped";
+    runtime.selectedMemoryIds.clear();
+    runtime.candidateLessons = [];
+    runtime.candidateLedger = undefined;
+    runtime.promotionResult = undefined;
+    runtime.validatedChangedFiles.clear();
+    runtime.validatedFileAttestations.clear();
+    runtime.mutationCommitStarted = false;
+    runtime.baselineContext = await runtime.captureBaseline(cwd, store);
+    await store.saveJson("baseline.json", runtime.baselineContext);
+    const artifactRoot = path.relative(cwd, store.runDir).split(path.sep).join("/");
+    runtime.baselineReviewContext = {
+      summary: runtime.baselineContext,
+      artifacts: {
+        baselineJson: `${artifactRoot}/baseline.json`,
+        ...(runtime.baselineContext.diffArtifact ? { headDiffPatch: `${artifactRoot}/${runtime.baselineContext.diffArtifact}` } : {}),
+        ...(runtime.baselineContext.stagedArtifact ? { stagedDiffPatch: `${artifactRoot}/${runtime.baselineContext.stagedArtifact}` } : {})
+      }
+    };
+    workflow = {
+      route,
+      request,
+      ctx,
+      cwd,
+      mutationCwd: cwd,
+      runId,
+      store,
+      config,
+      controller,
+      worktreeSynced: false,
+      retainWorktree: false,
+      mutationConfirmed: false
+    };
     if (shouldSuggestHumanTouchpoints(config, ctx)) await suggestHumanTouchpoints(cwd, config, ctx);
     if (config.dashboard.enabled) {
       try {
@@ -114,7 +115,7 @@ export async function runWorkflow(
     runtime.persistTimer = undefined;
     const finalState = runtime.state;
     const isPaused = finalState?.status === "paused";
-    if (workflow.worktreeHandle && !workflow.worktreeSynced && !workflow.retainWorktree && !isPaused) {
+    if (workflow?.worktreeHandle && !workflow.worktreeSynced && !workflow.retainWorktree && !isPaused) {
       try {
         const checkpoint = await new CheckpointStore(store.runDir, runId).loadLatest();
         if (checkpoint && checkpoint.worktreeHandle && checkpoint.workspaceDigest === await currentWorkspaceDigest(runtime, workflow.worktreeHandle.effectiveCwd)) {
@@ -124,10 +125,10 @@ export async function runWorkflow(
       } catch {
         // An unverifiable worktree is removed below.
       }
-    } else if (isPaused && workflow.worktreeHandle && !workflow.worktreeSynced) {
+    } else if (isPaused && workflow?.worktreeHandle && !workflow.worktreeSynced) {
       workflow.retainWorktree = true;
     }
-    if (workflow.worktreeHandle && !workflow.worktreeSynced && !workflow.retainWorktree) {
+    if (workflow?.worktreeHandle && !workflow.worktreeSynced && !workflow.retainWorktree) {
       await removeWorktree(workflow.worktreeHandle).catch(error => {
         ctx.ui.notify(`Failed to remove mutation worktree: ${messageOf(error)}`, "warning");
       });

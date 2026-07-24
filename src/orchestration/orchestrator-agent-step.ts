@@ -13,6 +13,7 @@ import { captureGitTree, compareGitTrees } from "../workspace/git-tree-diff.js";
 import { ROLE_MUTATION_KINDS } from "../agents/role-capabilities.js";
 import { refreshCheckpointAfterInterruptedMutation } from "./orchestrator-checkpoints.js";
 import type { WorkspaceSnapshot } from "../workspace/workspace-guard.js";
+import { createFileAttestations } from "../workspace/workspace-attestation.js";
 
 const OUTPUT_CORRECTABLE_AGENTS = new Set<AgentName>(["explorer", "planner", "reviewer", "debugger"]);
 const CORRECTION_TOOLS = new Set(["read", "grep", "find", "ls"]);
@@ -32,6 +33,7 @@ export async function runAgentStep<A extends AgentName>(
   const controller = runtime.requireController();
   const state = runtime.requireState();
   const store = runtime.requireStore();
+  const allowedWritePaths = qualifier.mutationPlan ? deriveRoleMutationPaths(agent, qualifier.mutationPlan) : [];
   state.currentTool = undefined;
   state.currentToolArgs = undefined;
   state.agentOutput = undefined;
@@ -47,7 +49,10 @@ export async function runAgentStep<A extends AgentName>(
   let rawText: string | undefined;
   try {
     beforeWorkspace = runtime.enforceWorkspacePolicy
-      ? await createWorkspaceSnapshot(cwd, { excludedRoots: workspaceExclusions(runtime, cwd) })
+      ? await createWorkspaceSnapshot(cwd, {
+          excludedRoots: workspaceExclusions(runtime, cwd),
+          requiredPaths: allowedWritePaths
+        })
       : undefined;
     const onEvent = (event: Parameters<NonNullable<AgentRunOptions["onEvent"]>>[0]): void => {
       void store.event("agent_event", { stepId: step.id, agent, event }).catch(() => undefined);
@@ -62,7 +67,7 @@ export async function runAgentStep<A extends AgentName>(
       timeoutMs: config.limits.agentTimeoutMs,
       signal: controller.signal,
       onEvent,
-      allowedWritePaths: qualifier.mutationPlan ? deriveRoleMutationPaths(agent, qualifier.mutationPlan) : [],
+      allowedWritePaths,
       readRoots: [store.runDir]
     } satisfies Omit<AgentRunOptions, "task">;
 
@@ -236,13 +241,16 @@ export async function runAgentStep<A extends AgentName>(
       }
     }
     if (beforeWorkspace) {
-      const afterExecuteWorkspace = await createWorkspaceSnapshot(cwd, { excludedRoots: workspaceExclusions(runtime, cwd) });
+      const afterExecuteWorkspace = await createWorkspaceSnapshot(cwd, {
+        excludedRoots: workspaceExclusions(runtime, cwd),
+        requiredPaths: allowedWritePaths
+      });
       const delta = compareWorkspaceSnapshots(beforeWorkspace, afterExecuteWorkspace);
       let mutationAudit: { initialReported: readonly string[]; correctionAttempted: true; correctionError?: string } | undefined;
       try {
         validateAgentMutationScope(agent, qualifier.mutationPlan, delta);
       } catch {
-        await validateAgentMutation(runtime, agent, qualifier.mutationPlan, output, delta, step, store);
+        await validateAgentMutation(runtime, agent, qualifier.mutationPlan, output, delta, afterExecuteWorkspace, step, store);
       }
       if (ROLE_MUTATION_KINDS[agent] !== "none") {
         const initialReported = changedFilesOf(output);
@@ -268,18 +276,21 @@ export async function runAgentStep<A extends AgentName>(
             rawText = result.text;
             correctedOutput = validate(result.text);
           } catch (correctionError) {
-            await validateAgentMutation(runtime, agent, qualifier.mutationPlan, output, delta, step, store, {
+            await validateAgentMutation(runtime, agent, qualifier.mutationPlan, output, delta, afterExecuteWorkspace, step, store, {
               initialReported,
               correctionAttempted: true,
               correctionError: messageOf(correctionError)
             });
             throw correctionError;
           }
-          const afterCorrectionWorkspace = await createWorkspaceSnapshot(cwd, { excludedRoots: workspaceExclusions(runtime, cwd) });
+          const afterCorrectionWorkspace = await createWorkspaceSnapshot(cwd, {
+            excludedRoots: workspaceExclusions(runtime, cwd),
+            requiredPaths: allowedWritePaths
+          });
           const correctionDelta = compareWorkspaceSnapshots(afterExecuteWorkspace, afterCorrectionWorkspace);
           if (correctionDelta.changedFiles.length > 0) {
             const finalDelta = compareWorkspaceSnapshots(beforeWorkspace, afterCorrectionWorkspace);
-            await validateAgentMutation(runtime, agent, qualifier.mutationPlan, correctedOutput, finalDelta, step, store, {
+            await validateAgentMutation(runtime, agent, qualifier.mutationPlan, correctedOutput, finalDelta, afterCorrectionWorkspace, step, store, {
               initialReported,
               correctionAttempted: true,
               additionalViolations: [`${agent} output correction changed project files: ${correctionDelta.changedFiles.join(", ")}`]
@@ -289,7 +300,7 @@ export async function runAgentStep<A extends AgentName>(
           mutationAudit = { initialReported, correctionAttempted: true };
         }
       }
-      await validateAgentMutation(runtime, agent, qualifier.mutationPlan, output, delta, step, store, mutationAudit);
+      await validateAgentMutation(runtime, agent, qualifier.mutationPlan, output, delta, afterExecuteWorkspace, step, store, mutationAudit);
       workspaceAudited = true;
     }
     const artifact = store.artifactName({ ...qualifier, sequence: step.sequence, stage, agent, kind: "output" });
@@ -306,10 +317,16 @@ export async function runAgentStep<A extends AgentName>(
     let recoverySnapshot: WorkspaceSnapshot | undefined;
     if (beforeWorkspace && !workspaceAudited && ROLE_MUTATION_KINDS[agent] !== "none") {
       try {
-        const afterWorkspace = await createWorkspaceSnapshot(cwd, { excludedRoots: workspaceExclusions(runtime, cwd) });
+        const afterWorkspace = await createWorkspaceSnapshot(cwd, {
+          excludedRoots: workspaceExclusions(runtime, cwd),
+          requiredPaths: allowedWritePaths
+        });
         const delta = compareWorkspaceSnapshots(beforeWorkspace, afterWorkspace);
         validateAgentMutationScope(agent, qualifier.mutationPlan, delta);
-        for (const file of delta.changedFiles) runtime.validatedChangedFiles.add(file);
+        for (const attestation of createFileAttestations(agent, step, delta, afterWorkspace)) {
+          runtime.validatedChangedFiles.add(attestation.path);
+          runtime.validatedFileAttestations.set(attestation.path, attestation);
+        }
         recoverySnapshot = afterWorkspace;
         const auditArtifact = store.artifactName({ ...qualifier, sequence: step.sequence, stage, agent, kind: "failed-mutation-audit" });
         step.artifact = await store.saveJson(auditArtifact, {

@@ -12,6 +12,7 @@ export type HumanDecisionKind =
   | "scope_expansion"
   | "code_review_rejection"
   | "repair_budget_exhausted"
+  | "final_revision_approval"
   | "final_delivery";
 
 export type HumanDecisionAction =
@@ -56,6 +57,7 @@ export type HumanDecisionResumePoint =
   | ScopeRevisionDecisionResumePoint
   | ReviewDecisionResumePoint
   | BudgetExhaustedResumePoint
+  | FinalRevisionDecisionResumePoint
   | FinalDeliveryResumePoint;
 
 interface PlanDecisionResumePoint {
@@ -93,6 +95,12 @@ interface BudgetExhaustedResumePoint {
   nextAttempt: number;
   allowedAttempts: number;
   scopeRevisionCount: number;
+}
+
+interface FinalRevisionDecisionResumePoint {
+  point: "final_revision_decision";
+  mode: "review" | "specialized";
+  changeRound: number;
 }
 
 interface FinalDeliveryResumePoint {

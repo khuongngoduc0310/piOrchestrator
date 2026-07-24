@@ -15,6 +15,8 @@ const GIT_OUTPUT_LIMIT = 16 * 1024 * 1024;
 
 export interface WorkspaceSnapshotOptions {
   readonly excludedRoots?: readonly string[];
+  /** Exact repository-relative paths that must be monitored even when Git ignores them. */
+  readonly requiredPaths?: readonly string[];
   readonly maxFiles?: number;
   readonly maxBytes?: number;
 }
@@ -239,8 +241,11 @@ export async function createWorkspaceSnapshot(
   const maxFiles = positiveBound(options.maxFiles, DEFAULT_MAX_FILES, "maxFiles");
   const maxBytes = positiveBound(options.maxBytes, DEFAULT_MAX_BYTES, "maxBytes");
   const excludedRoots = normalizedExcludedRoots(options.excludedRoots ?? []);
+  const requiredPaths = normalizedUnique(options.requiredPaths ?? []);
   const gitFiles = await gitFileList(root);
-  const candidates = gitFiles ?? await filesystemFileList(root, excludedRoots, maxFiles);
+  const candidates = gitFiles
+    ? [...gitFiles, ...requiredPaths]
+    : await filesystemFileList(root, excludedRoots, maxFiles);
   const files = normalizedUnique(candidates).filter(file => !isExcluded(file, excludedRoots));
   if (files.length > maxFiles) throw new WorkspaceGuardError(`workspace contains more than ${maxFiles} files`);
 

@@ -114,7 +114,7 @@ Example limits:
     "agentTimeoutMs": 1200000,
     "checkTimeoutMs": 600000,
     "maxOutputBytes": 262144,
-    "worktreeIsolation": false
+    "worktreeIsolation": true
   }
 }
 ```

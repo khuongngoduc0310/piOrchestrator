@@ -21,6 +21,7 @@ export function App() {
   useDashboardStream(dispatchAction);
 
   const snap = state.displayedSnapshot ?? state.liveSnapshot;
+  const displayedRunId = state.selectedRunId ?? snap?.run?.id ?? null;
   const hasRun = Boolean(snap?.run);
   const elapsedText = useElapsedTime(snap);
   const currentSection = useSectionNavigation(hasRun && state.view === "run");
@@ -50,12 +51,9 @@ export function App() {
   }, [dispatchAction]);
 
   useEffect(() => {
-    if (
-      state.agentMode === "auto" &&
-      snap?.run?.activeAgent &&
-      state.selectedAgent !== snap.run.activeAgent
-    ) {
-      dispatchAction({ type: "agentPinned", agent: snap.run.activeAgent });
+    const activeAgent = snap?.run?.activeAgent ?? null;
+    if (state.agentMode === "auto" && state.selectedAgent !== activeAgent) {
+      dispatchAction({ type: "agentAutoSelected", agent: activeAgent });
     }
   }, [state.agentMode, snap?.run?.activeAgent, state.selectedAgent, dispatchAction]);
 
@@ -124,7 +122,7 @@ export function App() {
             />
             <AgentInspector
               snapshot={snap}
-              runId={state.selectedRunId}
+              runId={displayedRunId}
               selectedAgent={state.selectedAgent}
               agentMode={state.agentMode}
               selectedInvocation={state.selectedInvocation}
@@ -149,14 +147,14 @@ export function App() {
           <ArtifactViewer
             snapshot={snap}
             selectedArtifact={state.selectedArtifact}
-            runId={state.selectedRunId}
+            runId={displayedRunId}
             onCloseArtifact={handleCloseArtifact}
             onOpenArtifact={handleOpenArtifact}
           />
         </section>
       </main> : <main>
         <AgentHistory
-          runId={state.selectedRunId ?? snap?.run?.id ?? null}
+          runId={displayedRunId}
           revision={snap?.run?.transcriptRevision}
         />
       </main>}

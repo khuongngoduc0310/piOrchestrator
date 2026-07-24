@@ -31,6 +31,7 @@ export async function saveWorkflowCheckpoint(
     memoryDigest: canonicalSha256(runtime.loadedMemoryDoc),
     selectedMemoryIds: [...runtime.selectedMemoryIds].sort(),
     validatedChangedFiles: [...runtime.validatedChangedFiles].sort(),
+    validatedFileAttestations: [...runtime.validatedFileAttestations.values()].sort((left, right) => left.path.localeCompare(right.path)),
     baselineRepaired: runtime.baselineRepaired,
     baselineContext: runtime.baselineContext!,
     baselineReviewContext: runtime.requireBaselineReviewContext(),
@@ -76,6 +77,7 @@ export async function refreshCheckpointAfterInterruptedMutation(
     workspaceDigest: workspaceSnapshotDigest(snapshot),
     workspaceRoot: snapshot.root,
     validatedChangedFiles: [...runtime.validatedChangedFiles].sort(),
+    validatedFileAttestations: [...runtime.validatedFileAttestations.values()].sort((left, right) => left.path.localeCompare(right.path)),
     state: structuredClone(state)
   });
   state.latestCheckpoint = {

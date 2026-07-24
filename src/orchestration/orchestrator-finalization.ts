@@ -2,21 +2,23 @@ import { collectWorktreeChanges, removeWorktree, syncWorktreeChanges, verifySync
 import { computeFinalChecksDigest } from "../memory/memory-validation.js";
 import { formatCompletedRun } from "../ui/session-messages.js";
 import type { CompletionSummary } from "../types.js";
-import type { PlanningResult, ReadOnlyReviewResult, ReviewResult, SpecializedMutationResult, WorkflowContext } from "./orchestrator-context.js";
+import type { ImplementationPlanningResult, PlanningResult, ReadOnlyReviewResult, ReviewResult, SpecializedMutationResult, WorkflowContext } from "./orchestrator-context.js";
 import type { OrchestratorRuntime } from "./orchestrator-runtime.js";
 import { allGreen, EXTENSION_VERSION, messageOf } from "./orchestrator-helpers.js";
-import { runCheckStep, validateFinalWorktreeChanges } from "./orchestrator-workspace.js";
+import { runCheckStep, validateFinalDirectWorkspace, validateFinalWorktreeChanges } from "./orchestrator-workspace.js";
 import { hydrateLessonPreparation, persistAndPromoteLessons, prepareLessons, type SerializedLessonPreparation } from "./orchestrator-lessons.js";
 import { persist, publishSessionMessage, throwIfAborted, transition } from "./orchestrator-state.js";
 import { saveWorkflowCheckpoint } from "./orchestrator-checkpoints.js";
-import type { CheckResult, DocumenterOutput, ReviewOutput } from "../types.js";
-import { parseBuilderOutput, parseDebuggerOutput, parseDocumenterOutput, parsePlannerOutput } from "../validation.js";
+import type { CheckResult, DocumenterOutput } from "../types.js";
+import { parseDebuggerOutput, parseDocumenterOutput, parsePlannerOutput } from "../validation.js";
 import { runAgentStep } from "./orchestrator-agent-step.js";
-import { assertBuilderComplete, assertDocumenterComplete } from "./mutation-completion.js";
+import { assertDocumenterComplete } from "./mutation-completion.js";
 import { deriveRoleMutationPaths } from "../workspace/workspace-guard.js";
 import { CheckFailureError } from "./workflow-errors.js";
 import { runDurableHumanGate } from "./orchestrator-human-gates.js";
 import { runReviewPhase } from "./orchestrator-review.js";
+import { runImplementationPhase } from "./orchestrator-implementation.js";
+import type { PlannerOutput } from "../types.js";
 
 export type FinalizationContinuation =
   | { point: "documenter_completed"; documentation: DocumenterOutput }
@@ -231,15 +233,19 @@ export async function runFinalizationPhase(
   ctx.ui.notify("piOrchestrator workflow completed", "info");
 }
 
-async function applyFinalChangeRequest(
+export async function applyFinalChangeRequest(
   runtime: OrchestratorRuntime,
   workflow: WorkflowContext,
   review: ReviewResult,
   feedback: string,
-  changeRound: number
+  changeRound: number,
+  proposedPlan?: PlannerOutput,
+  approved = false
 ): Promise<void> {
-  if (changeRound > workflow.config.limits.planRevisions + 1) throw new Error("Final change request limit was exhausted");
-  const plan = await runAgentStep(runtime, "planner", "planning", "Plan requested final changes", {
+  if (review.scopeRevisionCount >= workflow.config.limits.planRevisions) {
+    throw new Error("Final change request limit was exhausted");
+  }
+  const plan = proposedPlan ?? await runAgentStep(runtime, "planner", "planning", "Plan requested final changes", {
     action: "revise_plan",
     route: workflow.route,
     request: workflow.request,
@@ -248,30 +254,49 @@ async function applyFinalChangeRequest(
     feedback: { source: "human", text: feedback }
   }, workflow.mutationCwd, workflow.ctx, parsePlannerOutput, { revision: changeRound });
   if (plan.route !== workflow.route) throw new Error(`Planner returned route ${plan.route}; user selected ${workflow.route}`);
-  const requestedReview: ReviewOutput = {
-    decision: "changes_requested",
-    blockingIssues: [feedback],
-    suggestions: [],
-    evidence: review.codeReview.evidence
-  };
-  const output = await runAgentStep(runtime, "builder", "implementing", "Apply requested final changes", {
-    action: "address_review",
-    request: workflow.request,
+  if (workflow.route === "quick_implementation"
+    && JSON.stringify(plan.acceptanceCriteria) !== JSON.stringify(review.plan.acceptanceCriteria)) {
+    throw new Error("A quick implementation final revision cannot change acceptance criteria because that route does not run Tester");
+  }
+  if (!approved) {
+    await runDurableHumanGate(
+      runtime,
+      workflow,
+      "final_revision_approval",
+      "Final revision plan approval",
+      { point: "final_revision_decision", mode: "review", changeRound },
+      {
+        exploration: review.exploration,
+        plan,
+        baselineChecks: review.baseline,
+        tester: review.tester,
+        builderOutputs: runtime.builderSessionOutputs,
+        implementationChecks: review.finalImplChecks,
+        codeReview: review.codeReview,
+        priorCodeReviews: review.priorCodeReviews,
+        decisionContext: { mode: "review", review, plan, feedback, changeRound }
+      },
+      async signal => {
+        const answer = await workflow.ctx.ui.select(
+          `Approve final revision plan: ${plan.summary}?`,
+          ["Approve revised plan", "Cancel workflow"],
+          { signal }
+        );
+        return answer === undefined ? undefined : { action: answer === "Approve revised plan" ? "approve" as const : "cancel" as const };
+      },
+      () => ({ approved: true })
+    );
+  }
+  const planning: ImplementationPlanningResult = {
+    exploration: review.exploration,
     plan,
-    baseline: runtime.requireBaselineReviewContext(),
-    review: requestedReview,
-    priorReviews: review.priorCodeReviews,
-    revision: changeRound,
-    checks: review.finalImplChecks
-  }, workflow.mutationCwd, workflow.ctx, parseBuilderOutput, { revision: changeRound, mutationPlan: plan });
-  assertBuilderComplete(output, "the requested final changes");
-  runtime.builderSessionOutputs.push(output);
-  const checks = await runCheckStep(runtime, "testing", `Verify requested final changes ${changeRound}`, workflow.mutationCwd, workflow.ctx, {
-    requireGreen: true,
-    revision: changeRound,
-    kind: "review-fix"
+    baseline: review.baseline,
+    baselineDiagnosis: review.baselineDiagnosis,
+    scopeRevisionCount: review.scopeRevisionCount + 1
+  };
+  const implementation = await runImplementationPhase(runtime, workflow, planning, undefined, {
+    skipTester: workflow.route === "quick_implementation"
   });
-  const implementation = { ...review, plan, finalImplChecks: checks };
   const revisedReview = await runReviewPhase(runtime, workflow, implementation);
   await runFinalizationPhase(runtime, workflow, revisedReview, undefined, changeRound);
 }
@@ -386,7 +411,7 @@ async function synchronizeFinalizedMutation(
     const pendingChanges = await collectWorktreeChanges(activeWorktree);
     await store.saveRaw("worktree-final.patch", pendingChanges.patch.toString("utf8"));
     throwIfAborted(runtime);
-    if (runtime.enforceWorkspacePolicy) validateFinalWorktreeChanges(runtime, activeWorktree, pendingChanges.changedFiles);
+    if (runtime.enforceWorkspacePolicy) await validateFinalWorktreeChanges(runtime, activeWorktree, pendingChanges.changedFiles);
     runtime.mutationCommitStarted = true;
     try {
       const synchronized = await syncWorktreeChanges(activeWorktree, pendingChanges);
@@ -412,6 +437,8 @@ async function synchronizeFinalizedMutation(
       runtime.requireState().warning = `Validated changes were synchronized, but worktree cleanup failed: ${messageOf(error)}`;
       ctx.ui.notify(runtime.requireState().warning!, "warning");
     }
+  } else if (runtime.enforceWorkspacePolicy) {
+    await validateFinalDirectWorkspace(runtime, workflow.mutationCwd);
   }
   return { synchronizedFiles, finalChecksDigest };
 }

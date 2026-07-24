@@ -1,4 +1,4 @@
-import { useCallback } from "react";
+import { useCallback, useRef } from "react";
 import type {
   DashboardRunHistoryItem,
   OrchestratorViewModel,
@@ -36,15 +36,19 @@ export function Header({
   const mode = snapshot?.mode ?? "idle";
   const run = snapshot?.run ?? null;
   const config = snapshot?.config ?? null;
+  const requestRef = useRef(0);
 
   const handleRunChange = useCallback(
     (e: React.ChangeEvent<HTMLSelectElement>) => {
       const runId = e.target.value;
       if (!runId) return;
+      const request = ++requestRef.current;
       dispatch({ type: "runSelected", runId });
       getRunState(runId)
         .then((data) => {
-          dispatch({ type: "historicalSnapshotLoaded", snapshot: data });
+          if (request === requestRef.current) {
+            dispatch({ type: "historicalSnapshotLoaded", runId, snapshot: data });
+          }
         })
         .catch(() => {});
     },
@@ -57,14 +61,15 @@ export function Header({
         dispatch({ type: "runsLoaded", runs });
         if (!selectedRunId && runs.length > 0) {
           const target = runs.find((r) => r.active) ?? runs[0];
+          const request = ++requestRef.current;
           dispatch({ type: "runSelected", runId: target.id });
-          return getRunState(target.id);
+          return getRunState(target.id).then(data => ({ data, runId: target.id, request }));
         }
         return null;
       })
-      .then((data) => {
-        if (data) {
-          dispatch({ type: "historicalSnapshotLoaded", snapshot: data });
+      .then((result) => {
+        if (result && result.request === requestRef.current) {
+          dispatch({ type: "historicalSnapshotLoaded", runId: result.runId, snapshot: result.data });
         }
       })
       .catch(() => {});

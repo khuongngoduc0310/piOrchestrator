@@ -112,20 +112,22 @@ function ArtifactContent({
   const reqRef = useRef(0);
 
   useEffect(() => {
+    const controller = new AbortController();
     const req = ++reqRef.current;
     setData(null);
     setError(false);
-    getArtifact(runId, name)
+    getArtifact(runId, name, controller.signal)
       .then((result) => {
         if (req === reqRef.current) {
           setData(result);
         }
       })
       .catch(() => {
-        if (req === reqRef.current) {
+        if (req === reqRef.current && !controller.signal.aborted) {
           setError(true);
         }
       });
+    return () => controller.abort();
   }, [runId, name]);
 
   return (

@@ -20,6 +20,7 @@ import { WorkflowCancelledError } from "./workflow-errors.js";
 import { DashboardRunRepository } from "../ui/dashboard-run-repository.js";
 import { validateInvocationFileDiff, type InvocationFileDiff } from "../workspace/git-tree-diff.js";
 import { buildAgentHistory } from "../agents/agent-history.js";
+import type { ValidatedFileAttestation } from "../workspace/workspace-attestation.js";
 
 export class OrchestratorRuntime {
   state?: WorkflowState;
@@ -52,6 +53,7 @@ export class OrchestratorRuntime {
   selectedMemoryIds = new Set<string>();
   candidateLedger?: CandidateLedger;
   validatedChangedFiles = new Set<string>();
+  validatedFileAttestations = new Map<string, ValidatedFileAttestation>();
   mutationCommitStarted = false;
   activeTranscripts = new Map<string, AgentTranscript>();
   transcriptRevision = 0;

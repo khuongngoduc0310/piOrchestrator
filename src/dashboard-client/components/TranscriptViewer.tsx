@@ -25,6 +25,7 @@ export function TranscriptViewer({
   const focusedKeyRef = useRef<string | null>(null);
 
   useEffect(() => {
+    const controller = new AbortController();
     const req = ++reqRef.current;
     scrollPosRef.current = 0;
     followTailRef.current = true;
@@ -33,17 +34,18 @@ export function TranscriptViewer({
     setData(null);
     setError(false);
 
-    getTranscript(runId, stepId, sequence)
+    getTranscript(runId, stepId, sequence, controller.signal)
       .then((result) => {
         if (req === reqRef.current) {
           setData(result);
         }
       })
       .catch(() => {
-        if (req === reqRef.current) {
+        if (req === reqRef.current && !controller.signal.aborted) {
           setError(true);
         }
       });
+    return () => controller.abort();
   }, [runId, stepId, sequence]);
 
   // Record scroll / details / focus before DOM update

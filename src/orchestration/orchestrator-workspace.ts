@@ -10,8 +10,10 @@ import {
   deriveRoleMutationPaths,
   validateReportedFileSet,
   validateRoleDelta,
-  type WorkspaceDelta
+  type WorkspaceDelta,
+  type WorkspaceSnapshot
 } from "../workspace/workspace-guard.js";
+import { createFileAttestations, validateAttestedWorkspaceFiles } from "../workspace/workspace-attestation.js";
 import type { AgentName, AgentOutputMap, CheckResult, PlannerOutput, Stage, StepRecord } from "../types.js";
 import type { OrchestratorRuntime } from "./orchestrator-runtime.js";
 import { allGreen, messageOf } from "./orchestrator-helpers.js";
@@ -30,8 +32,12 @@ export async function runCheckStep(
   const controller = runtime.requireController();
   const step = beginStep(runtime, stage, label, undefined, options);
   await transition(runtime, stage, undefined, label, ctx);
+  const attestedPaths = [...runtime.validatedFileAttestations.keys()];
   const beforeWorkspace = runtime.enforceWorkspacePolicy
-    ? await createWorkspaceSnapshot(cwd, { excludedRoots: workspaceExclusions(runtime, cwd) })
+    ? await createWorkspaceSnapshot(cwd, {
+        excludedRoots: workspaceExclusions(runtime, cwd),
+        requiredPaths: attestedPaths
+      })
     : undefined;
   try {
     const checkOptions: CheckRunOptions = {
@@ -42,7 +48,10 @@ export async function runCheckStep(
     };
     const results = await runtime.checks(config.checks, cwd, controller.signal, checkOptions);
     if (beforeWorkspace) {
-      const afterWorkspace = await createWorkspaceSnapshot(cwd, { excludedRoots: workspaceExclusions(runtime, cwd) });
+      const afterWorkspace = await createWorkspaceSnapshot(cwd, {
+        excludedRoots: workspaceExclusions(runtime, cwd),
+        requiredPaths: attestedPaths
+      });
       const delta = compareWorkspaceSnapshots(beforeWorkspace, afterWorkspace);
       if (delta.changedFiles.length > 0) {
         const mutationArtifact = runtime.requireStore().artifactName({ sequence: step.sequence, stage, attempt: options.attempt, revision: options.revision, kind: "check-mutation" });
@@ -75,11 +84,11 @@ export function workspaceExclusions(runtime: OrchestratorRuntime, cwd: string): 
   return relative && relative !== ".." && !relative.startsWith("../") && !path.isAbsolute(relative) ? [relative] : [];
 }
 
-export function validateFinalWorktreeChanges(
+export async function validateFinalWorktreeChanges(
   runtime: OrchestratorRuntime,
   handle: WorktreeHandle,
   repositoryPaths: readonly string[]
-): void {
+): Promise<void> {
   const projectPrefix = handle.projectRelativePath.split(path.sep).join("/").replace(/^\/+|\/+$/g, "");
   const projectFiles: string[] = [];
   const outsideProject: string[] = [];
@@ -90,13 +99,39 @@ export function validateFinalWorktreeChanges(
       projectFiles.push(normalized.slice(projectPrefix.length).replace(/^\//, ""));
     } else outsideProject.push(normalized);
   }
-  const unvalidated = projectFiles.filter(file => file && !runtime.validatedChangedFiles.has(file));
-  if (outsideProject.length > 0 || unvalidated.length > 0) {
+  const workspace = await createWorkspaceSnapshot(handle.effectiveCwd, {
+    excludedRoots: workspaceExclusions(runtime, handle.effectiveCwd),
+    requiredPaths: [...runtime.validatedFileAttestations.keys()]
+  });
+  const changedSet = new Set(projectFiles.filter(Boolean));
+  const attestedSet = new Set(runtime.validatedFileAttestations.keys());
+  const missingChanges = [...attestedSet].filter(file => !changedSet.has(file));
+  const unattestedChanges = [...changedSet].filter(file => !attestedSet.has(file));
+  const attestationViolations = validateAttestedWorkspaceFiles(
+    runtime.validatedFileAttestations,
+    workspace,
+    [...attestedSet]
+  );
+  if (outsideProject.length > 0 || missingChanges.length > 0 || unattestedChanges.length > 0 || attestationViolations.length > 0) {
     const detail = [
       outsideProject.length ? `outside project: ${outsideProject.join(", ")}` : "",
-      unvalidated.length ? `not validated: ${unvalidated.join(", ")}` : ""
+      missingChanges.length ? `validated but absent from final changes: ${missingChanges.join(", ")}` : "",
+      unattestedChanges.length ? `changed without validation: ${unattestedChanges.join(", ")}` : "",
+      attestationViolations.length ? `not validated: ${attestationViolations.join(", ")}` : ""
     ].filter(Boolean).join("; ");
     throw new MutationBoundaryError(`Worktree contains changes that cannot be synchronized (${detail})`);
+  }
+}
+
+export async function validateFinalDirectWorkspace(runtime: OrchestratorRuntime, cwd: string): Promise<void> {
+  const paths = [...runtime.validatedFileAttestations.keys()].sort();
+  const workspace = await createWorkspaceSnapshot(cwd, {
+    excludedRoots: workspaceExclusions(runtime, cwd),
+    requiredPaths: paths
+  });
+  const violations = validateAttestedWorkspaceFiles(runtime.validatedFileAttestations, workspace, paths);
+  if (violations.length > 0) {
+    throw new MutationBoundaryError(`Direct workspace changed after validation (${violations.join(", ")})`);
   }
 }
 
@@ -106,6 +141,7 @@ export async function validateAgentMutation<A extends AgentName>(
   plan: PlannerOutput | undefined,
   output: AgentOutputMap[A],
   delta: WorkspaceDelta,
+  afterWorkspace: WorkspaceSnapshot,
   step: StepRecord,
   store: RunStore,
   audit?: {
@@ -144,7 +180,10 @@ export async function validateAgentMutation<A extends AgentName>(
     } : {})
   });
   if (violations.length > 0) throw new MutationBoundaryError(violations.join("; "));
-  for (const file of delta.changedFiles) runtime.validatedChangedFiles.add(file);
+  for (const attestation of createFileAttestations(agent, step, delta, afterWorkspace)) {
+    runtime.validatedChangedFiles.add(attestation.path);
+    runtime.validatedFileAttestations.set(attestation.path, attestation);
+  }
 }
 
 export function validateAgentMutationScope(

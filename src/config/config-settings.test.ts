@@ -86,7 +86,7 @@ describe("config-settings", () => {
     const result = await openSettings(cwd, ctx, { isRunning: () => false, save: vi.fn() });
     expect(result).toBe("saved");
     const saved = await loadConfig(cwd);
-    expect(saved.limits.worktreeIsolation).toBe(true);
+    expect(saved.limits.worktreeIsolation).toBe(false);
   });
 
   it("toggles human review options", async () => {

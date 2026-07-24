@@ -1,7 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { validateCheckpointPointer, validateCheckResults, validateWorkflowStateForResume } from "./checkpoint-validation.js";
+import { validateCheckpointPointer, validateCheckResults, validateWorkflowCheckpoint, validateWorkflowStateForResume } from "./checkpoint-validation.js";
 import { CHECKPOINT_SCHEMA_VERSION } from "./checkpoint-types.js";
 import { SCHEMA_VERSION } from "../types.js";
+import { DEFAULT_CONFIG } from "../config/config.js";
 
 describe("checkpoint validation", () => {
   it("validates strict checkpoint pointers", () => {
@@ -84,5 +85,73 @@ describe("checkpoint validation", () => {
       completedAt: "2026-01-01T00:00:01.000Z",
       durationMs: 1000
     }])).toThrow("inconsistent");
+  });
+
+  it("rejects malformed nested checkpoint state and mismatched attestations", () => {
+    const state = {
+      schemaVersion: SCHEMA_VERSION,
+      extensionVersion: "test",
+      runId: "run-1",
+      request: "fix bug",
+      route: "implementation",
+      cwd: "C:/repo",
+      runDir: "C:/repo/.pi/orchestrator/runs/run-1",
+      stage: "planning",
+      status: "running",
+      attempt: 0,
+      startedAt: "2026-07-22T10:00:00.000Z",
+      updatedAt: "2026-07-22T10:00:00.000Z",
+      agents: Object.fromEntries(["explorer", "planner", "reviewer", "tester", "builder", "debugger", "documenter"]
+        .map(name => [name, { status: "idle", model: "test" }])),
+      steps: []
+    };
+    const checkpoint = {
+      schemaVersion: CHECKPOINT_SCHEMA_VERSION,
+      checkpointNumber: 1,
+      runId: "run-1",
+      createdAt: "2026-07-22T10:00:00.000Z",
+      workspaceDigest: "a".repeat(64),
+      workspaceRoot: "C:/repo",
+      config: DEFAULT_CONFIG,
+      configDigest: "b".repeat(64),
+      memoryMode: "disabled",
+      memoryRevision: 0,
+      memoryDigest: "c".repeat(64),
+      selectedMemoryIds: [],
+      validatedChangedFiles: ["src/index.ts"],
+      validatedFileAttestations: [{
+        path: "src/index.ts",
+        state: "present",
+        hash: "d".repeat(64),
+        mode: 0o100644,
+        agent: "builder",
+        stepId: "step-1",
+        invocation: 1
+      }],
+      baselineRepaired: false,
+      baselineContext: { hasUncommittedChanges: false, hasStagedChanges: false, untrackedFiles: [] },
+      baselineReviewContext: {
+        summary: { hasUncommittedChanges: false, hasStagedChanges: false, untrackedFiles: [] },
+        artifacts: { baselineJson: ".pi/orchestrator/runs/run-1/baseline.json" }
+      },
+      lessonStatus: "skipped",
+      mutationConfirmed: false,
+      state,
+      cursor: { kind: "plan_approved", continuation: null },
+      bindings: {}
+    };
+    expect(() => validateWorkflowCheckpoint(checkpoint)).not.toThrow();
+    expect(() => validateWorkflowCheckpoint({
+      ...checkpoint,
+      baselineContext: { ...checkpoint.baselineContext, hasStagedChanges: "yes" }
+    })).toThrow("hasStagedChanges");
+    expect(() => validateWorkflowCheckpoint({
+      ...checkpoint,
+      validatedChangedFiles: []
+    })).toThrow("must exactly match");
+    expect(() => validateWorkflowCheckpoint({
+      ...checkpoint,
+      validatedFileAttestations: [{ ...checkpoint.validatedFileAttestations[0], path: "../outside.ts" }]
+    })).toThrow("must not contain empty, . or ..");
   });
 });

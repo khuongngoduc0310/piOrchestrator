@@ -15,8 +15,9 @@ import type {
 } from "../types.js";
 import type { WorktreeHandle } from "../workspace/worktree.js";
 import type { PendingHumanDecision, RecordedHumanDecision } from "../orchestration/human-decision-types.js";
+import type { ValidatedFileAttestation } from "../workspace/workspace-attestation.js";
 
-export const CHECKPOINT_SCHEMA_VERSION = 4 as const;
+export const CHECKPOINT_SCHEMA_VERSION = 5 as const;
 
 export const CHECKPOINT_CURSOR_KINDS = [
   "plan_approved",
@@ -101,6 +102,7 @@ export interface WorkflowCheckpoint {
   readonly memoryDigest: string;
   readonly selectedMemoryIds: readonly string[];
   readonly validatedChangedFiles: readonly string[];
+  readonly validatedFileAttestations: readonly ValidatedFileAttestation[];
   readonly baselineRepaired: boolean;
   readonly baselineContext: BaselineContext;
   readonly baselineReviewContext: BaselineReviewContext;

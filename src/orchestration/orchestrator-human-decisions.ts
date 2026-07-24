@@ -1,5 +1,5 @@
 import type { ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
-import { saveWorkflowCheckpoint } from "./orchestrator-checkpoints.js";
+import { currentWorkspaceDigest, saveWorkflowCheckpoint } from "./orchestrator-checkpoints.js";
 import type { WorkflowContext } from "./orchestrator-context.js";
 import type { OrchestratorRuntime } from "./orchestrator-runtime.js";
 import { messageOf } from "./orchestrator-helpers.js";
@@ -66,7 +66,13 @@ export async function requestHumanDecision<T>(
   state.status = "paused";
   state.activeAgent = undefined;
 
-  await saveWorkflowCheckpoint(runtime, workflow, "human_decision_pending", { request: state.pendingDecision }, bindings);
+  const pendingCheckpoint = await saveWorkflowCheckpoint(
+    runtime,
+    workflow,
+    "human_decision_pending",
+    { request: state.pendingDecision },
+    bindings
+  );
   await persist(runtime, ctx);
 
   if (!canPrompt) {
@@ -124,6 +130,22 @@ export async function requestHumanDecision<T>(
     action: promptResult.action,
     feedback: promptResult.feedback
   };
+
+  const workspaceRoot = workflow.worktreeHandle?.effectiveCwd ?? workflow.cwd;
+  const decidedWorkspaceDigest = await currentWorkspaceDigest(runtime, workspaceRoot);
+  if (decidedWorkspaceDigest !== pendingCheckpoint.workspaceDigest) {
+    await workflow.store.saveJson(`human-decision-workspace-drift-${id}.json`, {
+      decisionId: id,
+      kind,
+      expectedWorkspaceDigest: pendingCheckpoint.workspaceDigest,
+      actualWorkspaceDigest: decidedWorkspaceDigest,
+      detectedAt: runtime.timestamp()
+    }).catch(() => undefined);
+    state.status = "paused";
+    state.warning = `${interaction.label} was not recorded because the workspace changed while awaiting input`;
+    await persist(runtime, ctx).catch(() => undefined);
+    throw new WorkflowPausedError(id, `${interaction.label} must be repeated after restoring the checkpoint workspace`);
+  }
 
   await saveWorkflowCheckpoint(runtime, workflow, "human_decision_recorded", {
     request: state.pendingDecision,

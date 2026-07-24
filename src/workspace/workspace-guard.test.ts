@@ -3,7 +3,7 @@ import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import type { PlannerOutput } from "../types.js";
+import type { PlannerOutput, StepRecord } from "../types.js";
 import {
   compareWorkspaceSnapshots,
   canonicalSha256,
@@ -16,6 +16,7 @@ import {
   validateReportedFileSet,
   validateRoleDelta
 } from "./workspace-guard.js";
+import { createFileAttestations, validateAttestedWorkspaceFiles } from "./workspace-attestation.js";
 
 const directories: string[] = [];
 
@@ -189,6 +190,50 @@ describe("workspace snapshots", () => {
     const snapshot = await createWorkspaceSnapshot(root);
     expect(snapshot.kind).toBe("git");
     expect(Object.keys(snapshot.files)).toEqual([".gitignore", "tracked.txt", "untracked.txt"]);
+  });
+
+  it("tracks exact required paths even when Git ignores them", async () => {
+    const root = await temporaryDirectory("workspace-guard-required-");
+    execFileSync("git", ["init"], { cwd: root, stdio: "pipe" });
+    await writeFile(path.join(root, ".gitignore"), "ignored.txt\n");
+    await writeFile(path.join(root, "ignored.txt"), "monitored\n");
+
+    const snapshot = await createWorkspaceSnapshot(root, { requiredPaths: ["ignored.txt"] });
+
+    expect(snapshot.files["ignored.txt"]?.hash).toBeTruthy();
+  });
+
+  it("rejects content that changed after its mutation was attested", async () => {
+    const root = await temporaryDirectory("workspace-attestation-");
+    await writeFile(path.join(root, "file.txt"), "before\n");
+    const before = await createWorkspaceSnapshot(root);
+    await writeFile(path.join(root, "file.txt"), "validated\n");
+    const validated = await createWorkspaceSnapshot(root);
+    const delta = compareWorkspaceSnapshots(before, validated);
+    const step: StepRecord = {
+      id: "step-001",
+      sequence: 1,
+      stage: "implementing",
+      label: "Build",
+      status: "succeeded",
+      startedAt: new Date().toISOString(),
+      invocations: [{
+        sequence: 1,
+        mode: "execute",
+        status: "succeeded",
+        startedAt: new Date().toISOString(),
+        messageCount: 1,
+        truncated: false
+      }]
+    };
+    const attestations = createFileAttestations("builder", step, delta, validated);
+    const map = new Map(attestations.map(attestation => [attestation.path, attestation]));
+    await writeFile(path.join(root, "file.txt"), "changed later\n");
+    const finalSnapshot = await createWorkspaceSnapshot(root);
+
+    expect(validateAttestedWorkspaceFiles(map, finalSnapshot, ["file.txt"])).toEqual([
+      "file.txt content changed after validation"
+    ]);
   });
 
   it("excludes only explicitly supplied roots and enforces bounds", async () => {

@@ -43,11 +43,12 @@ export type DashboardAction =
   | { type: "liveSnapshotReceived"; snapshot: OrchestratorViewModel }
   | { type: "displayLiveRun" }
   | { type: "runSelected"; runId: string }
-  | { type: "historicalSnapshotLoaded"; snapshot: OrchestratorViewModel }
+  | { type: "historicalSnapshotLoaded"; runId: string; snapshot: OrchestratorViewModel }
   | { type: "connectionChanged"; connection: DashboardState["connection"] }
   | { type: "runsLoaded"; runs: DashboardRunHistoryItem[] }
   | { type: "agentPinned"; agent: string }
-  | { type: "agentAutoFollowed" }
+  | { type: "agentAutoSelected"; agent: string | null }
+  | { type: "agentAutoFollowed"; agent: string | null }
   | { type: "agentClosed" }
   | { type: "invocationSelected"; key: string }
   | { type: "inspectorTabSelected"; tab: "transcript" | "files" }
@@ -92,6 +93,7 @@ export function dashboardReducer(
       };
     }
     case "historicalSnapshotLoaded": {
+      if (state.selectedRunId !== action.runId) return state;
       return { ...state, displayedSnapshot: action.snapshot };
     }
     case "connectionChanged": {
@@ -109,12 +111,19 @@ export function dashboardReducer(
         inspectorTab: "transcript",
       };
     }
+    case "agentAutoSelected": {
+      if (state.agentMode !== "auto") return state;
+      return {
+        ...state,
+        selectedAgent: action.agent,
+        selectedInvocation: null,
+      };
+    }
     case "agentAutoFollowed": {
-      const active = state.liveSnapshot?.run?.activeAgent ?? null;
       return {
         ...state,
         agentMode: "auto",
-        selectedAgent: active,
+        selectedAgent: action.agent,
         selectedInvocation: null,
       };
     }
