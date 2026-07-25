@@ -1529,7 +1529,7 @@ async function readFinalizationMarker(
   if (savedCheckpoint.number !== checkpoint.checkpointNumber || savedCheckpoint.cursor !== checkpoint.cursor.kind) {
     throw new Error(`Invalid ${name}: checkpoint does not match`);
   }
-  if (typeof marker.finalChecksDigest !== "string" || !/^[a-f0-9]{64}$/.test(marker.finalChecksDigest)) {
+  if (typeof marker.finalChecksDigest !== "string" || !/^[a-f0-9]{64}$/.test(marker.finalChecksDigest as string)) {
     throw new Error(`Invalid ${name}: finalChecksDigest is invalid`);
   }
   if (checkpoint.cursor.kind === "final_checks_passed" || checkpoint.cursor.kind === "route_final_checks_passed") {

@@ -1,5 +1,6 @@
-import { collectWorktreeChanges, removeWorktree, syncWorktreeChanges, verifySynchronizedSource } from "../workspace/worktree.js";
+import { collectWorktreeChanges, preflightWorktreeChanges, applyWorktreeChanges, removeWorktree, verifySynchronizedSource } from "../workspace/worktree.js";
 import { computeFinalChecksDigest } from "../memory/memory-validation.js";
+import { canonicalSha256 } from "../workspace/workspace-guard.js";
 import { formatCompletedRun } from "../ui/session-messages.js";
 import type { CompletionSummary, PlannerOutput, ReviewOutput } from "../types.js";
 import type { CheckResult, DebuggerOutput, DocumenterOutput } from "../types.js";
@@ -24,6 +25,17 @@ import { reviseImplementationScope, type DocumentationScopePhase } from "./orche
 import { consumeScopeRevision } from "./scope-revision-budget.js";
 import { resolveAgentBlocker } from "./orchestrator-resolution.js";
 import { runAgentStepWithResolution } from "./orchestrator-resolution-coordinator.js";
+import {
+  computePreparationDigest,
+  validateCheckpointRef,
+  validateFinalChecksDigest,
+  validateSha256,
+  type FinalizationOperation,
+  type FinalizationPreparedV1,
+  type WorktreeDelivery,
+  type DirectDelivery,
+  type CheckpointRef
+} from "../persistence/finalization-artifacts.js";
 
 export type FinalizationContinuation =
   | { point: "documenter_completed"; documentation: DocumenterOutput; review: ReviewResult }
@@ -560,6 +572,91 @@ export async function runSpecializedMutationFinalization(
   await completeRun(runtime, workflow, completionSummary, finalChecksDigest, `${workflow.route} workflow completed`);
 }
 
+async function prepareFinalizedMutation(
+  runtime: OrchestratorRuntime,
+  workflow: WorkflowContext,
+  finalChecksDigest: string,
+  operation: FinalizationOperation
+): Promise<{ synchronizedFiles?: string[]; preparationDigest: string }> {
+  const { store } = workflow;
+  let synchronizedFiles: string[] | undefined;
+  let delivery: WorktreeDelivery | DirectDelivery;
+
+  if (workflow.worktreeHandle) {
+    const activeWorktree = workflow.worktreeHandle;
+    const pendingChanges = await collectWorktreeChanges(activeWorktree);
+    const patchBytes = pendingChanges.patch.toString("utf8");
+    const patchDigest = canonicalSha256(patchBytes);
+    await store.saveRaw("worktree-final.patch", patchBytes);
+    throwIfAborted(runtime);
+    if (runtime.enforceWorkspacePolicy) await validateFinalWorktreeChanges(runtime, activeWorktree, pendingChanges.changedFiles);
+    await preflightWorktreeChanges(activeWorktree, pendingChanges);
+    delivery = {
+      kind: "worktree",
+      patchArtifact: "worktree-final.patch",
+      patchDigest,
+      baselineCommit: activeWorktree.baselineCommit,
+      finalCommit: pendingChanges.finalCommit,
+      changedFiles: [...pendingChanges.changedFiles].sort()
+    };
+    synchronizedFiles = pendingChanges.changedFiles;
+  } else {
+    if (runtime.enforceWorkspacePolicy) await validateFinalDirectWorkspace(runtime, workflow.mutationCwd);
+    delivery = {
+      kind: "direct",
+      workspaceDigest: canonicalSha256(runtime.requireState().runDir),
+      changedFiles: [...runtime.validatedChangedFiles].sort()
+    };
+  }
+
+  const prepared: Omit<FinalizationPreparedV1, "preparedAt"> = {
+    schemaVersion: 1,
+    runId: workflow.runId,
+    checkpoint: runtime.requireState().latestCheckpoint!,
+    operation,
+    finalChecksDigest,
+    delivery
+  };
+  const preparationDigest = computePreparationDigest(prepared);
+  const preparedArtifact: FinalizationPreparedV1 = {
+    ...prepared,
+    preparedAt: runtime.timestamp()
+  };
+  await store.saveJson("finalization-prepared.json", preparedArtifact);
+  await store.flush();
+  return { synchronizedFiles, preparationDigest };
+}
+
+async function commitFinalizationIntent(
+  runtime: OrchestratorRuntime,
+  workflow: WorkflowContext,
+  finalChecksDigest: string,
+  preparationDigest: string,
+  operation: "synchronize_and_promote" | "synchronize_and_complete" | "promote"
+): Promise<void> {
+  const { ctx, store } = workflow;
+  throwIfAborted(runtime);
+  runtime.finalizationStarted = true;
+  try {
+    await store.saveJson("finalization-intent.json", {
+      schemaVersion: 1,
+      runId: workflow.runId,
+      checkpoint: runtime.requireState().latestCheckpoint,
+      operation,
+      finalChecksDigest,
+      preparationDigest,
+      createdAt: runtime.timestamp()
+    });
+    await store.flush();
+  } catch (error) {
+    runtime.finalizationStarted = false;
+    throw error;
+  }
+  runtime.requireState().resumeBlockedReason = "Finalization has started; uncertain side effects are never replayed";
+  await persist(runtime, ctx);
+  await store.flush();
+}
+
 async function synchronizeFinalizedMutation(
   runtime: OrchestratorRuntime,
   workflow: WorkflowContext,
@@ -567,44 +664,50 @@ async function synchronizeFinalizedMutation(
   operation: "promote" | "complete"
 ): Promise<{ synchronizedFiles?: string[]; finalChecksDigest: string }> {
   const { ctx, store } = workflow;
-  throwIfAborted(runtime);
-  runtime.finalizationStarted = true;
   const finalChecksDigest = computeFinalChecksDigest(finalChecks);
-  await store.saveJson("finalization-intent.json", {
-    runId: workflow.runId,
-    checkpoint: runtime.requireState().latestCheckpoint,
-    operation: workflow.worktreeHandle ? `synchronize_and_${operation}` : `${operation}_and_complete`,
-    createdAt: runtime.timestamp(),
-    finalChecksDigest
-  });
-  await store.flush();
-  runtime.requireState().resumeBlockedReason = "Finalization has started; uncertain side effects are never replayed";
-  await persist(runtime, ctx);
-  await store.flush();
+  const needsIntent = operation === "promote" || workflow.worktreeHandle !== undefined;
+
+  if (!needsIntent && operation === "complete") {
+    const prepare = await prepareFinalizedMutation(runtime, workflow, finalChecksDigest, "complete");
+    return { synchronizedFiles: prepare.synchronizedFiles, finalChecksDigest };
+  }
+
+  const syncOp = workflow.worktreeHandle ? `synchronize_and_${operation}` : operation;
   let synchronizedFiles: string[] | undefined;
-  if (workflow.worktreeHandle) {
-    const activeWorktree = workflow.worktreeHandle;
-    const pendingChanges = await collectWorktreeChanges(activeWorktree);
-    await store.saveRaw("worktree-final.patch", pendingChanges.patch.toString("utf8"));
-    throwIfAborted(runtime);
-    if (runtime.enforceWorkspacePolicy) await validateFinalWorktreeChanges(runtime, activeWorktree, pendingChanges.changedFiles);
-    try {
-      const synchronized = await syncWorktreeChanges(activeWorktree, pendingChanges);
-      await verifySynchronizedSource(activeWorktree, synchronized);
-      synchronizedFiles = synchronized.changedFiles;
-      for (const file of synchronized.changedFiles) runtime.validatedChangedFiles.add(file);
+  const activeWorktree = workflow.worktreeHandle;
+
+  try {
+    const prepare = await prepareFinalizedMutation(runtime, workflow, finalChecksDigest, syncOp as FinalizationOperation);
+    if (needsIntent) {
+      await commitFinalizationIntent(runtime, workflow, finalChecksDigest, prepare.preparationDigest, syncOp as "synchronize_and_promote" | "synchronize_and_complete" | "promote");
+    }
+    synchronizedFiles = prepare.synchronizedFiles;
+
+    if (activeWorktree) {
+      await applyWorktreeChanges(activeWorktree, await collectWorktreeChanges(activeWorktree));
+      await verifySynchronizedSource(activeWorktree, await collectWorktreeChanges(activeWorktree));
+      synchronizedFiles = [...runtime.validatedChangedFiles].sort();
+      for (const file of synchronizedFiles) runtime.validatedChangedFiles.add(file);
       workflow.worktreeSynced = true;
       await store.saveJson("worktree-sync-complete.json", {
+        schemaVersion: 1,
         runId: workflow.runId,
         checkpoint: runtime.requireState().latestCheckpoint,
-        changedFiles: synchronized.changedFiles,
+        preparationDigest: prepare.preparationDigest,
+        changedFiles: synchronizedFiles,
         completedAt: runtime.timestamp()
       });
-    } catch (error) {
+      await store.flush();
+    }
+  } catch (error) {
+    if (activeWorktree) {
       workflow.retainWorktree = true;
       runtime.requireState().warning = `Worktree synchronization failed; recovery worktree retained at ${activeWorktree.worktreeRoot}`;
-      throw error;
     }
+    throw error;
+  }
+
+  if (activeWorktree) {
     try {
       await removeWorktree(activeWorktree);
       workflow.worktreeHandle = undefined;
@@ -612,9 +715,8 @@ async function synchronizeFinalizedMutation(
       runtime.requireState().warning = `Validated changes were synchronized, but worktree cleanup failed: ${messageOf(error)}`;
       ctx.ui.notify(runtime.requireState().warning!, "warning");
     }
-  } else if (runtime.enforceWorkspacePolicy) {
-    await validateFinalDirectWorkspace(runtime, workflow.mutationCwd);
   }
+
   return { synchronizedFiles, finalChecksDigest };
 }
 

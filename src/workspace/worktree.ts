@@ -414,15 +414,31 @@ async function assertSourceHasNotDrifted(handle: WorktreeHandle): Promise<void> 
   });
 }
 
-/** Apply worktree changes only when all touched source paths still match the baseline. */
-export async function syncWorktreeChanges(handle: WorktreeHandle, validatedChanges?: WorktreeChanges): Promise<WorktreeChanges> {
-  const changes = validatedChanges ?? await collectWorktreeChanges(handle);
+/** Validate that the source workspace still matches the baseline without applying any changes. */
+export async function preflightWorktreeChanges(handle: WorktreeHandle, changes: WorktreeChanges): Promise<void> {
+  if (changes.changedFiles.length === 0) return;
+
+  await assertSourceHasNotDrifted(handle);
+  await runGit(handle.repositoryRoot, ["apply", "--check", "--binary"], { input: changes.patch });
+}
+
+/** Apply the exact prepared worktree patch after rechecking source drift. */
+export async function applyWorktreeChanges(handle: WorktreeHandle, changes: WorktreeChanges): Promise<WorktreeChanges> {
   if (changes.changedFiles.length === 0) return changes;
 
   await assertSourceHasNotDrifted(handle);
   await runGit(handle.repositoryRoot, ["apply", "--check", "--binary"], { input: changes.patch });
   await runGit(handle.repositoryRoot, ["apply", "--binary"], { input: changes.patch });
   return changes;
+}
+
+/** Apply worktree changes only when all touched source paths still match the baseline. */
+export async function syncWorktreeChanges(handle: WorktreeHandle, validatedChanges?: WorktreeChanges): Promise<WorktreeChanges> {
+  const changes = validatedChanges ?? await collectWorktreeChanges(handle);
+  if (changes.changedFiles.length === 0) return changes;
+
+  await preflightWorktreeChanges(handle, changes);
+  return applyWorktreeChanges(handle, changes);
 }
 
 /** Force-remove a worktree, prune its registration, and surface incomplete cleanup. */
