@@ -231,7 +231,7 @@ export function renderViewModelLines(vm: OrchestratorViewModel, theme: WidgetThe
     lines.push(row(theme, `${L("/orchestrator-status")}`));
   } else if (vm.mode === "running") {
     const phase = phaseProgress(run.phaseIndex);
-    const attemptText = run.attempt > 0 ? ` · attempt ${run.attempt}/${run.maxAttempts}` : "";
+    const attemptText = run.attempt > 0 && run.phaseIndex === 5 ? ` · attempt ${run.attempt}/${run.maxAttempts}` : "";
     lines.push(row(theme, `${A("→")} ${BLD("Running")} · ${A(phase)}${attemptText} · ${D(elapsed)}`));
     lines.push(row(theme, phaseLine(vm.agents, theme)));
     const activeAgent = vm.agents.find(a => a.status === "running");
@@ -266,8 +266,8 @@ export function renderViewModelLines(vm: OrchestratorViewModel, theme: WidgetThe
     } else if (vm.mode === "completed") {
       lines.push(row(theme, `${S("✓")} ${BLD("Completed")} · ${D(elapsed)}`));
     } else if (vm.mode === "failed") {
-      const stageSuffix = run.stage !== "completed" ? ` · ${run.stage}` : "";
-      lines.push(row(theme, `${E("✗")} ${BLD("Failed")}${D(stageSuffix)} · ${D(elapsed)}`));
+      const phaseLabel = UI_PHASE_LABELS[run.phaseIndex] ?? run.stage;
+      lines.push(row(theme, `${E("✗")} ${BLD("Failed")} · ${D(phaseLabel)} · ${D(elapsed)}`));
     } else {
       lines.push(row(theme, `${M("⊘")} ${BLD("Cancelled")} · ${D(elapsed)}`));
     }

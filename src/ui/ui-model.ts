@@ -86,7 +86,8 @@ export function buildRunViewModel(
   );
   const failedArtifact = lastFailed?.rawArtifact ?? lastFailed?.artifact;
 
-  const isWaiting = state.waitingFor !== undefined && state.waitingFor.length > 0;
+  const hasLiveGate = state.humanGate !== undefined;
+  const hasWaitingFor = state.waitingFor !== undefined && state.waitingFor.length > 0;
 
   const runSummary: RunSummary = {
     id: state.runId,
@@ -121,7 +122,7 @@ export function buildRunViewModel(
   const visibleSteps = state.steps.slice(-12);
 
   const completedOrFailed = state.status === "completed" || state.status === "failed" || state.status === "cancelled";
-  const runMode: OrchestratorViewModel["mode"] = state.status === "paused" ? "paused" : completedOrFailed ? state.status : isWaiting ? "waiting" : "running";
+  const runMode: OrchestratorViewModel["mode"] = state.status === "paused" && hasLiveGate ? "waiting" : state.status === "paused" ? "paused" : completedOrFailed ? state.status : hasWaitingFor ? "waiting" : "running";
 
   return {
     mode: runMode,

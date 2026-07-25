@@ -75,7 +75,7 @@ export function createPlanReviewComponent(
   let mode: "scroll" | "buttons" = "scroll";
   let focusedSection = 0;
   let focusedButton = 0;
-  let cachedLines: string[] | undefined;
+  let cachedLines: { width: number; lines: string[] } | undefined;
 
   const sortedTasks = topologicalSort(plan.tasks);
   const visibleSections = [
@@ -89,7 +89,7 @@ export function createPlanReviewComponent(
   function refresh(): void { cachedLines = undefined; tui.requestRender(); }
 
   function render(width: number): string[] {
-    if (cachedLines) return cachedLines;
+    if (cachedLines && cachedLines.width === width) return cachedLines.lines;
     const lines: string[] = [];
     const pw = width;
 
@@ -161,6 +161,9 @@ export function createPlanReviewComponent(
           if (task.files.length > 0) {
             wrapLn("   ", `Files: ${task.files.join(", ")}`);
           }
+          if (task.testSupportFiles && task.testSupportFiles.length > 0) {
+            wrapLn("   ", `Test support: ${task.testSupportFiles.join(", ")}`);
+          }
           if (task.verification.length > 0) {
             wrapLn("   ", `Verification:`);
             for (const v of task.verification) {
@@ -218,7 +221,7 @@ export function createPlanReviewComponent(
     // Bottom border
     ln("─".repeat(pw), "accent");
 
-    cachedLines = lines;
+    cachedLines = { width, lines };
     return lines;
   }
 

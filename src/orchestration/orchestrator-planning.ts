@@ -1,14 +1,14 @@
 import { ensureChecksConfigured } from "../checks/check-setup.js";
 import { formatApprovedPlan, formatBaselineReport } from "../ui/session-messages.js";
 import { parseBuilderOutput, parseDebuggerOutput, parseExplorerOutput, parsePlannerOutput, parseReviewOutput } from "../validation.js";
-import type { CheckResult, DebuggerOutput, HumanPlanReviewResult, PlannerOutput } from "../types.js";
+import type { CheckResult, DebuggerOutput, HumanPlanReviewResult, OrchestratorConfig, PlannerOutput } from "../types.js";
 import type { ImplementationPlanningResult, PlanningResult, WorkflowContext } from "./orchestrator-context.js";
 import type { OrchestratorRuntime } from "./orchestrator-runtime.js";
 import { allGreen } from "./orchestrator-helpers.js";
 import { runAgentStep } from "./orchestrator-agent-step.js";
 import { runCheckStep } from "./orchestrator-workspace.js";
 import { promptHumanPlanReview, runDurableHumanGate } from "./orchestrator-human-gates.js";
-import { publishSessionMessage, transition } from "./orchestrator-state.js";
+import { persist, publishSessionMessage, transition } from "./orchestrator-state.js";
 import { WorkflowCancelledError } from "./workflow-errors.js";
 import { createWorktree } from "../workspace/worktree.js";
 import { saveWorkflowCheckpoint } from "./orchestrator-checkpoints.js";
@@ -142,8 +142,18 @@ export async function prepareImplementationPhase(
     workflow.config.limits.agentTimeoutMs,
     requiredAgentsForRoute(workflow.route, workflow.config)
   );
-  const configured = await ensureChecksConfigured(cwd, workflow.config, ctx);
-  if (!configured) throw new WorkflowCancelledError("Workflow cancelled during project check setup", "human_gate");
+  if (workflow.config.checks.length === 0) {
+    runtime.requireState().waitingFor = "Check setup";
+    await persist(runtime, ctx);
+  }
+  let configured: OrchestratorConfig;
+  try {
+    const result = await ensureChecksConfigured(cwd, workflow.config, ctx);
+    if (!result) throw new WorkflowCancelledError("Workflow cancelled during project check setup", "human_gate");
+    configured = result;
+  } finally {
+    runtime.requireState().waitingFor = undefined;
+  }
   workflow.config = configured;
   runtime.config = configured;
   const config = configured;

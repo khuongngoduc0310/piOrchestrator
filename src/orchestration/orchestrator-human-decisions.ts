@@ -104,6 +104,7 @@ export async function requestHumanDecision<T>(
   } catch (error) {
     if (error instanceof WorkflowPausedError) {
       state.status = "paused";
+      state.humanGate = undefined;
       await persist(runtime, ctx).catch(() => undefined);
       throw error;
     }
