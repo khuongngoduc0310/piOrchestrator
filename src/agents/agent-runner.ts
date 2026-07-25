@@ -172,6 +172,7 @@ export class PiSdkAgentExecutor implements AgentExecutor {
       }).catch(() => undefined);
       session = await withinDeadline(creation);
       if (options.signal.aborted) throw new AgentCancelledError(options.name);
+      resetToolTimestamps();
       unsubscribe = session.subscribe(event => {
         const nextTranscriptMessages = updateTranscriptMessages(transcriptMessages, event);
         const transcriptChanged = nextTranscriptMessages !== transcriptMessages;
@@ -298,34 +299,66 @@ function cloneUsage(usage: AgentUsage): AgentUsage {
   };
 }
 
+let toolStartTimestamps = new Map<string, number>();
+
+function resetToolTimestamps(): void { toolStartTimestamps = new Map(); }
+
 function sanitizeEvent(event: AgentSessionEvent): import("./agent-runner-contracts.js").AgentEventMetadata | undefined {
+  const now = Date.now();
   switch (event.type) {
     case "agent_start":
+      return { type: event.type, timestamp: now };
     case "agent_settled":
+      return { type: event.type, timestamp: now };
     case "turn_start":
       return { type: event.type };
     case "tool_execution_start":
+      toolStartTimestamps.set(event.toolCallId, now);
       return {
         type: event.type,
         toolName: event.toolName,
-        args: truncate(JSON.stringify(event.args), 200)
+        toolCallId: event.toolCallId,
+        args: truncate(JSON.stringify(event.args), 200),
+        timestamp: now,
+      };
+    case "tool_execution_update":
+      return {
+        type: event.type,
+        toolName: event.toolName,
+        toolCallId: event.toolCallId,
+        streaming: true,
+        timestamp: now,
       };
     case "tool_execution_end":
-      return { type: event.type, toolName: event.toolName, isError: event.isError };
+      return {
+        type: event.type,
+        toolName: event.toolName,
+        toolCallId: event.toolCallId,
+        isError: event.isError,
+        timestamp: now,
+        durationMs: toolStartTimestamps.has(event.toolCallId) ? now - toolStartTimestamps.get(event.toolCallId)! : undefined,
+        result: extractToolResult(event.result),
+      };
     case "auto_retry_start":
       return {
         type: event.type,
         attempt: event.attempt,
         maxAttempts: event.maxAttempts,
-        errorMessage: truncate(event.errorMessage, 500)
+        errorMessage: truncate(event.errorMessage, 500),
+        timestamp: now,
       };
     case "auto_retry_end":
-      return { type: event.type, attempt: event.attempt, errorMessage: truncate(event.finalError, 500) };
-    case "message_update":
+      return { type: event.type, attempt: event.attempt, errorMessage: truncate(event.finalError, 500), timestamp: now };
+    case "message_update": {
+      const text = extractLatestText(event);
+      if (!text) return undefined;
       return {
         type: event.type,
-        text: extractLatestText(event)
+        text,
+        streaming: true,
+        timestamp: now,
       };
+    }
     case "message_end":
       if (event.message.role !== "assistant" || event.message.stopReason === "stop" || event.message.stopReason === "toolUse") {
         return undefined;
@@ -335,7 +368,8 @@ function sanitizeEvent(event: AgentSessionEvent): import("./agent-runner-contrac
         stopReason: event.message.stopReason,
         provider: event.message.provider,
         model: event.message.responseModel ?? event.message.model,
-        errorMessage: sanitizeDiagnostic(event.message.errorMessage, 500)
+        errorMessage: sanitizeDiagnostic(event.message.errorMessage, 500),
+        timestamp: now,
       };
     default:
       return undefined;
@@ -346,8 +380,24 @@ function sanitizeEvent(event: AgentSessionEvent): import("./agent-runner-contrac
 function extractLatestText(event: AgentSessionEvent): string | undefined {
   if (event.type !== "message_update") return undefined;
   const assistantEvent = (event as any).assistantMessageEvent;
-  if (!assistantEvent?.delta?.text) return undefined;
-  return String(assistantEvent.delta.text).slice(0, 200);
+  if (!assistantEvent) return undefined;
+  if (assistantEvent.type === "text_delta" && typeof assistantEvent.delta === "string") {
+    return String(assistantEvent.delta).slice(0, 200);
+  }
+  if (typeof assistantEvent.delta?.text === "string") {
+    return String(assistantEvent.delta.text).slice(0, 200);
+  }
+  return undefined;
+}
+
+function extractToolResult(result: unknown): string | undefined {
+  if (!result) return undefined;
+  try {
+    const text = typeof result === "string" ? result : JSON.stringify(result);
+    return truncate(text, 500);
+  } catch {
+    return undefined;
+  }
 }
 
 function truncate(value: string | undefined, max: number): string | undefined {

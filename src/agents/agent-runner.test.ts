@@ -254,8 +254,8 @@ describe("PiSdkAgentExecutor", () => {
     expect(result.response).toEqual({ provider: "test", model: "model", api: "test", stopReason: "stop" });
     expect(usageSnapshots).toEqual([{ usage: result.usage, provider: "test", model: "model", api: "test", stopReason: "stop" }]);
     expect(events).toEqual([
-      { type: "agent_start" },
-      { type: "tool_execution_start", toolName: "read", args: '{"path":"test.txt"}' }
+      { type: "agent_start", timestamp: expect.any(Number) },
+      { type: "tool_execution_start", toolName: "read", args: '{"path":"test.txt"}', toolCallId: "x", timestamp: expect.any(Number) }
     ]);
     expect(JSON.stringify(events)).not.toContain("secret");
     expect(unsubscribe).toHaveBeenCalledOnce();

@@ -36,6 +36,7 @@ export async function runWorkflow(
   try {
     runtime.activeTranscripts.clear();
     runtime.transcriptRevision = 0;
+    runtime.sessionBuffers.clear();
     const agents = Object.fromEntries(AGENT_NAMES.map(name => [name, { status: "idle", model: config.agents[name].model }])) as NonNullable<typeof runtime.state>["agents"];
     runtime.state = {
       schemaVersion: SCHEMA_VERSION,

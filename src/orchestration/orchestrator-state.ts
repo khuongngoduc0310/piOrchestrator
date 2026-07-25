@@ -69,7 +69,8 @@ export async function persist(runtime: OrchestratorRuntime, ctx: ExtensionComman
 
 export function updateAgentActivity(
   runtime: OrchestratorRuntime,
-  event: { type: string; toolName?: string; args?: string; isError?: boolean; text?: string }
+  event: import("../agents/agent-runner-contracts.js").AgentEventMetadata,
+  agent?: string
 ): void {
   const state = runtime.state;
   if (!state) return;
@@ -78,15 +79,53 @@ export function updateAgentActivity(
       state.currentTool = event.toolName;
       state.currentToolArgs = event.args;
       state.toolStatus = undefined;
+      if (agent && runtime.sessionBuffers) {
+        runtime.sessionBuffers.addEvent(agent, {
+          id: event.toolCallId ?? `${event.toolName}-${Date.now()}`,
+          type: "tool_call",
+          timestamp: event.timestamp ?? Date.now(),
+          tool: event.toolName ?? "",
+          args: event.args,
+          status: "running",
+          startedAt: event.timestamp ?? Date.now(),
+        });
+      }
       break;
     case "tool_execution_end":
       state.toolStatus = event.isError ? "error" : "ok";
+      if (agent && runtime.sessionBuffers && event.toolCallId) {
+        runtime.sessionBuffers.updateTool(agent, event.toolCallId, {
+          status: event.isError ? "failed" : "succeeded",
+          result: event.result,
+          durationMs: event.durationMs,
+        });
+      }
       break;
     case "auto_retry_start":
       state.toolStatus = "retrying";
+      if (agent && runtime.sessionBuffers) {
+        runtime.sessionBuffers.addEvent(agent, {
+          id: `retry-${Date.now()}`,
+          type: "system",
+          timestamp: event.timestamp ?? Date.now(),
+          text: `Auto-retry ${event.attempt}/${event.maxAttempts}${event.errorMessage ? `: ${event.errorMessage}` : ""}`,
+          kind: "retry",
+        });
+      }
       break;
     case "message_update":
-      if (event.text) state.agentOutput = (state.agentOutput ?? []).concat(event.text).slice(-5);
+      if (event.text) {
+        state.agentOutput = (state.agentOutput ?? []).concat(event.text).slice(-5);
+        if (agent && runtime.sessionBuffers && event.streaming) {
+          runtime.sessionBuffers.addEvent(agent, {
+            id: `assistant-${state.runId}-${state.steps.length}`,
+            type: "assistant",
+            timestamp: event.timestamp ?? Date.now(),
+            text: event.text,
+            streaming: true,
+          });
+        }
+      }
       break;
   }
 }

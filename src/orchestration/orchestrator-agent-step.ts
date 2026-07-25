@@ -1,5 +1,6 @@
 import type { ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import { CONFIG_DIR_NAME } from "@earendil-works/pi-coding-agent";
+import type { StructuredAgentResponse } from "../ui/agent-session.js";
 import { createHash } from "node:crypto";
 import { AgentCancelledError, AgentIncompleteResponseError, type AgentRunOptions } from "../agents/agent-runner.js";
 import { AGENT_TASK_SCHEMA_VERSION, type AgentOutputMap, type AgentResult, type AgentTaskEnvelope, type AgentTaskMap, type AgentInvocationRecord, type AgentName, type AgentTranscript, type AgentTranscriptArtifact, type PlannerOutput, type Stage } from "../types.js";
@@ -56,7 +57,7 @@ export async function runAgentStep<A extends AgentName>(
       : undefined;
     const onEvent = (event: Parameters<NonNullable<AgentRunOptions["onEvent"]>>[0]): void => {
       void store.event("agent_event", { stepId: step.id, agent, event }).catch(() => undefined);
-      updateAgentActivity(runtime, event);
+      updateAgentActivity(runtime, event, agent);
       throttledPersist(runtime, ctx);
     };
     const runBase = {
@@ -312,6 +313,12 @@ export async function runAgentStep<A extends AgentName>(
     status.status = "succeeded";
     status.summary = result.text.slice(0, 500);
     status.completedAt = runtime.timestamp();
+    runtime.sessionBuffers.addEvent(agent, {
+      id: `${step.id}:response`,
+      type: "structured_response",
+      timestamp: Date.now(),
+      response: { agent, output } as StructuredAgentResponse,
+    });
     return output;
   } catch (error) {
     let effectiveError = error;

@@ -23,50 +23,129 @@ pi install ./
 
 Pi loads this package directly from `src/index.ts`; there is no extension build step. The browser dashboard is a React application built with Vite. Prebuilt assets are committed under `src/dashboard-dist/` so `pi install ./` works without running the dashboard build. Run `npm run build:dashboard` to regenerate them after modifying the frontend source.
 
-## Persistent command-line UI
+## Workflow lifecycle
 
-When Pi starts, piOrchestrator shows an adaptive terminal panel in the Pi widget area:
-
-### Idle
+`/orchestrate` and `/orchestrator-resume` run in the background. After collecting your route and request, the command returns and Pi's editor becomes available immediately. The workflow continues executing while you use other commands:
 
 ```text
-┌ piOrchestrator ───────────────────────────────────────┐
-│ IDLE · ready                                         │
-│ Project: 7 agents configured · 2 checks              │
-│ /orchestrate · /orchestrator-settings                │
+/orchestrator-control       — open the Mission Control dashboard
+/orchestrator-status        — show current stage and run directory
+/orchestrator-cancel        — stop the active workflow
+```
+
+Cancellation, plan review, Mission Control, and the browser dashboard all work during the run. A second `/orchestrate` is rejected while one is already running.
+
+When the workflow reaches a human decision point (plan review, check setup, bug diagnosis approval, memory approval), Mission Control closes automatically. Complete the dialog — **Mission Control reopens automatically** when the workflow continues.
+
+## Mission Control dashboard (command-line UI)
+
+piOrchestrator does not use a persistent editor widget. Instead it provides an on-demand full-screen Mission Control overlay opened with `/orchestrator-control`. A compact one-line footer status always shows the current workflow state and includes the `/orchestrator-control` hint while running.
+
+### Footer status
+
+```text
+● orchestrator: idle · ready
+→ orchestrator: running · Implementation · builder · /orchestrator-control
+⏳ orchestrator: waiting for you · Plan approval
+✓ orchestrator: completed · Finalize
+✗ orchestrator: failed · Implementation
+```
+
+### Mission Control overlay
+
+Open `/orchestrator-control` during a running workflow:
+
+```text
+┌ piOrchestrator · d238f168 ─────────────────────────────────┐
+│ → Running · Build 5/8 · attempt 1/3 · 01:24                │
+│ ✓ Explore  ✓ Plan  ✓ Baseline  ✓ Tests  → Build  ○ Review  │
+│ Active builder · deepseek/deepseek-v4-flash                 │
+│ Selected tester → active · openai/gpt-5.2-codex              │
+│ [expl✓] [plan✓] [base✓] [test✓] [buil→] [revi ] [docu ]    │
+│ Request: add a simple feature                                │
+│ Route   implementation                                       │
+│ ✓ Preflight · → Exploring                                   │
+│                                                              │
+│ Live activity                                                │
+│ ◘ Inspecting the test suite...                               │
+│ → read src/components/Button.test.tsx                        │
+│ ✓ edit src/components/Button.tsx                              │
+│                                                              │
+│ ⏎ Inspect tester  Tab/Shift+Tab Select  Esc Close            │
+└──────────────────────────────────────────────────────────────┘
+```
+
+Key layout:
+
+- **Active** — the currently running agent (auto-changes as the workflow progresses).
+- **Selected** — the agent Tab/Shift+Tab has highlighted. Enter inspects this agent.
+- **Agent selector bar** — compact row showing all roles. The bracketed one `[test✓]` is selected.
+- **Live activity** — latest assistant, tool, and system events for the selected agent.
+
+### Agent inspector (inside Mission Control)
+
+Press **Enter** while Mission Control is open to view the full agent transcript:
+
+```text
+┌ piOrchestrator · builder ─────────────────────────────┐
+│ builder · events: 12                                  │
+├───────────────────────────────────────────────────────┤
+│ ◘ I'll inspect the orchestrator route...              │
+│                                                        │
+│ → read                                                 │
+│   src/orchestrator.ts                                  │
+│   ✓ completed · 42ms                                  │
+│                                                        │
+│ ◘ The implementation plan is ready.                    │
+│                                                        │
+│ → edit                                                 │
+│   src/orchestrator.ts                                  │
+│   → running                                            │
+│                                                        │
+├───────────────────────────────────────────────────────┤
+│ ↑↓ Scroll   [f] Follow: on   [t] Tool: off            │
+│                          [Tab] Agent  [Esc] Dashboard  │
 └───────────────────────────────────────────────────────┘
 ```
 
-### Running
+Press **Esc** to return to the Mission Control dashboard, or **Esc** again to close the overlay and restore the Pi editor.
 
-```text
-┌ piOrchestrator · d238f168 ────────────────────────────┐
-│ RUNNING · phase 5/8 · attempt 1/3 · 01:24            │
-│ expl✓ plan✓ revi✓ test→ buil· debu· docu·             │
-│ Active: tester · deepseek/deepseek-v4-flash          │
-│ Request: add a pause and resume button                │
-│ Recent: ✓ tests · → implement plan                    │
-│ Artifacts: …/.pi/orchestrator/runs/d238f168…          │
-└───────────────────────────────────────────────────────┘
-```
+#### Keyboard controls
 
-### Paused, completed, or failed
+| Context | Key | Action |
+|---|---|---|
+| Normal | `/orchestrator-control` | Open Mission Control |
+| Mission Control | `Enter` | Inspect selected agent |
+| Mission Control | `Tab` | Select next agent |
+| Mission Control | `Shift+Tab` | Select previous agent |
+| Mission Control | `Esc` | Close overlay |
+| Inspector | `Esc` | Return to Mission Control |
+| Inspector | `Tab` | Select next agent |
+| Inspector | `Shift+Tab` | Select previous agent |
+| Inspector | `↑` / `↓` | Scroll transcript by one event |
+| Inspector | `PageUp` / `PageDown` | Scroll by 10 events |
+| Inspector | `f` | Re-enable follow mode |
+| Inspector | `t` | Toggle expanded tool details |
 
-```text
-┌ piOrchestrator · d238f168 ────────────────────────────┐
-│ FAILED · exploring · 00:20                           │
-│ ! Explorer output could not be validated              │
-│ Failed artifact: 001-exploring-invalid-output.txt      │
-└───────────────────────────────────────────────────────┘
-```
+#### Behavior
 
-The panel shows idle setup guidance, live route/phase/agent activity, durable human-decision waits, paused resume information, and terminal outcomes. It keeps the latest run visible until another run starts and clears on Pi session shutdown. A completed read-only run does not claim that configured checks passed.
+- **Active agent** runs. **Selected agent** is what Enter inspects. Tab moves selection independently of the active agent.
+- **Follow mode** starts enabled. New events pin to the latest. Scrolling upward increases the offset from the bottom; follow stays disabled until you press `f`.
+- **Auto-reopen**: Mission Control closes automatically before plan review, check setup, bug diagnosis approval, and memory approval. It reopens automatically after the dialog completes.
+- The selected agent persists between Mission Control and inspector.
+- Without manual selection, the active agent is followed automatically.
+- Completed agent sessions remain inspectable. Agents that have not started show `○ not started`.
+- The overlay is **read-only**: keyboard input is never forwarded to the running agent.
+- Available only in TUI mode. JSON and print modes are rejected.
+- History bounded at 500 events and ~1 MB per agent. Oldest events are dropped when either limit is exceeded.
+- On Windows, Shift+Tab may be indistinguishable from Tab if Pi's native VT support cannot load.
 
 ## Commands
 
 ```text
 /orchestrate
 /orchestrator-status
+/orchestrator-control
 /orchestrator-resume [exact-run-id]
 /orchestrator-ui
 /orchestrator-cancel

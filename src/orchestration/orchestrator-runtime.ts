@@ -9,6 +9,7 @@ import { DashboardServer } from "../ui/dashboard.js";
 import { buildIdleViewModel, buildRunViewModel } from "../ui/ui-model.js";
 import { openBrowser as defaultOpenBrowser } from "../commands/open-browser.js";
 import { RunStore } from "../persistence/store.js";
+import { MapSessionBuffer } from "../ui/agent-session.js";
 import { clearTerminal } from "../ui/terminal-ui.js";
 import { loadMemory } from "../memory/memory-store.js";
 import { selectMemoryLessons } from "../memory/memory-selection.js";
@@ -57,6 +58,7 @@ export class OrchestratorRuntime {
   finalizationStarted = false;
   activeTranscripts = new Map<string, AgentTranscript>();
   transcriptRevision = 0;
+  sessionBuffers = new MapSessionBuffer();
   private dashboardCwd?: string;
 
   constructor(
@@ -98,6 +100,10 @@ export class OrchestratorRuntime {
   getConfigSummary(): ConfigSummary {
     if (!this.config) return { status: "missing", agentCount: 0, checkCount: 0 };
     return { status: "valid", agentCount: AGENT_NAMES.length, checkCount: this.config.checks.length };
+  }
+
+  getAgentSessionView(name: AgentName) {
+    return this.sessionBuffers.getView(name);
   }
 
   async getAgentInspection(name: AgentName) {

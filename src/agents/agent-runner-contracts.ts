@@ -17,15 +17,20 @@ import type {
 export interface AgentEventMetadata {
   type: string;
   toolName?: string;
+  toolCallId?: string;
   isError?: boolean;
   attempt?: number;
   maxAttempts?: number;
   errorMessage?: string;
   text?: string;
   args?: string;
+  result?: string;
   stopReason?: string;
   provider?: string;
   model?: string;
+  streaming?: boolean;
+  timestamp?: number;
+  durationMs?: number;
 }
 
 export interface AgentRunOptions {

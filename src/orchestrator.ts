@@ -74,6 +74,10 @@ export class Orchestrator {
     return this.runtime.config;
   }
 
+  getSessionBuffers() {
+    return this.runtime.sessionBuffers;
+  }
+
   shutdown(ctx?: Pick<ExtensionCommandContext, "hasUI" | "ui">): Promise<void> {
     return this.runtime.shutdown(ctx);
   }

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { renderViewModelLines, statusText, visibleWidth, type WidgetTheme } from "./ui-controller.js";
+import { renderViewModelLines, statusText, visibleWidth, type WidgetTheme } from "./terminal-ui.js";
 import type { AgentSummary, ConfigSummary, OrchestratorViewModel, RunSummary, StepRecord } from "../types.js";
 import { AGENT_NAMES } from "../types.js";
 

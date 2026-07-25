@@ -23,7 +23,8 @@ export default function piOrchestrator(pi: ExtensionAPI): void {
       const state = engine.getState();
       if (!state?.startedAt) return 0;
       return Date.now() - new Date(state.startedAt).getTime();
-    }
+    },
+    sessionBuffers: () => engine.getSessionBuffers(),
   });
 
   engine.setOnStateChange((state, config, ctx) => {
@@ -48,7 +49,7 @@ export default function piOrchestrator(pi: ExtensionAPI): void {
       }
       try {
         const workflow = await collectWorkflowRequest(ctx);
-        if (workflow) await engine.start(workflow, ctx);
+        if (workflow) observeBackgroundRun(engine.start(workflow, ctx), ctx, "Workflow could not start");
       } catch (error) {
         ctx.ui.notify(messageOf(error), "error");
       }
@@ -75,7 +76,10 @@ export default function piOrchestrator(pi: ExtensionAPI): void {
     description: "Browse resumable workflows or resume one by exact run ID: /orchestrator-resume [run-id]",
     handler: async (args: string, ctx: ExtensionCommandContext) => {
       const cwd = ctx.cwd ?? process.cwd();
-      await handleResumeCommand(cwd, args, ctx, runId => engine.resume(runId, ctx));
+      await handleResumeCommand(cwd, args, ctx, runId => {
+        observeBackgroundRun(engine.resume(runId, ctx), ctx, "Resume failed");
+        return Promise.resolve();
+      });
     }
   });
 
@@ -84,6 +88,17 @@ export default function piOrchestrator(pi: ExtensionAPI): void {
     handler: async (_args: string, ctx: ExtensionCommandContext) => {
       const requested = engine.cancel();
       ctx.ui.notify(requested ? "Cancellation requested" : "No active workflow to cancel", requested ? "warning" : "info");
+    }
+  });
+
+  pi.registerCommand("orchestrator-control", {
+    description: "Open the Mission Control dashboard",
+    handler: async (_args: string, ctx: ExtensionCommandContext) => {
+      try {
+        await ui.openMissionControl(ctx);
+      } catch (error) {
+        ctx.ui.notify(`Mission Control failed: ${messageOf(error)}`, "error");
+      }
     }
   });
 
@@ -173,6 +188,20 @@ export default function piOrchestrator(pi: ExtensionAPI): void {
       } catch (error) {
         ctx.ui.notify(`Memory command failed: ${messageOf(error)}`, "error");
       }
+    }
+  });
+}
+
+function observeBackgroundRun(
+  run: Promise<void>,
+  ctx: ExtensionCommandContext,
+  failurePrefix: string,
+): void {
+  void run.catch(error => {
+    try {
+      ctx.ui.notify(`${failurePrefix}: ${messageOf(error)}`, "error");
+    } catch {
+      // Command context may be stale after reload or session replacement.
     }
   });
 }
