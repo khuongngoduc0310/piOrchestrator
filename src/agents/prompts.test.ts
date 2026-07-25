@@ -45,6 +45,7 @@ describe("role prompt contracts", () => {
     expect(explorer).toContain("trace its usage into parent and integration tests");
     const planner = await prompt("planner");
     expect(planner).toContain("`revise_for_failure`");
+    expect(planner).toContain("Copy `previousPlan.acceptanceCriteria` verbatim with identical text and ordering");
     expect(planner).toContain("integration tests");
     expect(planner).toContain("cross-check every named source file");
     expect(await prompt("reviewer")).toContain("`scope_revision`");

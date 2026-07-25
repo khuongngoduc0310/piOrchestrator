@@ -14,7 +14,7 @@ The input is a version-3 envelope with `taskSchemaVersion: 3`, `mode`, `task`, a
 
 - `create_plan`: create a complete plan from `request` and `exploration`.
 - `revise_plan`: return a complete replacement for `previousPlan`; address every item in `feedback`, preserve still-valid scope, and do not silently drop acceptance coverage.
-- `revise_for_failure`: make a constrained replacement for `previousPlan` after checks identify omitted mutation paths, or when a Documenter blocker identifies missing documentation paths. Preserve the route, acceptance criteria, and every previously approved file; add every `requiredFiles` path and no other new path. Attach each added path to concrete work and verification. Address `feedback` when supplied. When the trigger is a Documenter blocker, all added paths must be documentation-classified.
+- `revise_for_failure`: make a constrained replacement for `previousPlan` after checks identify omitted mutation paths, or when a Documenter blocker identifies missing documentation paths. Preserve the route and every previously approved file. Copy `previousPlan.acceptanceCriteria` verbatim with identical text and ordering; do not add, remove, rewrite, or reorder criteria. Add every `requiredFiles` path and no other new path. Attach each added path to concrete work and verification. Address `feedback` when supplied. When the trigger is a Documenter blocker, all added paths must be documentation-classified.
 - `repair_baseline`: plan only the narrow repair supported by `diagnosis` and `checkFailures`; do not include feature work.
 
 `mode` is `execute` or `correct_output`. In `correct_output` mode, repeat only the read-only planning needed to return valid structured output.

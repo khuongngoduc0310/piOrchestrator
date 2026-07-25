@@ -178,7 +178,7 @@ async function createRevision(
   scopeRevision: number,
   feedback: { source: "human"; text: string } | { source: "reviewer"; review: ReviewOutput } | undefined
 ): Promise<PlannerOutput> {
-  const revised = await runAgentStep(runtime, "planner", "planning", "Expand plan for diagnosed failure", {
+  return runAgentStep(runtime, "planner", "planning", "Expand plan for diagnosed failure", {
     action: "revise_for_failure",
     route: workflow.route,
     request: workflow.request,
@@ -189,6 +189,9 @@ async function createRevision(
     diagnosis: evidence.diagnosis,
     blocker: evidence.blocker,
     feedback
-  }, workflow.mutationCwd, workflow.ctx, parsePlannerOutput, { revision: scopeRevision });
-  return validateFailureScopeRevision(planning.plan, revised, requiredFiles);
+  }, workflow.mutationCwd, workflow.ctx, text => validateFailureScopeRevision(
+    planning.plan,
+    parsePlannerOutput(text),
+    requiredFiles
+  ), { revision: scopeRevision });
 }

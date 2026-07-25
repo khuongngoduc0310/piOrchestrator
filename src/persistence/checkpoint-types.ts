@@ -18,7 +18,7 @@ import type { WorktreeHandle } from "../workspace/worktree.js";
 import type { PendingHumanDecision, RecordedHumanDecision } from "../orchestration/human-decision-types.js";
 import type { ValidatedFileAttestation } from "../workspace/workspace-attestation.js";
 
-export const CHECKPOINT_SCHEMA_VERSION = 5 as const;
+export const CHECKPOINT_SCHEMA_VERSION = 6 as const;
 
 export const CHECKPOINT_CURSOR_KINDS = [
   "plan_approved",
@@ -41,7 +41,9 @@ export const CHECKPOINT_CURSOR_KINDS = [
   "investigation_completed",
   "route_agent_completed",
   "route_final_checks_passed",
-  "resolution_pending"
+  "resolution_pending",
+  "resolution_resolved",
+  "environment_retry_pending"
 ] as const;
 
 export type CheckpointCursorKind = (typeof CHECKPOINT_CURSOR_KINDS)[number];
@@ -67,7 +69,24 @@ export interface CheckpointContinuationMap {
   investigation_completed: unknown;
   route_agent_completed: unknown;
   route_final_checks_passed: unknown;
-  resolution_pending: { record: ResolutionRecord; planning: unknown };
+  resolution_pending: {
+    record: ResolutionRecord;
+    planning: unknown;
+    output?: unknown;
+    scopeOwner?: "finalization_initial_documentation" | "finalization_repair_documentation" | "specialized_initial_documentation";
+    scopeContext?: unknown;
+  };
+  resolution_resolved: {
+    record: ResolutionRecord;
+    planning: unknown;
+  };
+  environment_retry_pending: {
+    record: ResolutionRecord;
+    planning: unknown;
+    blockedPhase: string;
+    blockedAgent?: string;
+    retryCondition: string;
+  };
 }
 
 export type CheckpointCursor = {

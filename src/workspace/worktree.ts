@@ -111,6 +111,14 @@ async function headCommit(cwd: string): Promise<string | undefined> {
   }
 }
 
+async function stageWorkspaceSnapshot(cwd: string, env: NodeJS.ProcessEnv): Promise<void> {
+  await runGit(cwd, ["add", "-A"], { env });
+  await runGit(cwd, [
+    "rm", "-r", "-f", "--cached", "--ignore-unmatch", "--",
+    `${CONFIG_DIR_NAME}/orchestrator/runs`, `${CONFIG_DIR_NAME}/orchestrator/worktrees`
+  ], { env });
+}
+
 async function snapshotCommit(cwd: string, parent: string | undefined, message: string): Promise<string> {
   return withTemporaryIndex(cwd, async env => {
     // Seed from the real index so tracked ignored files remain tracked, then capture
@@ -120,11 +128,7 @@ async function snapshotCommit(cwd: string, parent: string | undefined, message: 
     } catch {
       await runGit(cwd, ["read-tree", "--empty"], { env });
     }
-    await runGit(cwd, ["add", "-A"], { env });
-    await runGit(cwd, [
-      "rm", "-r", "-f", "--cached", "--ignore-unmatch", "--",
-       `${CONFIG_DIR_NAME}/orchestrator/runs`, `${CONFIG_DIR_NAME}/orchestrator/worktrees`
-    ], { env });
+    await stageWorkspaceSnapshot(cwd, env);
     const tree = (await gitText(cwd, ["write-tree"], { env })).trim();
     const args = ["commit-tree", tree];
     if (parent) args.push("-p", parent);
@@ -396,14 +400,7 @@ export async function verifySynchronizedSource(handle: WorktreeHandle, changes: 
 async function assertSourceHasNotDrifted(handle: WorktreeHandle): Promise<void> {
   await withTemporaryIndex(handle.repositoryRoot, async env => {
     await runGit(handle.repositoryRoot, ["read-tree", handle.baselineCommit], { env });
-    await runGit(handle.repositoryRoot, [
-      "add",
-      "-A",
-      "--",
-      ".",
-       `:(exclude,top,literal)${CONFIG_DIR_NAME}/orchestrator/runs`,
-       `:(exclude,top,literal)${CONFIG_DIR_NAME}/orchestrator/worktrees`,
-    ], { env });
+    await stageWorkspaceSnapshot(handle.repositoryRoot, env);
     const drift = splitNul((await runGit(handle.repositoryRoot, [
       "diff",
       "--cached",

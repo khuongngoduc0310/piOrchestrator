@@ -1,4 +1,5 @@
 import { AGENT_NAMES, RESOLUTION_STATUSES, RESOLUTION_OUTCOME_TYPES, SCHEMA_VERSION, WORKFLOW_ROUTES, type CheckResult, type OrchestratorConfig, type ResolutionRecord, type WorkflowState } from "../types.js";
+import type { AgentResolutionRequest } from "../agent-task-types.js";
 import { validateOrchestratorConfig } from "../config/config-validation.js";
 import {
   CHECKPOINT_CURSOR_KINDS,
@@ -319,16 +320,68 @@ export function validateWorkflowCheckpoint(value: unknown, path = "checkpoint"):
   };
 }
 
-function validateResolutionRecord(value: unknown, path: string): ResolutionRecord {
-  const obj = record(value, path) as Record<string, unknown>;
-  const request = obj.request;
-  if (!request || typeof request !== "object" || !("kind" in (request as Record<string, unknown>)) || typeof (request as Record<string, unknown>).kind !== "string") {
-    throw new ValidationError(`${path}.request`, "expected a resolution request with a kind");
+const SUPPORTED_HANDOFF_ROLES: readonly string[] = ["debugger", "explorer", "planner"];
+
+function validateRepositoryEvidence(value: unknown, path: string): void {
+  const evidence = record(value, path);
+  string(evidence.path, `${path}.path`);
+  string(evidence.content, `${path}.content`);
+}
+
+function validateResolutionRequest(value: unknown, path: string): AgentResolutionRequest {
+  const req = record(value, path);
+  const kind = enumValue(req.kind, `${path}.kind`, ["scope", "baseline_repair", "prerequisite_repair", "role_handoff", "insufficient_evidence", "environment", "tooling"] as const);
+  string(req.reason, `${path}.reason`);
+  switch (kind) {
+    case "scope": {
+      array(req.requiredFiles, `${path}.requiredFiles`, (entry, entryPath) => repositoryPath(entry, entryPath));
+      if ((req.requiredFiles as unknown[]).length === 0) throw new ValidationError(`${path}.requiredFiles`, "must have at least one file");
+      return req as AgentResolutionRequest;
+    }
+    case "baseline_repair": {
+      array(req.failedCheckCommands, `${path}.failedCheckCommands`, (entry, entryPath) => string(entry, entryPath));
+      array(req.evidence, `${path}.evidence`, (entry, entryPath) => validateRepositoryEvidence(entry, entryPath));
+      return req as AgentResolutionRequest;
+    }
+    case "prerequisite_repair": {
+      array(req.affectedFiles, `${path}.affectedFiles`, (entry, entryPath) => string(entry, entryPath));
+      array(req.evidence, `${path}.evidence`, (entry, entryPath) => validateRepositoryEvidence(entry, entryPath));
+      array(req.verification, `${path}.verification`, (entry, entryPath) => string(entry, entryPath));
+      return req as AgentResolutionRequest;
+    }
+    case "role_handoff": {
+      const role = string(req.requestedRole, `${path}.requestedRole`);
+      if (!SUPPORTED_HANDOFF_ROLES.includes(role)) {
+        throw new ValidationError(`${path}.requestedRole`, `unsupported handoff role; supported: ${SUPPORTED_HANDOFF_ROLES.join(", ")}`);
+      }
+      string(req.requestedCapability, `${path}.requestedCapability`);
+      string(req.question, `${path}.question`);
+      array(req.evidence, `${path}.evidence`, (entry, entryPath) => validateRepositoryEvidence(entry, entryPath));
+      return req as AgentResolutionRequest;
+    }
+    case "insufficient_evidence": {
+      array(req.questions, `${path}.questions`, (entry, entryPath) => string(entry, entryPath));
+      array(req.suggestedRoles, `${path}.suggestedRoles`, (entry, entryPath) => enumValue(entry, entryPath, AGENT_NAMES));
+      array(req.inspectedEvidence, `${path}.inspectedEvidence`, (entry, entryPath) => validateRepositoryEvidence(entry, entryPath));
+      return req as AgentResolutionRequest;
+    }
+    case "environment":
+    case "tooling": {
+      array(req.diagnostics, `${path}.diagnostics`, (entry, entryPath) => string(entry, entryPath));
+      string(req.retryCondition, `${path}.retryCondition`);
+      array(req.affectedCommands, `${path}.affectedCommands`, (entry, entryPath) => string(entry, entryPath));
+      return req as AgentResolutionRequest;
+    }
   }
+}
+
+export function validateResolutionRecord(value: unknown, path: string): ResolutionRecord {
+  const obj = record(value, path) as Record<string, unknown>;
+  validateResolutionRequest(obj.request, `${path}.request`);
   const outcome = obj.outcome;
   return {
     id: string(obj.id, `${path}.id`),
-    request: request as ResolutionRecord["request"],
+    request: obj.request as AgentResolutionRequest,
     agent: enumValue(obj.agent, `${path}.agent`, AGENT_NAMES),
     status: enumValue(obj.status, `${path}.status`, RESOLUTION_STATUSES),
     outcome: outcome === undefined || outcome === null ? undefined : {

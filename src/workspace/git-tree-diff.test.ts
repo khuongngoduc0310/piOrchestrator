@@ -3,6 +3,7 @@ import { mkdir, mkdtemp, readFile, rename, rm, writeFile } from "node:fs/promise
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import { CONFIG_DIR_NAME } from "@earendil-works/pi-coding-agent";
 import { captureGitTree, compareGitTrees, validateInvocationFileDiff } from "./git-tree-diff.js";
 
 const directories: string[] = [];
@@ -56,19 +57,25 @@ describe("Git invocation tree diffs", () => {
   it("scopes nested projects and excludes run artifacts", async () => {
     const root = await repository();
     const project = path.join(root, "packages", "app");
-    await mkdir(path.join(project, ".pi", "orchestrator", "runs", "run-1"), { recursive: true });
+    const runRoot = path.join(project, CONFIG_DIR_NAME, "orchestrator", "runs", "run-1");
+    await mkdir(runRoot, { recursive: true });
+    await writeFile(path.join(project, ".gitignore"), `${CONFIG_DIR_NAME}/\n`);
     await writeFile(path.join(project, "app.ts"), "one\n");
-    const before = await captureGitTree(project, [".pi/orchestrator/runs/run-1"]);
+    const indexBefore = git(root, "diff", "--cached");
+    const before = await captureGitTree(project, [`${CONFIG_DIR_NAME}/orchestrator/runs/run-1`]);
+    expect(before.available).toBe(true);
     await writeFile(path.join(project, "app.ts"), "two\n");
-    await writeFile(path.join(project, ".pi", "orchestrator", "runs", "run-1", "state.json"), "changed");
+    await writeFile(path.join(runRoot, "state.json"), "changed");
     await writeFile(path.join(root, "outside.txt"), "outside\n");
-    const after = await captureGitTree(project, [".pi/orchestrator/runs/run-1"]);
+    const after = await captureGitTree(project, [`${CONFIG_DIR_NAME}/orchestrator/runs/run-1`]);
+    expect(after.available).toBe(true);
     const diff = await compareGitTrees(before, after);
 
     expect(diff.metadata.changedFiles).toEqual(["app.ts"]);
     expect(diff.patch?.toString("utf8")).toContain("packages/app/app.ts");
     expect(diff.patch?.toString("utf8")).not.toContain("state.json");
     expect(diff.patch?.toString("utf8")).not.toContain("outside.txt");
+    expect(git(root, "diff", "--cached")).toBe(indexBefore);
   }, 15_000);
 
   it("reports an unavailable diff outside Git", async () => {

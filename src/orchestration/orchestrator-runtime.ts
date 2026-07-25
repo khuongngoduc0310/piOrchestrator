@@ -292,6 +292,22 @@ export class OrchestratorRuntime {
     return url;
   }
 
+  async startWorkflowDashboard(): Promise<void> {
+    const state = this.requireState();
+    const config = this.requireConfig();
+    state.dashboardUrl = undefined;
+    if (state.warning?.startsWith("Dashboard unavailable:")) {
+      state.warning = undefined;
+    }
+    if (!config.dashboard.enabled) return;
+    try {
+      state.dashboardUrl = await this.dashboard.start(config.dashboard.port);
+      this.openBrowser(state.dashboardUrl);
+    } catch (error) {
+      state.warning = `Dashboard unavailable: ${messageOf(error)}`;
+    }
+  }
+
   async saveAgentSettings(cwd: string, updates: AgentModelUpdates): Promise<OrchestratorConfig> {
     return this.saveAgentConfig(cwd, config => applyAgentModelUpdates(config, updates));
   }

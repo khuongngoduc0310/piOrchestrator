@@ -1,5 +1,5 @@
 import { formatBaselineReport } from "../ui/session-messages.js";
-import { parseBuilderOutput, parseDebuggerOutput, parseExplorerOutput, parsePlannerOutput } from "../validation.js";
+import { parseBuilderOutput, parseDebuggerOutput, parseExplorerOutput, parsePlannerOutput, parseReviewOutput } from "../validation.js";
 import type { BuilderOutput } from "../types.js";
 import type { AgentResolutionRequest, PlannerTask } from "../agent-task-types.js";
 import type { ImplementationPlanningResult, WorkflowContext } from "./orchestrator-context.js";
@@ -9,6 +9,7 @@ import { runCheckStep } from "./orchestrator-workspace.js";
 import { persist, publishSessionMessage } from "./orchestrator-state.js";
 import { assertBuilderComplete } from "./mutation-completion.js";
 import { resolveParticipationPolicy, requiresHumanDecision } from "./participation-policy.js";
+import { validateFinalPlanRevision } from "./plan-revision.js";
 
 export type ResolutionResult = {
   planning: ImplementationPlanningResult;
@@ -73,8 +74,21 @@ export async function runRoleHandoff(
         previousPlan: planning.plan,
         feedback: { source: "human", text: `[Handoff from agent] ${blocker.requestedCapability}` }
       }, workflow.mutationCwd, ctx, parsePlannerOutput);
-      if (revisedPlan.route !== workflow.route) throw new Error(`Handoff plan route ${revisedPlan.route} does not match workflow route ${workflow.route}`);
-      return { planning: { ...planning, plan: revisedPlan } };
+      const validated = validateFinalPlanRevision(planning.plan, revisedPlan, { preserveAcceptanceCriteria: true });
+      const review = await runAgentStep(runtime, "reviewer", "reviewing_plan", "Review handoff plan revision", {
+        reviewType: "scope_revision",
+        request: workflow.request,
+        exploration: planning.exploration,
+        previousPlan: planning.plan,
+        plan: validated,
+        checks: planning.baseline ?? [],
+        requiredFiles: [],
+        diagnosis: planning.baselineDiagnosis
+      }, workflow.mutationCwd, ctx, parseReviewOutput, { revision: (planning.scopeRevisionCount ?? 0) + 1 });
+      if (review.decision !== "approved") {
+        throw new Error(`Handoff plan revision was not approved: ${review.blockingIssues.join("; ") || "reviewer rejected"}`);
+      }
+      return { planning: { ...planning, plan: validated } };
     }
     default:
       throw new Error(`Role handoff to ${blocker.requestedRole} is not supported`);
@@ -92,13 +106,12 @@ export async function pauseForEnvironmentRetry(
 
   const state = runtime.requireState();
   state.status = "paused";
-  state.message = `Blocked (${blocker.kind}): ${blocker.reason}` + (blocker.retryCondition ? `. Retry condition: ${blocker.retryCondition}` : "") + ". Fix the issue and use /resume to retry.";
+  state.message = `Blocked (${blocker.kind}): ${blocker.reason}` + (blocker.retryCondition ? `. Retry condition: ${blocker.retryCondition}` : "") + ". Fix the issue and use /orchestrator-resume <run-id> to retry.";
   state.waitingFor = blocker.retryCondition || "environment fix";
   state.currentTool = blocker.kind;
   state.currentToolArgs = blocker.reason;
 
-  await persist(runtime, ctx);
-  ctx.ui.notify(`Workflow paused. ${blocker.retryCondition ? `Retry condition: ${blocker.retryCondition}` : "Waiting for environment fix."} Use /resume to retry.`, "info");
+  ctx.ui.notify(`Workflow paused. ${blocker.retryCondition ? `Retry condition: ${blocker.retryCondition}` : "Waiting for environment fix."} Use /orchestrator-resume to retry.`, "info");
 
   return { planning };
 }

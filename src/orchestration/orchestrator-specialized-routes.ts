@@ -70,7 +70,8 @@ export async function runSpecializedMutationRoute(
           baselineChecks: currentPlanning.baseline
         },
         workflow.mutationCwd, workflow.ctx, parseDocumenterOutput,
-        { mutationPlan: currentPlanning.plan }
+        { mutationPlan: currentPlanning.plan },
+        { scopeOwner: "specialized_initial_documentation" }
       );
       const documentation = coordResult.output as DocumenterOutput;
       currentPlanning = coordResult.planning;
@@ -247,7 +248,7 @@ export async function runSpecializedMutationRoute(
   await runSpecializedMutationFinalization(runtime, workflow, result, finalChecks);
 }
 
-async function resolveSpecializedDocumenterScope(
+export async function resolveSpecializedDocumenterScope(
   runtime: OrchestratorRuntime,
   workflow: WorkflowContext,
   planning: ImplementationPlanningResult,

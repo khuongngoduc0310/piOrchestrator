@@ -89,14 +89,7 @@ export async function runWorkflow(
       mutationConfirmed: false
     };
     if (shouldSuggestHumanTouchpoints(config, ctx)) await suggestHumanTouchpoints(cwd, config, ctx);
-    if (config.dashboard.enabled) {
-      try {
-        runtime.state.dashboardUrl = await runtime.dashboard.start(config.dashboard.port);
-        runtime.openBrowser(runtime.state.dashboardUrl);
-      } catch (error) {
-        runtime.state.warning = `Dashboard unavailable: ${messageOf(error)}`;
-      }
-    }
+    await runtime.startWorkflowDashboard();
     publishSessionMessage(runtime, formatStartedRun(request, runId, store.runDir, route), { kind: "started" });
     const planning = await runPlanningPhase(runtime, workflow);
     await runSelectedRoute(runtime, workflow, planning);

@@ -3,6 +3,7 @@ import { mkdir, mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promi
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import { CONFIG_DIR_NAME } from "@earendil-works/pi-coding-agent";
 import { attachWorktree, collectWorktreeChanges, createWorktree, removeWorktree, syncWorktreeChanges, type WorktreeHandle } from "./worktree.js";
 
 const directories: string[] = [];
@@ -21,7 +22,7 @@ async function initGitRepo(): Promise<string> {
   git(repository, "init");
   git(repository, "config", "user.email", "test@test.com");
   git(repository, "config", "user.name", "Test");
-  await writeFile(path.join(repository, ".gitignore"), "ignored.txt\n");
+  await writeFile(path.join(repository, ".gitignore"), `ignored.txt\n${CONFIG_DIR_NAME}/\n`);
   await writeFile(path.join(repository, "README.md"), "# initial\n");
   await writeFile(path.join(repository, "delete.txt"), "delete me\n");
   await writeFile(path.join(repository, "rename.txt"), "rename me\n");
@@ -144,7 +145,7 @@ describe("worktree", () => {
     expect(changes.patch.includes(Buffer.from("GIT binary patch"))).toBe(true);
   });
 
-  it("syncs a binary-capable patch while preserving the source index", async () => {
+  it("syncs a binary-capable patch with an ignored config root while preserving the source index", async () => {
     const repository = await initGitRepo();
     await writeFile(path.join(repository, "source-staged.txt"), "source staged\n");
     git(repository, "add", "source-staged.txt");
@@ -175,6 +176,21 @@ describe("worktree", () => {
 
     await expect(syncWorktreeChanges(handle)).rejects.toThrow("source paths changed after creation");
     expect(await readFile(path.join(repository, "README.md"), "utf8")).toBe("# concurrent source edit\n");
+  });
+
+  it("detects drift in tracked config files outside orchestrator runtime directories", async () => {
+    const repository = await initGitRepo();
+    const configFile = path.join(repository, CONFIG_DIR_NAME, "tracked.json");
+    await mkdir(path.dirname(configFile), { recursive: true });
+    await writeFile(configFile, "{\"value\":1}\n");
+    git(repository, "add", "-f", `${CONFIG_DIR_NAME}/tracked.json`);
+    git(repository, "commit", "-m", "track config");
+    const handle = await create(repository, "tracked-config-drift-run");
+    await writeFile(path.join(handle.worktreeRoot, "README.md"), "# worktree\n");
+    await writeFile(configFile, "{\"value\":2}\n");
+
+    await expect(syncWorktreeChanges(handle)).rejects.toThrow(`${CONFIG_DIR_NAME}/tracked.json`);
+    expect(await readFile(path.join(repository, "README.md"), "utf8")).toBe("# initial\n");
   });
 
   it("returns no changes for an untouched worktree", async () => {

@@ -108,10 +108,10 @@ describe("checkpoint validation", () => {
       status: "pending",
       createdAt,
       updatedAt: createdAt
-    }])).toThrow("agent");
+    }])).toThrow("request.reason");
     expect(() => validateResolutionLedger([{
       id: "res-1",
-      request: { kind: "tooling" },
+      request: { kind: "tooling", reason: "tsc missing", diagnostics: ["not found"], retryCondition: "retry", affectedCommands: ["npx tsc"] },
       agent: "builder",
       status: "unknown_status",
       createdAt,
@@ -119,7 +119,7 @@ describe("checkpoint validation", () => {
     }])).toThrow("status");
     expect(() => validateResolutionLedger([{
       id: "res-1",
-      request: { kind: "tooling" },
+      request: { kind: "tooling", reason: "tsc missing", diagnostics: ["not found"], retryCondition: "retry", affectedCommands: ["npx tsc"] },
       agent: "builder",
       status: "pending",
       outcome: { type: "unknown", detail: "test" },
@@ -131,7 +131,7 @@ describe("checkpoint validation", () => {
   it("rejects resolution ledger with invalid ISO dates", () => {
     expect(() => validateResolutionLedger([{
       id: "res-1",
-      request: { kind: "scope", reason: "test", requiredFiles: [] },
+      request: { kind: "scope", reason: "test", requiredFiles: ["src/test.ts"] },
       agent: "builder",
       status: "pending",
       createdAt: "not-a-date",
@@ -229,7 +229,7 @@ describe("checkpoint validation", () => {
         }]
       }
     };
-    expect(() => validateWorkflowCheckpoint(withBadLedger)).toThrow("status");
+    expect(() => validateWorkflowCheckpoint(withBadLedger)).toThrow("request.reason");
   });
 
   it("rejects malformed nested checkpoint state and mismatched attestations", () => {

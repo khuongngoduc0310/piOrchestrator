@@ -204,7 +204,7 @@ Resume fails closed when any safety binding differs, an artifact or checkpoint d
 
 ## Browser dashboard
 
-The optional dashboard binds only to `127.0.0.1` and uses Server-Sent Events to stream live state. Port `0` lets the OS choose a local port. `/orchestrator-ui` starts or displays it. Dashboard failure is reported as a warning and does not hang the coding workflow.
+The optional dashboard binds only to `127.0.0.1` and uses Server-Sent Events to stream live state. Port `0` lets the OS choose a local port. When enabled, the dashboard starts and opens automatically for new and resumed workflows. `/orchestrator-ui` can explicitly start or display it at any time. Dashboard failure is reported as a nonfatal warning and does not stop the workflow.
 
 The dashboard is designed as a focused operations console. Sticky section tabs (Overview, Agents, Timeline, Artifacts) let you navigate between areas while live updates preserve focus, scroll position, and open inspectors. The layout is responsive: two-column desktop overview collapses to a single column on mobile.
 

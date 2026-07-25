@@ -69,7 +69,8 @@ async function runDocumenterWithScopeExpansion(
         },
         workflow.mutationCwd, ctx,
         parseDocumenterOutput,
-        { mutationPlan: currentReview.plan }
+        { mutationPlan: currentReview.plan },
+        { scopeOwner: "finalization_initial_documentation" }
       );
       documentation = coordResult.output as DocumenterOutput;
       if (coordResult.resolutionRecord?.status === "resolved") {
@@ -94,19 +95,31 @@ async function runDocumenterWithScopeExpansion(
     if (documentation.blocker.kind !== "scope") {
       continue;
     }
-    const additions = filesOutsidePlan(currentReview.plan, documentation.blocker.requiredFiles);
-    if (additions.length === 0) throw new Error("Documenter scope blocker requested no files outside the approved plan");
-    validateDocumentationAdditions(additions);
-    const newScope = consumeScopeRevision(currentReview.scopeRevisionCount, config.limits.planRevisions, "during finalization");
-    const after: DocumentationScopePhase = { phase: "initial_documentation", blockedDocumentation: documentation, changeRound: 0 };
-    currentReview = await reviseImplementationScope(
-      runtime, workflow, currentReview, additions,
-      { checks: currentReview.finalImplChecks, blocker: documentation.blocker },
-      newScope,
-      { mode: "finalization", scopeRevisionCount: newScope, documentation: after }
-    );
+    currentReview = await resolveInitialDocumenterScopeBlock(runtime, workflow, currentReview, documentation);
   }
   throw new Error("Documenter scope revision was not approved within the plan revision limit");
+}
+
+export async function resolveInitialDocumenterScopeBlock(
+  runtime: OrchestratorRuntime,
+  workflow: WorkflowContext,
+  review: ReviewResult,
+  documentation: DocumenterOutput
+): Promise<ReviewResult> {
+  if (!documentation.blocker || documentation.blocker.kind !== "scope") {
+    throw new Error("resolveInitialDocumenterScopeBlock called without a scope blocker");
+  }
+  const additions = filesOutsidePlan(review.plan, documentation.blocker.requiredFiles);
+  if (additions.length === 0) throw new Error("Documenter scope blocker requested no files outside the approved plan");
+  validateDocumentationAdditions(additions);
+  const newScope = consumeScopeRevision(review.scopeRevisionCount, workflow.config.limits.planRevisions, "during finalization");
+  const after: DocumentationScopePhase = { phase: "initial_documentation", blockedDocumentation: documentation, changeRound: 0 };
+  return reviseImplementationScope(
+    runtime, workflow, review, additions,
+    { checks: review.finalImplChecks, blocker: documentation.blocker },
+    newScope,
+    { mode: "finalization", scopeRevisionCount: newScope, documentation: after }
+  );
 }
 
 function validateDocumentationAdditions(additions: readonly string[]): void {
@@ -114,7 +127,7 @@ function validateDocumentationAdditions(additions: readonly string[]): void {
   if (nonDoc.length > 0) throw new Error(`Documenter scope blocker requested non-documentation files: ${nonDoc.join(", ")}`);
 }
 
-async function resolveDocumenterScopeBlockOnRepair(
+export async function resolveDocumenterScopeBlockOnRepair(
   runtime: OrchestratorRuntime,
   workflow: WorkflowContext,
   review: ReviewResult,
@@ -205,7 +218,16 @@ export async function runFinalizationPhase(
           attempt
         },
         workflow.mutationCwd, ctx, parseDocumenterOutput,
-        { attempt, mutationPlan: currentReview.plan }
+        { attempt, mutationPlan: currentReview.plan },
+        {
+          scopeOwner: "finalization_repair_documentation",
+          scopeContext: {
+            preparation: serializeLessonPreparation(lessonPreparation),
+            failedChecks: finalChecks,
+            diagnosis,
+            attempt
+          }
+        }
       );
       const repairOutput = repairResult.output as DocumenterOutput;
       if (repairResult.resolutionRecord?.status === "resolved") {

@@ -1,11 +1,11 @@
 import { realpath } from "node:fs/promises";
 import type { ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import { CheckpointStore, readSafeArtifact } from "../persistence/checkpoint-store.js";
-import { validateCheckResults, validateCheckResultsAgainstCommands, validateWorkflowStateForResume } from "../persistence/checkpoint-validation.js";
+import { validateCheckResults, validateCheckResultsAgainstCommands, validateResolutionRecord, validateWorkflowStateForResume } from "../persistence/checkpoint-validation.js";
 import type { WorkflowCheckpoint } from "../persistence/checkpoint-types.js";
 import { loadConfig } from "../config/config.js";
 import type { ImplementationPlanningResult, ImplementationResult, InvestigationResult, PlanningResult, ReadOnlyReviewResult, ReviewResult, SpecializedMutationResult, WorkflowContext } from "./orchestrator-context.js";
-import { applyFinalChangeRequest, runFinalizationPhase, runReadOnlyFinalizationPhase, type FinalizationContinuation } from "./orchestrator-finalization.js";
+import { applyFinalChangeRequest, resolveDocumenterScopeBlockOnRepair, resolveInitialDocumenterScopeBlock, runFinalizationPhase, runReadOnlyFinalizationPhase, type FinalizationContinuation } from "./orchestrator-finalization.js";
 import { requestImplementationBudgetExtension, runImplementationPhase, type ImplementationContinuation } from "./orchestrator-implementation.js";
 import { hydrateLessonPreparation, type SerializedLessonPreparation } from "./orchestrator-lessons.js";
 import { continueBaselineRepair, continuePlanningDecision, enterMutationPhase, prepareImplementationPhase } from "./orchestrator-planning.js";
@@ -17,7 +17,7 @@ import { WorkflowPausedError } from "./workflow-errors.js";
 import { runCheckStep } from "./orchestrator-workspace.js";
 import { continueBugFixAfterDiagnosis, runSelectedRoute } from "./orchestrator-routes.js";
 import { requestBugDiagnosisApproval } from "./orchestrator-human-gates.js";
-import { applySpecializedFinalChangeRequest, runSpecializedMutationRoute } from "./orchestrator-specialized-routes.js";
+import { applySpecializedFinalChangeRequest, resolveSpecializedDocumenterScope, runSpecializedMutationRoute } from "./orchestrator-specialized-routes.js";
 import { resolveAgentBlocker } from "./orchestrator-resolution.js";
 import { RunStore, type RunLease } from "../persistence/store.js";
 import type { BuilderOutput, DocumenterOutput, ReviewApprovalSource, ReviewOutput, WorkflowState } from "../types.js";
@@ -136,6 +136,7 @@ export async function resumeWorkflow(
     }
 
     resetStateForResume(currentState, checkpoint);
+    await runtime.startWorkflowDashboard();
     await store.event("resumed", { checkpointNumber: checkpoint.checkpointNumber, cursor: checkpoint.cursor.kind });
     await persist(runtime, ctx);
 
@@ -376,6 +377,27 @@ function validateContinuation(checkpoint: WorkflowCheckpoint): void {
       if (!allGreen(checks, checkpoint.config.checks.length)) throw new Error("Checkpoint final checks are not green");
       return;
     }
+    case "resolution_pending": {
+      const item = objectValue(value, "resolution checkpoint");
+      validateResolutionRecord(item.record, "resolution checkpoint record");
+      implementationPlanningResult(item.planning);
+      return;
+    }
+    case "resolution_resolved": {
+      const item = objectValue(value, "resolved checkpoint");
+      validateResolutionRecord(item.record, "resolved checkpoint record");
+      implementationPlanningResult(item.planning);
+      return;
+    }
+    case "environment_retry_pending": {
+      const item = objectValue(value, "environment retry checkpoint");
+      validateResolutionRecord(item.record, "environment retry checkpoint record");
+      implementationPlanningResult(item.planning);
+      stringValue(item.blockedPhase, "environment retry checkpoint blockedPhase");
+      if (item.blockedAgent !== undefined) stringValue(item.blockedAgent, "environment retry checkpoint blockedAgent");
+      stringValue(item.retryCondition, "environment retry checkpoint retryCondition");
+      return;
+    }
     case "human_decision_pending": humanDecisionContinuation(value, false); return;
     case "human_decision_recorded": humanDecisionContinuation(value, true); return;
   }
@@ -597,14 +619,115 @@ async function continueFromCheckpoint(runtime: OrchestratorRuntime, workflow: Wo
     }
     case "resolution_pending": {
       const value = objectValue(continuation, "resolution checkpoint");
-      const record = value.record as import("../agent-task-types.js").ResolutionRecord;
-      if (!record || !record.request) throw new Error("Resolution checkpoint missing resolution record");
+      const record = validateResolutionRecord(value.record, "resolution checkpoint record");
+      if (record.request.kind === "scope") {
+        await continueDocumenterScopeResolution(runtime, workflow, checkpoint, value, record);
+        return;
+      }
       const planning = implementationPlanningResult(value.planning);
       workflow.ctx.ui.notify(`Resolving agent blocker (${record.request.kind}) from ${record.agent}`, "info");
       await resolveAgentBlocker(runtime, workflow, planning, record.request);
       return;
     }
+    case "resolution_resolved": {
+      const resolvedValue = objectValue(continuation, "resolved checkpoint");
+      const resolvedRecord = validateResolutionRecord(resolvedValue.record, "resolved checkpoint record");
+      workflow.ctx.ui.notify(`Resolution ${resolvedRecord.id} completed (${resolvedRecord.outcome?.type ?? "unknown"})`, "info");
+      return;
+    }
+    case "environment_retry_pending": {
+      const envValue = objectValue(continuation, "environment retry checkpoint");
+      const envRecord = validateResolutionRecord(envValue.record, "environment retry checkpoint record");
+      workflow.ctx.ui.notify(`Environment blocker resolved; retrying blocked phase from ${stringValue(envValue.blockedPhase, "blockedPhase")}`, "info");
+      envRecord.status = "resolved";
+      envRecord.outcome = { type: "retry", detail: "Environment issue resolved by user" };
+      envRecord.updatedAt = runtime.timestamp();
+      await saveWorkflowCheckpoint(runtime, workflow, "resolution_resolved",
+        { record: envRecord, planning: envValue.planning },
+        {} as import("../persistence/checkpoint-types.js").CheckpointBindings
+      );
+      return;
+    }
   }
+}
+
+async function continueDocumenterScopeResolution(
+  runtime: OrchestratorRuntime,
+  workflow: WorkflowContext,
+  checkpoint: WorkflowCheckpoint,
+  value: Record<string, unknown>,
+  record: import("../agent-task-types.js").ResolutionRecord
+): Promise<void> {
+  if (record.agent !== "documenter") {
+    throw new Error(`Scope resolution checkpoint for ${record.agent} lacks phase-owned resume context`);
+  }
+
+  let legacyStepLabel: string | undefined;
+  let rawOutput = value.output;
+  if (rawOutput === undefined) {
+    const step = [...checkpoint.state.steps].reverse().find(candidate =>
+      candidate.agent === "documenter"
+      && candidate.status === "succeeded"
+      && candidate.artifact
+    );
+    if (!step?.artifact) throw new Error("Legacy Documenter scope checkpoint has no validated output artifact");
+    legacyStepLabel = step.label;
+    const artifact = objectValue(
+      JSON.parse(await readSafeArtifact(workflow.store.runDir, step.artifact, MAX_STATE_BYTES)),
+      "legacy Documenter output artifact"
+    );
+    rawOutput = artifact.output;
+  }
+
+  const documentation = validateDocumenterOutput(rawOutput, "resolution checkpoint output");
+  if (!documentation.blocker || documentation.blocker.kind !== "scope") {
+    throw new Error("Resolution checkpoint output does not contain a Documenter scope blocker");
+  }
+  if (canonicalSha256(documentation.blocker) !== canonicalSha256(record.request)) {
+    throw new Error("Resolution checkpoint output blocker does not match its recorded request");
+  }
+
+  let owner = value.scopeOwner === undefined
+    ? undefined
+    : stringValue(value.scopeOwner, "resolution checkpoint scopeOwner");
+  if (!owner) {
+    if (legacyStepLabel !== "Update documentation and propose lessons" || workflow.route === "documentation_only") {
+      throw new Error("Legacy Documenter scope checkpoint lacks supported phase-owned resume context");
+    }
+    owner = "finalization_initial_documentation";
+  }
+
+  workflow.ctx.ui.notify("Resuming Documenter scope expansion", "info");
+  if (owner === "finalization_initial_documentation") {
+    const review = reviewResult(value.planning);
+    const revised = await resolveInitialDocumenterScopeBlock(runtime, workflow, review, documentation);
+    await runFinalizationPhase(runtime, workflow, revised);
+    return;
+  }
+  if (owner === "finalization_repair_documentation") {
+    const review = reviewResult(value.planning);
+    const context = objectValue(value.scopeContext, "resolution checkpoint scopeContext");
+    const revised = await resolveDocumenterScopeBlockOnRepair(
+      runtime,
+      workflow,
+      review,
+      documentation,
+      serializedLessonPreparation(context.preparation),
+      validateCheckResults(context.failedChecks),
+      validateDebuggerOutput(context.diagnosis),
+      positiveInteger(context.attempt, "resolution checkpoint scopeContext.attempt")
+    );
+    await runFinalizationPhase(runtime, workflow, revised);
+    return;
+  }
+  if (owner === "specialized_initial_documentation") {
+    const planning = implementationPlanningResult(value.planning);
+    const phase = { phase: "initial_documentation" as const, blockedDocumentation: documentation, changeRound: 0 };
+    const updated = await resolveSpecializedDocumenterScope(runtime, workflow, planning, documentation, phase);
+    await runSpecializedMutationRoute(runtime, workflow, updated.planning);
+    return;
+  }
+  throw new Error(`Unsupported Documenter scope checkpoint owner ${owner}`);
 }
 
 async function continueHumanDecision(

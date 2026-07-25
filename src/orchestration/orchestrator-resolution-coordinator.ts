@@ -16,6 +16,23 @@ export type ResolutionStepResult = {
   readonly resolutionLedger: readonly ResolutionRecord[];
 };
 
+export type PhaseOrigin =
+  | { phase: "implementation"; attempt: number }
+  | { phase: "review"; revision: number }
+  | { phase: "initial_documentation"; changeRound: number }
+  | { phase: "repair_documentation"; attempt: number }
+  | { phase: "specialized_initial"; agent: "tester" | "documenter" }
+  | { phase: "specialized_checks"; attempt: number }
+  | { phase: "final_checks"; attempt: number }
+  | { phase: "baseline_repair" }
+  | { phase: "bug_diagnosis" };
+
+export interface ResolutionCheckpointOptions {
+  scopeOwner: "finalization_initial_documentation" | "finalization_repair_documentation" | "specialized_initial_documentation";
+  scopeContext?: unknown;
+  phaseOrigin?: PhaseOrigin;
+}
+
 export async function runAgentStepWithResolution<A extends AgentName>(
   runtime: OrchestratorRuntime,
   workflow: WorkflowContext,
@@ -27,7 +44,8 @@ export async function runAgentStepWithResolution<A extends AgentName>(
   cwd: string,
   ctx: ExtensionCommandContext,
   validate: (text: string) => AgentOutputMap[A],
-  qualifier?: { attempt?: number; revision?: number; mutationPlan?: PlannerOutput }
+  qualifier?: { attempt?: number; revision?: number; mutationPlan?: PlannerOutput },
+  checkpointOptions?: ResolutionCheckpointOptions
 ): Promise<ResolutionStepResult> {
   const output = await runAgentStep(runtime, agent, stage, label, payload, cwd, ctx, validate, qualifier);
   const outputWithBlocker = output as AgentOutputMap[keyof AgentOutputMap] & { blocker?: AgentResolutionRequest };
@@ -49,7 +67,15 @@ export async function runAgentStepWithResolution<A extends AgentName>(
 
   await saveWorkflowCheckpoint(
     runtime, workflow, "resolution_pending",
-    { record, planning },
+    {
+      record,
+      planning,
+      output,
+      ...(checkpointOptions ? {
+        scopeOwner: checkpointOptions.scopeOwner,
+        scopeContext: checkpointOptions.scopeContext
+      } : {})
+    },
     { exploration: planning.exploration, plan: planning.plan, resolutionLedger: [...ledger] }
   );
 
@@ -66,6 +92,8 @@ export async function runAgentStepWithResolution<A extends AgentName>(
       ? "baseline_repair"
       : outputWithBlocker.blocker.kind === "insufficient_evidence"
       ? "abandoned"
+      : outputWithBlocker.blocker.kind === "environment" || outputWithBlocker.blocker.kind === "tooling"
+      ? "retry"
       : "human_intervention",
     detail: outputWithBlocker.blocker.reason
   };
@@ -73,6 +101,13 @@ export async function runAgentStepWithResolution<A extends AgentName>(
   record.status = "resolved";
   record.outcome = outcome;
   record.updatedAt = runtime.timestamp();
+  ledger.push(record);
+
+  await saveWorkflowCheckpoint(
+    runtime, workflow, "resolution_resolved",
+    { record, planning: resolved.planning },
+    { exploration: planning.exploration, plan: planning.plan, resolutionLedger: [...ledger] }
+  );
 
   return { output, planning: resolved.planning, resolutionRecord: record, resolutionOutcome: outcome, resolutionLedger: ledger };
 }

@@ -1288,6 +1288,116 @@ describe("Orchestrator", () => {
     expect(openBrowser).not.toHaveBeenCalled();
   });
 
+  it("resumes a paused run and starts the dashboard and opens the browser when enabled", async () => {
+    const cwd = await mkdtemp(path.join(os.tmpdir(), "pi-orchestrator-resume-dashboard-"));
+    directories.push(cwd);
+    const config = defaultTestConfig();
+    config.checks = ["check"];
+    config.dashboard.enabled = true;
+    config.humanInTheLoop.importantDecisions = true;
+    config.humanInTheLoop.finalDeliveryApproval = true;
+    await saveConfig(cwd, config);
+
+    const agent = new QueueAgent([explorer, routePlan("tests_only", ["test.ts"]), approved, tester]);
+    const checkRunner = vi.fn(async () => [check(true)]) as unknown as CheckRunner;
+    const openBrowser1 = vi.fn();
+    const pi1 = { appendEntry: vi.fn(), exec: vi.fn(), sendMessage: vi.fn() } as unknown as ExtensionAPI;
+    const ctx1 = { cwd, hasUI: false, ui: { notify: vi.fn(), setStatus: vi.fn(), setWidget: vi.fn() } } as unknown as ExtensionCommandContext;
+    const engine1 = new Orchestrator(pi1, path.resolve("."), { agentExecutor: agent, checkRunner, openBrowser: openBrowser1, enforceWorkspacePolicy: false });
+    await engine1.start({ route: "tests_only", request: "request" }, ctx1);
+
+    const paused = engine1.getState()!;
+    expect(paused.status).toBe("paused");
+    expect(paused.pendingDecision?.kind).toBe("final_delivery");
+    const originalUrl = paused.dashboardUrl!;
+    expect(originalUrl).toMatch(/^http:\/\/127\.0\.0\.1:\d+$/);
+    expect(openBrowser1).toHaveBeenCalledOnce();
+    expect(openBrowser1).toHaveBeenCalledWith(originalUrl);
+
+    await engine1.shutdown();
+
+    const resumedAgent = new QueueAgent([]);
+    const openBrowser2 = vi.fn();
+    const pi2 = { appendEntry: vi.fn(), exec: vi.fn(), sendMessage: vi.fn() } as unknown as ExtensionAPI;
+    const ctx2 = {
+      cwd,
+      hasUI: true,
+      ui: {
+        select: vi.fn(async () => "Finish delivery"),
+        input: vi.fn(),
+        editor: vi.fn(),
+        confirm: vi.fn(),
+        notify: vi.fn(),
+        setStatus: vi.fn(),
+        setWidget: vi.fn()
+      }
+    } as unknown as ExtensionCommandContext;
+    const engine2 = new Orchestrator(pi2, path.resolve("."), { agentExecutor: resumedAgent, checkRunner, openBrowser: openBrowser2, enforceWorkspacePolicy: false });
+    await engine2.resume(paused.runId, ctx2);
+
+    expect(engine2.getState()?.status).toBe("completed");
+    expect(resumedAgent.calls).toHaveLength(0);
+
+    const resumedUrl = engine2.getState()?.dashboardUrl;
+    expect(resumedUrl).toMatch(/^http:\/\/127\.0\.0\.1:\d+$/);
+    expect(resumedUrl).not.toBe(originalUrl);
+    expect(openBrowser2).toHaveBeenCalledOnce();
+    expect(openBrowser2).toHaveBeenCalledWith(resumedUrl);
+  });
+
+  it("clears stale dashboardUrl and does not open browser when dashboard is disabled on resume", async () => {
+    const cwd = await mkdtemp(path.join(os.tmpdir(), "pi-orchestrator-resume-no-dashboard-"));
+    directories.push(cwd);
+    const config = defaultTestConfig();
+    config.checks = ["check"];
+    config.dashboard.enabled = false;
+    config.humanInTheLoop.importantDecisions = true;
+    config.humanInTheLoop.finalDeliveryApproval = true;
+    await saveConfig(cwd, config);
+
+    const agent = new QueueAgent([explorer, routePlan("tests_only", ["test.ts"]), approved, tester]);
+    const checkRunner = vi.fn(async () => [check(true)]) as unknown as CheckRunner;
+    const openBrowser1 = vi.fn();
+    const pi1 = { appendEntry: vi.fn(), exec: vi.fn(), sendMessage: vi.fn() } as unknown as ExtensionAPI;
+    const ctx1 = { cwd, hasUI: false, ui: { notify: vi.fn(), setStatus: vi.fn(), setWidget: vi.fn() } } as unknown as ExtensionCommandContext;
+    const engine1 = new Orchestrator(pi1, path.resolve("."), { agentExecutor: agent, checkRunner, openBrowser: openBrowser1, enforceWorkspacePolicy: false });
+    await engine1.start({ route: "tests_only", request: "request" }, ctx1);
+
+    const paused = engine1.getState()!;
+    expect(paused.status).toBe("paused");
+    expect(paused.dashboardUrl).toBeUndefined();
+
+    await engine1.shutdown();
+
+    const statePath = path.join(paused.runDir, "state.json");
+    const stateJson = JSON.parse(await readFile(statePath, "utf8"));
+    stateJson.dashboardUrl = "http://127.0.0.1:9999";
+    await writeFile(statePath, JSON.stringify(stateJson));
+
+    const resumedAgent = new QueueAgent([]);
+    const openBrowser2 = vi.fn();
+    const pi2 = { appendEntry: vi.fn(), exec: vi.fn(), sendMessage: vi.fn() } as unknown as ExtensionAPI;
+    const ctx2 = {
+      cwd,
+      hasUI: true,
+      ui: {
+        select: vi.fn(async () => "Finish delivery"),
+        input: vi.fn(),
+        editor: vi.fn(),
+        confirm: vi.fn(),
+        notify: vi.fn(),
+        setStatus: vi.fn(),
+        setWidget: vi.fn()
+      }
+    } as unknown as ExtensionCommandContext;
+    const engine2 = new Orchestrator(pi2, path.resolve("."), { agentExecutor: resumedAgent, checkRunner, openBrowser: openBrowser2, enforceWorkspacePolicy: false });
+    await engine2.resume(paused.runId, ctx2);
+
+    expect(engine2.getState()?.status).toBe("completed");
+    expect(engine2.getState()?.dashboardUrl).toBeUndefined();
+    expect(openBrowser2).not.toHaveBeenCalled();
+  });
+
   it("publishes curated session messages on a successful run", async () => {
     const { engine, sendMessage } = await scenario(
       [explorer, plan, approved, tester, builder, approved, documenter, approved],
@@ -1415,6 +1525,53 @@ describe("Orchestrator", () => {
     expect(JSON.parse(builders[0].task).task.attempt).toBe(1);
     expect(JSON.parse(builders[1].task).task.attempt).toBe(1);
     expect(engine.getState()?.steps.filter(step => step.stage === "testing")).toHaveLength(2);
+  });
+
+  it("corrects a failure scope revision that changes approved acceptance criteria", async () => {
+    const blocked = json({
+      summary: "blocked by omitted integration test",
+      changedFiles: [],
+      commands: [],
+      assumptions: [],
+      unresolvedIssues: ["src/App.test.ts must be updated"],
+      blocker: { kind: "scope", reason: "integration assertion is stale", requiredFiles: ["src/App.test.ts"] }
+    });
+    const quickPlan = JSON.parse(routePlan("quick_implementation"));
+    const revisedQuickPlan = {
+      ...quickPlan,
+      tasks: [
+        ...quickPlan.tasks,
+        {
+          id: "update-integration-test",
+          description: "update stale integration assertion",
+          files: ["src/App.test.ts"],
+          dependencies: ["one"],
+          verification: ["run integration tests"]
+        }
+      ]
+    };
+    const changedCriteriaPlan = {
+      ...revisedQuickPlan,
+      acceptanceCriteria: [...quickPlan.acceptanceCriteria, "The integration test is updated"]
+    };
+    const { engine, agent } = await scenario(
+      [explorer, routePlan("quick_implementation"), approved, blocked, json(changedCriteriaPlan), json(revisedQuickPlan), approved, builder, approved, documenter, approved],
+      [true, true, true],
+      config => { config.humanInTheLoop.importantDecisions = false; },
+      {},
+      "quick_implementation"
+    );
+
+    expect(engine.getState()?.status).toBe("completed");
+    const plannerCalls = agent.calls.filter(call => call.name === "planner");
+    expect(plannerCalls).toHaveLength(3);
+    expect(JSON.parse(plannerCalls[2].task)).toMatchObject({
+      mode: "correct_output",
+      task: { action: "revise_for_failure", requiredFiles: ["src/App.test.ts"] },
+      correction: { attempt: 1, reason: "schema_validation_failed" }
+    });
+    const secondBuilder = agent.calls.filter(call => call.name === "builder")[1];
+    expect(JSON.parse(secondBuilder.task).task.plan.acceptanceCriteria).toEqual(quickPlan.acceptanceCriteria);
   });
 
   it("resumes a pending scope expansion at the blocked implementation attempt", async () => {
@@ -2756,6 +2913,89 @@ describe("Orchestrator", () => {
 
     expect(resumed.getState()?.status).toBe("completed");
     expect(agent.calls.map(call => call.name)).toEqual(["reviewer"]);
+  });
+
+  it.each([
+    { format: "owner-aware", legacy: false },
+    { format: "legacy", legacy: true }
+  ])("resumes a $format pending Documenter scope blocker through scope revision", async ({ legacy }) => {
+    const blockedDocumenter = json({
+      summary: "README scope is missing",
+      changedFiles: [],
+      documentationChanges: [],
+      proposedLessons: [],
+      commands: [],
+      unresolvedIssues: ["README.md must document the change"],
+      blocker: {
+        kind: "scope",
+        reason: "README.md must document the change",
+        requiredFiles: ["README.md"]
+      }
+    });
+    const revisedPlan = json({
+      ...JSON.parse(plan),
+      tasks: [
+        ...JSON.parse(plan).tasks,
+        {
+          id: "document-change",
+          description: "document the implemented behavior",
+          files: ["README.md"],
+          dependencies: ["one"],
+          verification: ["inspect README"]
+        }
+      ]
+    });
+    const initial = await scenario(
+      [explorer, plan, approved, tester, builder, approved, blockedDocumenter, new Error("planner unavailable")],
+      [true, false, true]
+    );
+    const failed = initial.engine.getState()!;
+    expect(failed.status).toBe("failed");
+    expect(failed.latestCheckpoint?.cursor).toBe("resolution_pending");
+
+    const checkpointStore = new CheckpointStore(failed.runDir, failed.runId);
+    const checkpoint = (await checkpointStore.loadLatest())!;
+    expect(checkpoint.cursor.kind).toBe("resolution_pending");
+    if (checkpoint.cursor.kind !== "resolution_pending") throw new Error("Expected resolution checkpoint");
+    expect(checkpoint.cursor.continuation).toMatchObject({
+      scopeOwner: "finalization_initial_documentation",
+      output: { blocker: { kind: "scope", requiredFiles: ["README.md"] } }
+    });
+
+    if (legacy) {
+      const legacyContinuation = structuredClone(checkpoint.cursor.continuation);
+      delete legacyContinuation.output;
+      delete legacyContinuation.scopeOwner;
+      delete legacyContinuation.scopeContext;
+      const { schemaVersion: _schemaVersion, checkpointNumber: _checkpointNumber, ...checkpointWrite } = checkpoint;
+      await checkpointStore.save({
+        ...checkpointWrite,
+        createdAt: new Date().toISOString(),
+        cursor: { kind: "resolution_pending", continuation: legacyContinuation }
+      });
+    }
+
+    const resumedAgent = new QueueAgent([revisedPlan, approved, documenter, approved]);
+    const checkRunner = vi.fn(async () => [check(true)]) as unknown as CheckRunner;
+    const pi = { appendEntry: vi.fn(), exec: vi.fn(), sendMessage: vi.fn() } as unknown as ExtensionAPI;
+    const ctx = {
+      cwd: initial.cwd,
+      hasUI: false,
+      ui: { notify: vi.fn(), setStatus: vi.fn(), setWidget: vi.fn() }
+    } as unknown as ExtensionCommandContext;
+    const resumed = new Orchestrator(pi, path.resolve("."), { agentExecutor: resumedAgent, checkRunner, enforceWorkspacePolicy: false });
+
+    await resumed.resume(failed.runId, ctx);
+
+    expect(resumed.getState()?.status).toBe("completed");
+    expect(resumedAgent.calls.map(call => call.name)).toEqual(["planner", "reviewer", "documenter", "reviewer"]);
+    expect(JSON.parse(resumedAgent.calls[0].task).task).toMatchObject({
+      action: "revise_for_failure",
+      requiredFiles: ["README.md"]
+    });
+    expect(JSON.parse(resumedAgent.calls[2].task).task.plan.tasks).toEqual(expect.arrayContaining([
+      expect.objectContaining({ files: ["README.md"] })
+    ]));
   });
 });
 

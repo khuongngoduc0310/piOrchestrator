@@ -98,8 +98,10 @@ export async function captureGitTree(cwd: string, excludedRoots: readonly string
     const tree = await withTemporaryIndex(repositoryRoot, async env => {
       const projectPath = projectRelativePath || ".";
       const exclusions = excludedRoots.map(root => repositoryPath(projectRelativePath, root)).filter(Boolean);
-      const pathspecs = [projectPath, ...exclusions.map(root => `:(exclude,top,literal)${root}`)];
-      await runGit(repositoryRoot, ["add", "-A", "--", ...pathspecs], { env });
+      await runGit(repositoryRoot, ["add", "-A", "--", projectPath], { env });
+      if (exclusions.length > 0) {
+        await runGit(repositoryRoot, ["rm", "-r", "-f", "--cached", "--ignore-unmatch", "--", ...exclusions], { env });
+      }
       return (await gitText(repositoryRoot, ["write-tree"], { env })).trim();
     });
     return { available: true, snapshot: { repositoryRoot, projectRelativePath, tree } };
