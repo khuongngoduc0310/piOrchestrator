@@ -7,6 +7,7 @@ import type {
   DocumenterOutput,
   ExplorerOutput,
   PlannerOutput,
+  ResolutionRecord,
   ReviewApprovalSource,
   ReviewOutput,
   TesterOutput,
@@ -23,6 +24,7 @@ export const CHECKPOINT_CURSOR_KINDS = [
   "plan_approved",
   "checks_configured",
   "mutation_ready",
+  "bug_diagnosis_ready",
   "bug_diagnosed",
   "tester_completed",
   "builder_completed",
@@ -36,8 +38,10 @@ export const CHECKPOINT_CURSOR_KINDS = [
   "human_decision_pending",
   "human_decision_recorded",
   "repository_reviewed",
+  "investigation_completed",
   "route_agent_completed",
-  "route_final_checks_passed"
+  "route_final_checks_passed",
+  "resolution_pending"
 ] as const;
 
 export type CheckpointCursorKind = (typeof CHECKPOINT_CURSOR_KINDS)[number];
@@ -46,6 +50,7 @@ export interface CheckpointContinuationMap {
   plan_approved: unknown;
   checks_configured: unknown;
   mutation_ready: unknown;
+  bug_diagnosis_ready: unknown;
   bug_diagnosed: unknown;
   tester_completed: unknown;
   builder_completed: unknown;
@@ -59,8 +64,10 @@ export interface CheckpointContinuationMap {
   human_decision_pending: { request: PendingHumanDecision };
   human_decision_recorded: { request: PendingHumanDecision; recorded: RecordedHumanDecision };
   repository_reviewed: unknown;
+  investigation_completed: unknown;
   route_agent_completed: unknown;
   route_final_checks_passed: unknown;
+  resolution_pending: { record: ResolutionRecord; planning: unknown };
 }
 
 export type CheckpointCursor = {
@@ -86,6 +93,8 @@ export interface CheckpointBindings {
   readonly reviewApprovalSource?: ReviewApprovalSource;
   /** Phase-owned context validated before a durable human decision is resumed. */
   readonly decisionContext?: unknown;
+  /** Durable ledger of resolution requests created during the workflow. */
+  readonly resolutionLedger?: readonly ResolutionRecord[];
 }
 
 export interface WorkflowCheckpoint {

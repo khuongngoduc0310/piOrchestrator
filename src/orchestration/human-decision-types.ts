@@ -8,6 +8,7 @@ export type HumanDecisionKind =
   | "plan_approval"
   | "plan_revision_approval"
   | "baseline_repair_approval"
+  | "bug_diagnosis_approval"
   | "mutation_confirmation"
   | "scope_expansion"
   | "code_review_rejection"
@@ -53,6 +54,7 @@ export interface RecordedHumanDecision {
 export type HumanDecisionResumePoint =
   | PlanDecisionResumePoint
   | BaselineRepairDecisionResumePoint
+  | BugDiagnosisDecisionResumePoint
   | MutationConfirmationResumePoint
   | ScopeRevisionDecisionResumePoint
   | ReviewDecisionResumePoint
@@ -67,6 +69,11 @@ interface PlanDecisionResumePoint {
 
 interface BaselineRepairDecisionResumePoint {
   point: "baseline_repair_decision";
+}
+
+interface BugDiagnosisDecisionResumePoint {
+  point: "bug_diagnosis_decision";
+  scopeRevisionCount: number;
 }
 
 interface MutationConfirmationResumePoint {

@@ -2,8 +2,9 @@ import { lstat, readdir } from "node:fs/promises";
 import path from "node:path";
 import { CONFIG_DIR_NAME } from "@earendil-works/pi-coding-agent";
 import { AGENT_NAMES, type AgentName, type AgentTranscriptArtifact } from "../agent-types.js";
-import { readSafeArtifact } from "../persistence/checkpoint-store.js";
+import { CheckpointStore, readSafeArtifact } from "../persistence/checkpoint-store.js";
 import { validateWorkflowStateForResume } from "../persistence/checkpoint-validation.js";
+import type { WorkflowCheckpoint } from "../persistence/checkpoint-types.js";
 import type { AgentInspection } from "../dashboard-types.js";
 import type { WorkflowState } from "../workflow-types.js";
 import { buildAgentHistory } from "../agents/agent-history.js";
@@ -96,6 +97,12 @@ export class DashboardRunRepository {
     const state = validateWorkflowStateForResume(value, `run ${runId} state`);
     if (state.runId !== runId) throw new Error(`Run state ID does not match directory: ${runId}`);
     return state;
+  }
+
+  async loadLatestCheckpoint(runId: string): Promise<WorkflowCheckpoint | undefined> {
+    const runDir = await this.openRunDirectory(runId);
+    if (!runDir) return undefined;
+    return new CheckpointStore(runDir, runId).loadLatest();
   }
 
   async getAgentInspection(runId: string, name: AgentName): Promise<AgentInspection | undefined> {

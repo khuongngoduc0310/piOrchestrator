@@ -1,3 +1,4 @@
+import React from "react";
 import type { OrchestratorViewModel } from "../../dashboard-types.js";
 
 interface CalloutProps {
@@ -25,9 +26,10 @@ export function Callout({ snapshot, onOpenArtifact }: CalloutProps) {
     if (config?.status === "missing") {
       return (
         <div id="callout" className="waiting" role="status" aria-live="polite">
-          <div className="callout-title">Setup required</div>
+          <div className="callout-title">Setup deferred</div>
           <div className="callout-body">
-            Project checks are not configured. Run <code>/orchestrate</code> to begin setup.
+            Run <code>/orchestrate</code> and select a route. Read-only routes need no project checks;
+            check setup begins only after a mutation route is approved.
           </div>
         </div>
       );

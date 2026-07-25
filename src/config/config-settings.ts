@@ -9,6 +9,7 @@ import {
   type OrchestratorConfig,
   type ThinkingLevel
 } from "../types.js";
+import { applyParticipationProfile, inferParticipationProfile, PROFILE_DESCRIPTIONS } from "../orchestration/participation-policy.js";
 
 export type SettingsResult = "saved" | "unchanged" | "cancelled" | "unavailable";
 
@@ -206,25 +207,64 @@ async function editIsolation(ctx: ExtensionCommandContext, staged: StagedConfig)
 
 async function editHumanReview(ctx: ExtensionCommandContext, staged: StagedConfig): Promise<void> {
   const cfg = staged.config;
+  const profile = inferParticipationProfile(cfg.humanInTheLoop);
+  while (true) {
+    const label = profile === "custom" ? "Custom" : PROFILE_DESCRIPTIONS[profile].label;
+    const choice = await ctx.ui.select(`Participation profile — ${label}`, [
+      `${PROFILE_DESCRIPTIONS.autonomous.label}  — ${PROFILE_DESCRIPTIONS.autonomous.preview}`,
+      `${PROFILE_DESCRIPTIONS.balanced.label}  — ${PROFILE_DESCRIPTIONS.balanced.preview}`,
+      `${PROFILE_DESCRIPTIONS.controlled.label}  — ${PROFILE_DESCRIPTIONS.controlled.preview}`,
+      "Custom / advanced",
+      BACK
+    ]);
+    if (!choice || choice === BACK) return;
+    if (choice.startsWith("Autonomous")) {
+      staged.config = applyParticipationProfile(cfg, "autonomous");
+      ctx.ui.notify("Participation set to Autonomous", "info");
+    } else if (choice.startsWith("Balanced")) {
+      staged.config = applyParticipationProfile(cfg, "balanced");
+      ctx.ui.notify("Participation set to Balanced", "info");
+    } else if (choice.startsWith("Controlled")) {
+      staged.config = applyParticipationProfile(cfg, "controlled");
+      ctx.ui.notify("Participation set to Controlled", "info");
+    } else if (choice.startsWith("Custom")) {
+      await editHumanReviewAdvanced(ctx, staged);
+    }
+  }
+}
+
+async function editHumanReviewAdvanced(ctx: ExtensionCommandContext, staged: StagedConfig): Promise<void> {
+  const cfg = staged.config;
   while (true) {
     const h = cfg.humanInTheLoop;
     const choices = [
       `${h.planApproval ? "✓" : " "} Review plan before approval`,
       `${h.planRevisionApproval ? "✓" : " "} Review plan revisions`,
       `${h.confirmBeforeMutation ? "✓" : " "} Confirm before entering the mutation phase`,
-      `${h.importantDecisions ? "✓" : " "} Important decisions — scope expansion, review rejection, repair limits, final delivery`,
+      `${h.importantDecisions ? "✓" : " "} Handle exceptional decisions — scope expansion, review rejection, repair limits`,
+      `${h.finalDeliveryApproval ? "✓" : " "} Approve final delivery`,
+      `Bug diagnosis approval: ${h.diagnosisApproval === "never" ? "never" : h.diagnosisApproval === "low_confidence" ? "when confidence is low" : "always"}`,
       BACK
     ];
-    const choice = await ctx.ui.select("Human-in-the-loop review", choices);
+    const choice = await ctx.ui.select("Participation — custom settings", choices);
     if (!choice || choice === BACK) return;
     if (choice.includes("Review plan before approval")) {
       cfg.humanInTheLoop.planApproval = !cfg.humanInTheLoop.planApproval;
     } else if (choice.includes("Review plan revisions")) {
       cfg.humanInTheLoop.planRevisionApproval = !cfg.humanInTheLoop.planRevisionApproval;
-    } else     if (choice.includes("Confirm before entering the mutation phase")) {
+    } else if (choice.includes("Confirm before entering the mutation phase")) {
       cfg.humanInTheLoop.confirmBeforeMutation = !cfg.humanInTheLoop.confirmBeforeMutation;
-    } else if (choice.includes("Important decisions")) {
+    } else if (choice.includes("Handle exceptional decisions")) {
       cfg.humanInTheLoop.importantDecisions = !cfg.humanInTheLoop.importantDecisions;
+    } else if (choice.includes("Approve final delivery")) {
+      cfg.humanInTheLoop.finalDeliveryApproval = !cfg.humanInTheLoop.finalDeliveryApproval;
+    } else if (choice.includes("Bug diagnosis approval")) {
+      const next = cfg.humanInTheLoop.diagnosisApproval === "never"
+        ? "low_confidence"
+        : cfg.humanInTheLoop.diagnosisApproval === "low_confidence"
+        ? "always"
+        : "never";
+      cfg.humanInTheLoop.diagnosisApproval = next;
     }
   }
 }
@@ -259,33 +299,33 @@ async function editDashboard(ctx: ExtensionCommandContext, staged: StagedConfig)
 
 function buildSettingsSummary(cfg: OrchestratorConfig): string {
   const h = cfg.humanInTheLoop;
-  const importantDecisionsLabel = h.importantDecisions ? "important decisions: on" : "important decisions: off";
-  const humanReview = [h.planApproval && "plan", h.planRevisionApproval && "revisions", h.confirmBeforeMutation && "mutation"]
-    .filter(Boolean)
-    .join(", ") || "none";
+  const profile = inferParticipationProfile(h);
+  const profileLabel = profile === "custom" ? "Custom" : PROFILE_DESCRIPTIONS[profile].label;
+  const deviations: string[] = [];
+  if (profile === "custom") {
+    if (h.planRevisionApproval) deviations.push("plan revisions: machine reviewed");
+    if (h.diagnosisApproval !== "never") deviations.push(`bug diagnoses: approval required when confidence is ${h.diagnosisApproval === "always" ? "any" : "low"}`);
+  }
+  const summaryLine = deviations.length > 0
+    ? `Participation: ${profileLabel} (${deviations.join("; ")})`
+    : `Participation: ${profileLabel}`;
   return [
     `Retries: plan=${cfg.limits.planRevisions} impl=${cfg.limits.implementationRetries} review=${cfg.limits.reviewRevisions}`,
     `Timeouts: agent=${fmtMs(cfg.limits.agentTimeoutMs)} · check=${fmtMs(cfg.limits.checkTimeoutMs)} · output=${fmtBytes(cfg.limits.maxOutputBytes)}`,
     `Isolation: ${cfg.limits.worktreeIsolation ? "worktree" : "off"}`,
-    `Human review: ${humanReview}`,
-    `${importantDecisionsLabel}`,
+    summaryLine,
     `Dashboard: ${cfg.dashboard.enabled ? `on (port ${cfg.dashboard.port})` : "off"}`
   ].join("\n");
 }
 
 function changedFields(cfg: OrchestratorConfig): string[] {
-  // Compare against defaults — any non-default value is shown as changed
-  // Since we start from loaded config and mutate in place, any mutation is a change.
-  // We trust the user saved intentionally; just return a human-readable diff summary.
-  const h = cfg.humanInTheLoop;
   const changes: string[] = [];
   changes.push(`Retries: ${cfg.limits.planRevisions} / ${cfg.limits.implementationRetries} / ${cfg.limits.reviewRevisions}`);
   changes.push(`Timeouts: agent=${fmtMs(cfg.limits.agentTimeoutMs)} · check=${fmtMs(cfg.limits.checkTimeoutMs)}`);
   changes.push(`Output: ${fmtBytes(cfg.limits.maxOutputBytes)}`);
   changes.push(`Worktree: ${cfg.limits.worktreeIsolation ? "on" : "off"}`);
-  const humanFlags = [h.planApproval && "plan", h.planRevisionApproval && "revisions", h.confirmBeforeMutation && "mutation"].filter(Boolean).join(", ") || "none";
-  changes.push(`Human review: ${humanFlags}`);
-  changes.push(`Important decisions: ${h.importantDecisions ? "on" : "off"}`);
+  const profile = inferParticipationProfile(cfg.humanInTheLoop);
+  changes.push(`Participation: ${profile === "custom" ? "Custom" : PROFILE_DESCRIPTIONS[profile].label}`);
   changes.push(`Dashboard: ${cfg.dashboard.enabled ? `port ${cfg.dashboard.port}` : "off"}`);
   return changes;
 }

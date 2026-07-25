@@ -11,6 +11,7 @@ import {
   deriveMutationPathScope,
   deriveRoleMutationPaths,
   isDocumentationPath,
+  isTestSupportPath,
   isTestPath,
   workspaceSnapshotDigest,
   validateReportedFileSet,
@@ -70,7 +71,24 @@ describe("mutation path scopes", () => {
   it("does not classify ambiguous source and configuration paths", () => {
     expect(isTestPath("src/contest.ts")).toBe(false);
     expect(isTestPath("vitest.config.ts")).toBe(false);
+    expect(isTestSupportPath("src/runtime.ts")).toBe(false);
+    expect(isTestSupportPath("config/application.ts")).toBe(false);
     expect(isDocumentationPath("src/markdown-parser.ts")).toBe(false);
+  });
+
+  it("classifies conventional fixtures, mocks, snapshots, setup, and test-runner config", () => {
+    for (const file of [
+      "fixtures/example.json",
+      "src/__mocks__/api.ts",
+      "src/user.fixture.ts",
+      "src/service.mock.ts",
+      "src/__snapshots__/view.tsx.snap",
+      "vitest.config.ts",
+      "jest.setup.js",
+      "setupTests.ts"
+    ]) {
+      expect(isTestSupportPath(file), file).toBe(true);
+    }
   });
 
   it("rejects role changes outside exact role scope", () => {
@@ -110,6 +128,19 @@ describe("mutation path scopes", () => {
       "vitest.config.ts"
     ]);
     expect(deriveMutationPathScope(testsPlan).testSupportFiles).toEqual(["fixtures/example.json", "vitest.config.ts"]);
+  });
+
+  it("rejects arbitrary production files declared as Tester support", () => {
+    const implementationPlan = plan(["src/code.ts", "test/code.test.ts"]);
+    implementationPlan.tasks[0].testSupportFiles = ["src/runtime.ts"];
+
+    expect(() => deriveMutationPathScope(implementationPlan))
+      .toThrow("testSupportFiles may contain only classified test-support files: src/runtime.ts");
+    expect(() => deriveRoleMutationPaths("tester", implementationPlan)).toThrow("classified test-support files");
+
+    implementationPlan.tasks[0].testSupportFiles = ["src/setup.ts"];
+    expect(() => deriveMutationPathScope(implementationPlan))
+      .toThrow("testSupportFiles may contain only classified test-support files: src/setup.ts");
   });
 
   it("requires exact normalized reported and actual sets", () => {

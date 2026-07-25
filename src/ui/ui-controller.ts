@@ -147,6 +147,7 @@ export function statusText(vm: OrchestratorViewModel, theme: WidgetTheme): strin
   if (vm.mode === "idle") return `${dot("accent", "●")} orchestrator: idle · ready`;
   if (vm.mode === "config_error") return `${dot("warning", "⚠")} orchestrator: config error`;
   if (vm.mode === "waiting") return `${dot("warning", "⏳")} orchestrator: waiting for you · ${vm.run?.waitingFor ?? "human input"}`;
+  if (vm.mode === "paused") return `${dot("warning", "Ⅱ")} orchestrator: paused · ${vm.run?.waitingFor ?? "resume available"}`;
   if (vm.run) {
     const phase = UI_PHASE_LABELS[vm.run.phaseIndex] ?? vm.run.stage;
     const statusMap: Record<string, { ch: string; color: string }> = {
@@ -200,8 +201,9 @@ export function renderViewModelLines(vm: OrchestratorViewModel, theme: WidgetThe
       row(theme, `${A("●")} ${BLD("Idle")} · ${D("ready")}`),
     ];
     if (vm.config.status === "missing") {
-      lines.push(row(theme, "Project checks are not configured"));
-      lines.push(row(theme, `Run ${L("/orchestrate")} to begin setup`));
+      lines.push(row(theme, "No project configuration yet"));
+      lines.push(row(theme, "Check setup is deferred until a mutation route is approved"));
+      lines.push(row(theme, `Run ${L("/orchestrate")} and select a route`));
     } else {
       lines.push(row(theme, `Project: ${A(String(vm.config.agentCount))} agents configured · ${A(String(vm.config.checkCount))} checks`));
       lines.push(row(theme, `${L("/orchestrate")} · ${L("/orchestrator-settings")}`));
@@ -259,7 +261,9 @@ export function renderViewModelLines(vm: OrchestratorViewModel, theme: WidgetThe
       : `${L("/orchestrator-status")} · ${L("/orchestrator-cancel")}`;
     lines.push(row(theme, cmds));
   } else {
-    if (vm.mode === "completed") {
+    if (vm.mode === "paused") {
+      lines.push(row(theme, `${W("Ⅱ")} ${BLD("Paused")} · ${D(elapsed)}`));
+    } else if (vm.mode === "completed") {
       lines.push(row(theme, `${S("✓")} ${BLD("Completed")} · ${D(elapsed)}`));
     } else if (vm.mode === "failed") {
       const stageSuffix = run.stage !== "completed" ? ` · ${run.stage}` : "";
@@ -270,9 +274,6 @@ export function renderViewModelLines(vm: OrchestratorViewModel, theme: WidgetThe
     if (run.message) lines.push(row(theme, M(truncate(run.message, INNER - 4))));
     if (run.failedArtifact) {
       lines.push(row(theme, `${M("Failed artifact")}  ${L(pathBase(run.failedArtifact))}`));
-    }
-    if (vm.mode === "completed" && vm.config.checkCount > 0) {
-      lines.push(row(theme, `${A(String(vm.config.checkCount))}/${A(String(vm.config.checkCount))} ${S("checks passed")} · ${S("workflow completed")}`));
     }
     if (run.warning) lines.push(row(theme, `${W("⚠")} ${truncate(run.warning, INNER - 5)}`));
     if (run.checkpoint && run.resumeCommand && vm.mode !== "completed") {

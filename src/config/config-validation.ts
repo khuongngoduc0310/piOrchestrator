@@ -20,6 +20,8 @@ import {
   strings
 } from "../validation-core.js";
 
+const DIAGNOSIS_APPROVAL_VALUES = ["never", "low_confidence", "always"] as const;
+
 function agentConfig(name: AgentName, value: unknown, path: string): AgentConfig {
   const item = record(value, path);
   const tools = array(item.tools, `${path}.tools`, (tool, toolPath) => {
@@ -80,7 +82,9 @@ export function validateOrchestratorConfig(value: unknown, path = "config"): Orc
       planApproval: boolean(humanInTheLoopValue.planApproval ?? false, `${path}.humanInTheLoop.planApproval`),
       planRevisionApproval: boolean(humanInTheLoopValue.planRevisionApproval ?? false, `${path}.humanInTheLoop.planRevisionApproval`),
       confirmBeforeMutation: boolean(humanInTheLoopValue.confirmBeforeMutation ?? false, `${path}.humanInTheLoop.confirmBeforeMutation`),
-      importantDecisions: boolean(humanInTheLoopValue.importantDecisions ?? true, `${path}.humanInTheLoop.importantDecisions`)
+      importantDecisions: boolean(humanInTheLoopValue.importantDecisions ?? true, `${path}.humanInTheLoop.importantDecisions`),
+      finalDeliveryApproval: boolean(humanInTheLoopValue.finalDeliveryApproval ?? true, `${path}.humanInTheLoop.finalDeliveryApproval`),
+      diagnosisApproval: enumValue(humanInTheLoopValue.diagnosisApproval ?? "never", `${path}.humanInTheLoop.diagnosisApproval`, DIAGNOSIS_APPROVAL_VALUES)
     }
   };
 }

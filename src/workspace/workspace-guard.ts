@@ -109,6 +109,25 @@ export function isTestPath(file: string): boolean {
     || /(?:^|[._-])(?:test|tests|spec|specs)(?:[._-]|$)/.test(basename);
 }
 
+/** Classify only conventional non-test-named files that directly support tests. */
+export function isTestSupportPath(file: string): boolean {
+  const normalized = normalizeRepositoryPath(file).toLowerCase();
+  const segments = normalized.split("/");
+  const basename = segments.at(-1) ?? "";
+  const supportDirectories = new Set([
+    "fixture", "fixtures", "__fixtures__",
+    "mock", "mocks", "__mocks__",
+    "snapshot", "snapshots", "__snapshots__",
+    "testdata", "test-data", "test_data"
+  ]);
+  if (segments.slice(0, -1).some(segment => supportDirectories.has(segment))) return true;
+  if (/(?:^|[._-])(?:fixture|fixtures|mock|mocks)(?:[._-]|$)/.test(basename) || basename.endsWith(".snap")) return true;
+
+  const runner = "(?:ava|cypress|jasmine|jest|karma|mocha|playwright|vitest|webdriverio|wdio)";
+  return new RegExp(`^${runner}[._-](?:config|conf|setup)(?:[._-].+)?$`).test(basename)
+    || /^(?:global[._-]?)?(?:(?:tests?)[._-]?(?:setup|teardown)|(?:setup|teardown)[._-]?(?:tests?))(?:\.[^.]+)+$/.test(basename);
+}
+
 export function isDocumentationPath(file: string): boolean {
   const normalized = normalizeRepositoryPath(file).toLowerCase();
   const segments = normalized.split("/");
@@ -125,6 +144,10 @@ export function deriveMutationPathScope(plan: PlannerOutput): MutationPathScope 
     throw new WorkspaceGuardError(`Workflow route ${JSON.stringify(plan.route)} does not authorize mutations`);
   }
   const testSupportFiles = normalizedUnique(plan.tasks.flatMap(task => task.testSupportFiles ?? []));
+  const invalidTestSupportFiles = testSupportFiles.filter(file => !isTestSupportPath(file));
+  if (invalidTestSupportFiles.length > 0) {
+    throw new WorkspaceGuardError(`testSupportFiles may contain only classified test-support files: ${invalidTestSupportFiles.join(", ")}`);
+  }
   const planFiles = normalizedUnique(plan.tasks.flatMap(task => [...task.files, ...(task.testSupportFiles ?? [])]));
   const testSupportSet = new Set(testSupportFiles);
   if (plan.route === "tests_only" && planFiles.some(file => !isTestPath(file) && !testSupportSet.has(file))) {

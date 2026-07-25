@@ -57,6 +57,10 @@ export interface ReadOnlyReviewResult extends PlanningResult {
   codeReview: ReviewOutput;
 }
 
+export interface InvestigationResult extends PlanningResult {
+  diagnosis: DebuggerOutput;
+}
+
 export type SpecializedMutationResult =
   | (ImplementationPlanningResult & { route: "tests_only"; tester: TesterOutput })
   | (ImplementationPlanningResult & { route: "documentation_only"; documentation: DocumenterOutput });

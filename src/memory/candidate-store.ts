@@ -1,6 +1,6 @@
-import { randomUUID } from "node:crypto";
-import { mkdir, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
+import { mkdir, readFile, rm, stat } from "node:fs/promises";
 import path from "node:path";
+import { atomicReplace } from "../persistence/atomic-write.js";
 import { configPath } from "../config/config.js";
 import {
   CANDIDATE_LEDGER_SCHEMA_VERSION,
@@ -95,14 +95,7 @@ export async function saveCandidateLedger(cwd: string, ledger: CandidateLedger):
     if (Buffer.byteLength(json, "utf8") > MAX_CANDIDATE_LEDGER_BYTES) {
       throw new Error(`Candidate ledger exceeds ${MAX_CANDIDATE_LEDGER_BYTES} bytes`);
     }
-    const temporary = path.join(runDir, `.${LEDGER_FILE}.${process.pid}.${randomUUID()}.tmp`);
-    try {
-      await writeFile(temporary, json, "utf8");
-      await rename(temporary, target);
-    } catch (error) {
-      await rm(temporary, { force: true }).catch(() => undefined);
-      throw error;
-    }
+    await atomicReplace(target, json);
     return next;
   });
 }

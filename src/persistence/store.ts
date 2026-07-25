@@ -5,6 +5,7 @@ import os from "node:os";
 import { CONFIG_DIR_NAME } from "@earendil-works/pi-coding-agent";
 import type { AgentName, Stage, WorkflowState } from "../types.js";
 import { readSafeArtifact } from "./checkpoint-store.js";
+import { atomicReplace as atomicReplaceFile } from "./atomic-write.js";
 
 const EVENTS_FILE = "events.jsonl";
 const LEASE_FILE = "run-lease.json";
@@ -160,15 +161,7 @@ export class RunStore {
 
   private async atomicReplace(name: string, content: string | Buffer): Promise<void> {
     await this.init();
-    const target = path.join(this.runDir, name);
-    const temporary = path.join(this.runDir, `.${name}.${process.pid}.${randomUUID()}.tmp`);
-    try {
-      await writeFile(temporary, content);
-      await rename(temporary, target);
-    } catch (error) {
-      await rm(temporary, { force: true }).catch(() => undefined);
-      throw error;
-    }
+    await atomicReplaceFile(path.join(this.runDir, name), content);
   }
 
   private assertArtifactName(name: string): void {

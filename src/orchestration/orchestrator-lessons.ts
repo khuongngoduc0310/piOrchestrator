@@ -12,7 +12,6 @@ import { runAgentStep } from "./orchestrator-agent-step.js";
 import { promptHumanMemoryApproval } from "./orchestrator-human-gates.js";
 import { persist, publishSessionMessage } from "./orchestrator-state.js";
 import { saveWorkflowCheckpoint } from "./orchestrator-checkpoints.js";
-import { assertDocumenterComplete } from "./mutation-completion.js";
 
 export interface LessonPreparation {
   documentation: DocumenterOutput;
@@ -47,45 +46,10 @@ export async function prepareLessons(
   runtime: OrchestratorRuntime,
   workflow: WorkflowContext,
   review: ReviewResult,
-  restoredDocumentation?: DocumenterOutput
+  documentation: DocumenterOutput
 ): Promise<LessonPreparation> {
   const { request, ctx, store, runId } = workflow;
   const { plan, baseline, codeReview, reviewApprovalSource, finalImplChecks, tester } = review;
-  const documentation = restoredDocumentation ?? await runAgentStep(
-    runtime,
-    "documenter",
-    "documenting",
-    "Update documentation and propose lessons",
-    {
-      action: "document",
-      request,
-      plan,
-      baselineChecks: baseline,
-      codeReview,
-      approvalSource: reviewApprovalSource,
-      implementationChecks: finalImplChecks,
-      builderOutputs: runtime.builderSessionOutputs,
-      tester
-    },
-    workflow.mutationCwd,
-    ctx,
-    parseDocumenterOutput,
-    { mutationPlan: plan }
-  );
-  assertDocumenterComplete(documentation);
-  if (!restoredDocumentation) {
-    await saveWorkflowCheckpoint(runtime, workflow, "documenter_completed", { review, documentation }, {
-      exploration: review.exploration,
-      plan,
-      baselineChecks: baseline,
-      tester,
-      builderOutputs: runtime.builderSessionOutputs,
-      implementationChecks: finalImplChecks,
-      codeReview,
-      priorCodeReviews: review.priorCodeReviews,
-      reviewApprovalSource
-    });
-  }
 
   runtime.candidateLessons = validateCandidates(documentation.proposedLessons.map((lesson, index) => ({
     id: candidateLessonId(runId, index + 1),

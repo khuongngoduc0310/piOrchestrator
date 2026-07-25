@@ -14,6 +14,8 @@ import { reviseImplementationScope } from "./orchestrator-scope-revision.js";
 import { consumeScopeRevision } from "./scope-revision-budget.js";
 import { allGreen } from "./orchestrator-helpers.js";
 import type { CheckResult, DebuggerOutput, HumanReviewDecision } from "../types.js";
+import { resolveParticipationPolicy, requiresHumanDecision } from "./participation-policy.js";
+import { resolveAgentBlocker } from "./orchestrator-resolution.js";
 
 export type ReviewContinuation =
   | {
@@ -173,7 +175,8 @@ export async function runReviewPhase(
       if (!pendingReviewDecision) priorCodeReviews.push(currentCodeReview);
       pendingReviewDecision = false;
       if (fixes === allowedReviewFixes) {
-        if (!config.humanInTheLoop.importantDecisions) {
+        const policy = resolveParticipationPolicy(config);
+        if (!requiresHumanDecision(policy, "code_review_rejection")) {
           throw new Error("Code review was not approved within the revision limit");
         }
         const decision = recordedReviewDecision
@@ -236,7 +239,10 @@ export async function runReviewPhase(
         break;
       }
       if (reviewOut.blocker.kind !== "scope") {
-        throw new Error(`Builder blocked during code review (${reviewOut.blocker.kind}): ${reviewOut.blocker.reason}`);
+        const resolved = await resolveAgentBlocker(runtime, workflow, currentImplementation, reviewOut.blocker);
+        currentImplementation = { ...resolved.planning, tester: currentImplementation.tester, finalImplChecks: currentImplementation.finalImplChecks, diagnosis: currentImplementation.diagnosis };
+        plan = resolved.planning.plan;
+        continue;
       }
       const additions = filesOutsidePlan(plan, reviewOut.blocker.requiredFiles);
       if (additions.length === 0) throw new Error(`Builder reported an invalid review scope blocker: ${reviewOut.blocker.reason}`);

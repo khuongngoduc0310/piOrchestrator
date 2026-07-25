@@ -14,6 +14,24 @@ export interface HumanTouchpoints {
   planRevisionApproval: boolean;
   confirmBeforeMutation: boolean;
   importantDecisions: boolean;
+  finalDeliveryApproval: boolean;
+  diagnosisApproval: "never" | "low_confidence" | "always";
+}
+
+export type ParticipationProfile =
+  | "autonomous"
+  | "balanced"
+  | "controlled"
+  | "custom";
+
+export interface ParticipationPolicy {
+  profile: ParticipationProfile;
+  initialPlanApproval: boolean;
+  planRevisionApproval: boolean;
+  mutationConfirmation: boolean;
+  exceptionalDecisions: boolean;
+  finalDeliveryApproval: boolean;
+  diagnosisApproval: "never" | "low_confidence" | "always";
 }
 
 export interface OrchestratorConfig {

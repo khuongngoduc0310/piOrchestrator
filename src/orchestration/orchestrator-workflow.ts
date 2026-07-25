@@ -62,7 +62,7 @@ export async function runWorkflow(
     runtime.promotionResult = undefined;
     runtime.validatedChangedFiles.clear();
     runtime.validatedFileAttestations.clear();
-    runtime.mutationCommitStarted = false;
+    runtime.finalizationStarted = false;
     runtime.baselineContext = await runtime.captureBaseline(cwd, store);
     await store.saveJson("baseline.json", runtime.baselineContext);
     const artifactRoot = path.relative(cwd, store.runDir).split(path.sep).join("/");

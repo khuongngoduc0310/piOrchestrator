@@ -217,7 +217,8 @@ export async function runAgentStep<A extends AgentName>(
     } catch (validationError) {
       const rawArtifact = store.artifactName({ ...qualifier, sequence: step.sequence, stage, agent, kind: "invalid-output-attempt-1", extension: "txt" });
       step.rawArtifact = await store.saveRaw(rawArtifact, result.text);
-      if (!OUTPUT_CORRECTABLE_AGENTS.has(agent)) {
+      const hadWritablePaths = allowedWritePaths.length > 0;
+      if (!OUTPUT_CORRECTABLE_AGENTS.has(agent) && (hadWritablePaths || agent !== "documenter")) {
         throw new Error(`${agent} returned invalid structured output after a potentially mutating session: ${messageOf(validationError)}`);
       }
       const rawPath = validationError instanceof ValidationError ? validationError.path : undefined;
@@ -227,7 +228,7 @@ export async function runAgentStep<A extends AgentName>(
         mode: "correct_output",
         task: payload,
         memoryContext: memoryEnvelope,
-        correction: { attempt: 1, reason: "schema_validation_failed", ...(fieldPath ? { fieldPath } : {}) }
+        correction: { attempt: 1, reason: "schema_validation_failed", ...(fieldPath ? { fieldPath } : {}), ...(hadWritablePaths ? {} : { expectedChangedFiles: [] }) }
       };
       const correctionConfig = { ...runBase.config, tools: runBase.config.tools.filter(tool => CORRECTION_TOOLS.has(tool)) };
       result = await executeInvocation("correct_output", correctionConfig, JSON.stringify(correctionEnvelope, null, 2));

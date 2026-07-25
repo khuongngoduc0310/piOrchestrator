@@ -1,3 +1,4 @@
+import React from "react";
 import { UI_PHASE_LABELS } from "../../dashboard-types.js";
 import type { RunSummary } from "../../dashboard-types.js";
 
@@ -11,6 +12,7 @@ export function PhaseRail({ run }: PhaseRailProps) {
   const phaseIndex = run.phaseIndex;
   const phaseCount = run.phaseCount ?? UI_PHASE_LABELS.length;
   const skipped = run.skippedPhaseIndexes ?? [];
+  const completed = run.runStatus === "completed";
 
   return (
     <div id="phases">
@@ -18,15 +20,15 @@ export function PhaseRail({ run }: PhaseRailProps) {
         const isSkipped = skipped.includes(i);
         const cls = isSkipped
           ? "phase skipped"
-          : i < phaseIndex
+          : i < phaseIndex || (completed && i === phaseIndex)
             ? "phase done"
             : i === phaseIndex
               ? "phase active"
               : "phase pending";
-        const icon = isSkipped ? "–" : i < phaseIndex ? "✓" : i === phaseIndex ? "→" : "•";
+        const icon = isSkipped ? "–" : i < phaseIndex || (completed && i === phaseIndex) ? "✓" : i === phaseIndex ? "→" : "•";
         const ariaLabel = isSkipped
           ? `Skipped: ${label}`
-          : i < phaseIndex
+          : i < phaseIndex || (completed && i === phaseIndex)
             ? `Completed: ${label}`
             : i === phaseIndex
               ? `Current: ${label}`
@@ -36,7 +38,7 @@ export function PhaseRail({ run }: PhaseRailProps) {
           <div
             key={i}
             className={cls}
-            aria-current={i === phaseIndex ? "step" : undefined}
+            aria-current={!completed && i === phaseIndex ? "step" : undefined}
             aria-label={ariaLabel}
           >
             <span className="phase-icon" aria-hidden="true">

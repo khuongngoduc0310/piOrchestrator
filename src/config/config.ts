@@ -1,6 +1,6 @@
-import { randomUUID } from "node:crypto";
-import { mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
+import { mkdir, readFile } from "node:fs/promises";
 import path from "node:path";
+import { atomicReplace } from "../persistence/atomic-write.js";
 import { CONFIG_DIR_NAME } from "@earendil-works/pi-coding-agent";
 import {
   AGENT_NAMES,
@@ -39,10 +39,12 @@ export const DEFAULT_CONFIG: OrchestratorConfig = {
     documenter: { model: "anthropic/claude-sonnet-4-5", thinking: "medium", tools: ["read", "write", "edit", "grep", "find", "ls"], promptFile: "documenter.md" }
   },
   humanInTheLoop: {
-    planApproval: false,
+    planApproval: true,
     planRevisionApproval: false,
-    confirmBeforeMutation: false,
-    importantDecisions: true
+    confirmBeforeMutation: true,
+    importantDecisions: true,
+    finalDeliveryApproval: true,
+    diagnosisApproval: "low_confidence"
   }
 };
 
@@ -104,7 +106,8 @@ export async function loadConfig(cwd: string): Promise<OrchestratorConfig> {
     throw new ConfigError(file, `could not read config (${detail}); the file was not changed`, { cause: error });
   }
   const parsed = parseConfigText(text, file);
-  const merged = mergeDefaults(DEFAULT_CONFIG, parsed);
+  const merged = mergeDefaults(DEFAULT_CONFIG, parsed) as OrchestratorConfig;
+  migrateParticipationFields(parsed, merged);
   preserveOptionalThinking(parsed, merged);
   migrateRoleTools(merged);
   return validateConfig(merged, file);
@@ -114,14 +117,7 @@ export async function saveConfig(cwd: string, config: OrchestratorConfig): Promi
   const file = configPath(cwd);
   const validated = validateConfig(config, file);
   await mkdir(path.dirname(file), { recursive: true });
-  const temporary = path.join(path.dirname(file), `.${path.basename(file)}.${process.pid}.${randomUUID()}.tmp`);
-  try {
-    await writeFile(temporary, JSON.stringify(validated, null, 2) + "\n", "utf8");
-    await rename(temporary, file);
-  } catch (error) {
-    await rm(temporary, { force: true }).catch(() => undefined);
-    throw error;
-  }
+  await atomicReplace(file, JSON.stringify(validated, null, 2) + "\n");
 }
 
 export function applyAgentModelUpdates(config: OrchestratorConfig, updates: AgentModelUpdates): OrchestratorConfig {
@@ -207,6 +203,23 @@ function migrateRoleTools(config: unknown): void {
       if (!BUILT_IN_TOOLS.includes(tool as (typeof BUILT_IN_TOOLS)[number])) return true;
       return intersectRoleTools(agent, [tool as (typeof BUILT_IN_TOOLS)[number]]).length > 0;
     });
+  }
+}
+
+function migrateParticipationFields(configured: unknown, merged: OrchestratorConfig): void {
+  const hasExplicitFinalDelivery = isRecord(configured)
+    && isRecord((configured as Record<string, unknown>).humanInTheLoop)
+    && typeof (configured as Record<string, unknown>).humanInTheLoop === "object"
+    && "finalDeliveryApproval" in ((configured as Record<string, unknown>).humanInTheLoop as Record<string, unknown>);
+  if (!hasExplicitFinalDelivery) {
+    merged.humanInTheLoop.finalDeliveryApproval = merged.humanInTheLoop.importantDecisions;
+  }
+  const hasExplicitDiagnosis = isRecord(configured)
+    && isRecord((configured as Record<string, unknown>).humanInTheLoop)
+    && typeof (configured as Record<string, unknown>).humanInTheLoop === "object"
+    && "diagnosisApproval" in ((configured as Record<string, unknown>).humanInTheLoop as Record<string, unknown>);
+  if (!hasExplicitDiagnosis) {
+    merged.humanInTheLoop.diagnosisApproval = "never";
   }
 }
 

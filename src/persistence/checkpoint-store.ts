@@ -1,7 +1,8 @@
-import { createHash, randomUUID } from "node:crypto";
+import { createHash } from "node:crypto";
 import { constants } from "node:fs";
-import { lstat, open, rename, rm, writeFile } from "node:fs/promises";
+import { lstat, open, writeFile } from "node:fs/promises";
 import path from "node:path";
+import { atomicReplace } from "./atomic-write.js";
 import type { CheckpointPointer, CheckpointWrite, WorkflowCheckpoint } from "./checkpoint-types.js";
 import { CHECKPOINT_SCHEMA_VERSION } from "./checkpoint-types.js";
 import { validateCheckpointPointer, validateWorkflowCheckpoint } from "./checkpoint-validation.js";
@@ -72,7 +73,7 @@ export class CheckpointStore {
       fileName,
       digest
     };
-    await atomicReplace(this.runDir, LATEST_CHECKPOINT_FILE, serializeBounded(pointer, 16 * 1024));
+    await atomicReplace(path.join(this.runDir, LATEST_CHECKPOINT_FILE), serializeBounded(pointer, 16 * 1024));
     return checkpoint;
   }
 
@@ -149,16 +150,4 @@ function serializeBounded(value: unknown, maxBytes: number): string {
   const text = JSON.stringify(value, null, 2) + "\n";
   if (Buffer.byteLength(text, "utf8") > maxBytes) throw new CheckpointStoreError(`serialized JSON exceeds ${maxBytes} bytes`);
   return text;
-}
-
-async function atomicReplace(directory: string, name: string, content: string): Promise<void> {
-  assertBasename(name);
-  const temporary = path.join(directory, `.${name}.${process.pid}.${randomUUID()}.tmp`);
-  try {
-    await writeFile(temporary, content, { encoding: "utf8", flag: "wx" });
-    await rename(temporary, path.join(directory, name));
-  } catch (error) {
-    await rm(temporary, { force: true }).catch(() => undefined);
-    throw error;
-  }
 }

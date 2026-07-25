@@ -132,6 +132,38 @@ export function formatRepositoryReview(review: ReviewOutput): string {
   return truncateToBytes(text, MAX_BYTES);
 }
 
+export function formatInvestigation(diagnosis: DebuggerOutput): string {
+  const files = diagnosis.affectedFiles.length > 0
+    ? diagnosis.affectedFiles.map(file => `- \`${file}\``).join("\n")
+    : "None";
+  return truncateToBytes(
+    `## Investigation complete\n\n**Category:** ${diagnosis.category}\n\n` +
+    `**Root cause:** ${diagnosis.rootCause}\n\n` +
+    `**Confidence:** ${diagnosis.confidence}\n\n` +
+    `### Evidence\n\n${evidenceSummary(diagnosis.evidence)}\n\n` +
+    `### Recommendation\n\n${diagnosis.recommendedFix}\n\n` +
+    `### Affected files\n\n${files}\n`,
+    MAX_BYTES
+  );
+}
+
+export function formatDiagnosisForApproval(diagnosis: DebuggerOutput): string {
+  const files = diagnosis.affectedFiles.length > 0
+    ? diagnosis.affectedFiles.map(file => `- \`${file}\``).join("\n")
+    : "None";
+  const rootCause = truncateToBytes(diagnosis.rootCause, 2048);
+  const recommendedFix = truncateToBytes(diagnosis.recommendedFix, 2048);
+  const evidence = truncateToBytes(evidenceSummary(diagnosis.evidence), 2048);
+  return (
+    `## Bug diagnosis\n\n**Category:** ${diagnosis.category}\n\n` +
+    `**Confidence:** ${diagnosis.confidence}\n\n` +
+    `### Affected files\n\n${files}\n\n` +
+    `### Recommended fix\n\n${recommendedFix}\n\n` +
+    `### Root cause\n\n${rootCause}\n\n` +
+    `### Evidence\n\n${evidence}\n`
+  );
+}
+
 export function formatDocumentationReport(
   output: DocumenterOutput,
   lessonStatus: "approved" | "rejected" | "skipped",
@@ -185,7 +217,16 @@ export function formatCompletedRun(
 
   let text = `## Workflow completed\n\n**Request:** ${summary.request}\n\n**Route:** ${summary.route}\n\n**Result:** completed in ${elapsed}\n\n`;
 
-  text += `### Delivered\n\n${summary.planSummary}\n\n`;
+  text += summary.route === "investigation_only"
+    ? `### Diagnosis\n\n${summary.diagnosis?.rootCause ?? summary.planSummary}\n\n`
+    : `### Delivered\n\n${summary.planSummary}\n\n`;
+
+  if (summary.diagnosis) {
+    text += `**Category:** ${summary.diagnosis.category}\n\n`;
+    text += `**Confidence:** ${summary.diagnosis.confidence}\n\n`;
+    text += `### Recommendation\n\n${summary.diagnosis.recommendedFix}\n\n`;
+    text += `### Evidence\n\n${evidenceSummary(summary.diagnosis.evidence)}\n\n`;
+  }
 
   const allFiles = [...new Set(summary.changedFiles)];
   if (allFiles.length > 0) {
@@ -203,16 +244,17 @@ export function formatCompletedRun(
   }
 
   text += `### Review\n\n- Outcome: ${summary.review.outcome}\n`;
-  text += `- Evidence items: ${summary.review.evidenceCount}\n`;
-  if (summary.review.suggestions.length > 0) {
-    text += `- Suggestions: ${summary.review.suggestions.length}\n`;
-  } else {
-    text += `- Suggestions: none\n`;
-  }
+  text += `- Revisions: ${summary.review.revisions}\n`;
   if (summary.review.blockingIssues.length > 0) {
-    text += `- Blocking issues: ${summary.review.blockingIssues.length}\n`;
+    text += `\n### Findings\n\n${summary.review.blockingIssues.map(issue => `- ${issue}`).join("\n")}\n`;
   }
-  text += `- Revisions: ${summary.review.revisions}\n\n`;
+  if (summary.review.evidence.length > 0) {
+    text += `\n### Evidence\n\n${evidenceSummary(summary.review.evidence)}\n`;
+  }
+  if (summary.review.suggestions.length > 0) {
+    text += `\n### Suggestions\n\n${summary.review.suggestions.map(s => `- ${s}`).join("\n")}\n`;
+  }
+  text += "\n";
 
   text += `### Documentation and lessons\n\n`;
   text += ["review_only", "investigation_only", "planning_only", "tests_only"].includes(summary.route)

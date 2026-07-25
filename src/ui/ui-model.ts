@@ -78,7 +78,7 @@ export function buildRunViewModel(
     };
   });
 
-  const phaseIndex = stageToPhaseIndex(state.stage, state.steps, stoppedStage);
+  const phaseIndex = stageToPhaseIndex(state.stage, state.steps, stoppedStage, state.route);
   const phaseCount = UI_PHASE_LABELS.length;
 
   const lastFailed = [...state.steps].reverse().find(
@@ -99,7 +99,7 @@ export function buildRunViewModel(
     skippedPhaseIndexes: skippedPhaseIndexes(state.route),
     activeAgent: state.activeAgent,
     attempt: state.attempt,
-    maxAttempts,
+    maxAttempts: Math.max(maxAttempts, state.attempt),
     elapsedMs,
     artifactPath: state.runDir,
     failedArtifact,
@@ -165,7 +165,7 @@ export function elapsedText(ms: number): string {
   return `${minutes}:${String(seconds).padStart(2, "0")}`;
 }
 
-function stageToPhaseIndex(stage: Stage, steps: StepRecord[], failedStage?: Stage): number {
+function stageToPhaseIndex(stage: Stage, steps: StepRecord[], failedStage?: Stage, route?: WorkflowState["route"]): number {
   switch (stage) {
     case "preflight": return 0;
     case "exploring": return 1;
@@ -176,8 +176,8 @@ function stageToPhaseIndex(stage: Stage, steps: StepRecord[], failedStage?: Stag
     case "baseline": return 3;
     case "creating_tests":
     case "human_confirm_mutation": return 4;
-    case "implementing":
-    case "debugging": return 5;
+    case "implementing": return 5;
+    case "debugging": return route === "investigation_only" ? 6 : 5;
     case "testing": return testingPhaseIndex(steps);
     case "reviewing_code":
     case "reviewing_repository": return 6;
@@ -186,7 +186,7 @@ function stageToPhaseIndex(stage: Stage, steps: StepRecord[], failedStage?: Stag
     case "human_review_lessons":
     case "promoting_memory":
     case "reviewing_lessons": return 7;
-    default: return stageToPhaseIndexDefault(stage, steps, failedStage);
+    default: return stageToPhaseIndexDefault(stage, steps, failedStage, route);
   }
 }
 
@@ -201,11 +201,11 @@ function testingPhaseIndex(steps: StepRecord[]): number {
   return 4;
 }
 
-function stageToPhaseIndexDefault(stage: Stage, steps: StepRecord[], failedStage?: Stage): number {
+function stageToPhaseIndexDefault(stage: Stage, steps: StepRecord[], failedStage?: Stage, route?: WorkflowState["route"]): number {
   if (stage === "completed") return UI_PHASE_LABELS.length - 1;
   if (stage === "idle") return 0;
   if ((stage === "failed" || stage === "cancelled") && failedStage) {
-    return stageToPhaseIndex(failedStage, steps);
+    return stageToPhaseIndex(failedStage, steps, undefined, route);
   }
   return 0;
 }

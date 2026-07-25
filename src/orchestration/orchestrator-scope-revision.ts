@@ -1,5 +1,6 @@
-import type { BuilderBlocker, CheckResult, DebuggerOutput, HumanPlanReviewResult, PlannerOutput, ReviewOutput, TesterOutput } from "../types.js";
+import type { AgentResolutionRequest, CheckResult, DebuggerOutput, DocumenterOutput, HumanPlanReviewResult, PlannerOutput, ReviewOutput, TesterOutput } from "../types.js";
 import type { ImplementationPlanningResult, ImplementationResult, WorkflowContext } from "./orchestrator-context.js";
+import type { SerializedLessonPreparation } from "./orchestrator-lessons.js";
 import type { OrchestratorRuntime } from "./orchestrator-runtime.js";
 import { runAgentStep } from "./orchestrator-agent-step.js";
 import { promptHumanPlanReview, runDurableHumanGate } from "./orchestrator-human-gates.js";
@@ -7,6 +8,17 @@ import { parsePlannerOutput, parseReviewOutput } from "../validation.js";
 import { filesOutsidePlan, validateFailureScopeRevision } from "./plan-revision.js";
 import { publishSessionMessage } from "./orchestrator-state.js";
 import { formatScopeRevision } from "../ui/session-messages.js";
+import { resolveParticipationPolicy, requiresHumanDecision } from "./participation-policy.js";
+
+export type DocumentationScopePhase =
+  | { phase: "initial_documentation"; blockedDocumentation: DocumenterOutput; changeRound: number }
+  | { phase: "repair_checks"; blockedDocumentation: DocumenterOutput; preparation: SerializedLessonPreparation; failedChecks: CheckResult[]; diagnosis: DebuggerOutput; attempt: number; changeRound: number };
+
+export type DocumentationScopeAfter = {
+  mode: "finalization";
+  scopeRevisionCount: number;
+  documentation: DocumentationScopePhase;
+};
 
 export type ScopeRevisionAfter =
   | {
@@ -33,7 +45,8 @@ export type ScopeRevisionAfter =
       mode: "bug_diagnosed";
       diagnosis: DebuggerOutput;
       scopeRevisionCount: number;
-    };
+    }
+  | DocumentationScopeAfter;
 
 export interface ScopeRevisionDecisionContext {
   planning: ImplementationPlanningResult | ImplementationResult;
@@ -48,18 +61,18 @@ export interface ScopeRevisionDecisionContext {
 export interface ScopeRevisionEvidence {
   checks: CheckResult[];
   diagnosis?: DebuggerOutput;
-  blocker?: BuilderBlocker;
+  blocker?: AgentResolutionRequest;
 }
 
-export async function reviseImplementationScope(
+export async function reviseImplementationScope<T extends ImplementationPlanningResult>(
   runtime: OrchestratorRuntime,
   workflow: WorkflowContext,
-  planning: ImplementationPlanningResult,
+  planning: T,
   requiredFiles: readonly string[],
   evidence: ScopeRevisionEvidence,
   scopeRevision: number,
   after: ScopeRevisionAfter
-): Promise<ImplementationPlanningResult> {
+): Promise<T> {
   const additions = filesOutsidePlan(planning.plan, requiredFiles);
   if (additions.length === 0) throw new Error("Scope revision requested no files outside the approved plan");
 
@@ -75,24 +88,25 @@ export async function reviseImplementationScope(
   });
 }
 
-export async function continueScopeRevisionDecision(
+export async function continueScopeRevisionDecision<T extends ImplementationPlanningResult>(
   runtime: OrchestratorRuntime,
   workflow: WorkflowContext,
   context: ScopeRevisionDecisionContext,
   recordedDecision?: HumanPlanReviewResult
-): Promise<ImplementationPlanningResult> {
+): Promise<T> {
   const { planning, additions, evidence, scopeRevision, after } = context;
   let revised = context.revised;
   let feedback: { source: "human"; text: string } | { source: "reviewer"; review: ReviewOutput } | undefined;
   let approved = false;
 
   for (let reviewIndex = context.reviewIndex; reviewIndex <= workflow.config.limits.planRevisions; reviewIndex++) {
-    if (workflow.config.humanInTheLoop.importantDecisions || workflow.config.humanInTheLoop.planRevisionApproval) {
+    const policy = resolveParticipationPolicy(workflow.config);
+    if (requiresHumanDecision(policy, "scope_expansion")) {
       const decision = recordedDecision ?? await runDurableHumanGate(
         runtime,
         workflow,
         "scope_expansion",
-        "Failure scope expansion approval",
+        after.mode === "finalization" ? "Documentation scope expansion approval" : "Failure scope expansion approval",
         { point: "scope_revision_decision", additions, scopeRevision, reviewIndex },
         {
           exploration: planning.exploration,
@@ -103,7 +117,8 @@ export async function continueScopeRevisionDecision(
           decisionContext: { planning, revised, additions, evidence, scopeRevision, reviewIndex, after } satisfies ScopeRevisionDecisionContext
         },
         async () => {
-          const result = await promptHumanPlanReview(runtime, revised, "Review failure scope expansion", workflow.ctx);
+          const label = after.mode === "finalization" ? "Review documentation scope expansion" : "Review failure scope expansion";
+          const result = await promptHumanPlanReview(runtime, revised, label, workflow.ctx);
           if (!result) return undefined;
           return result.approved
             ? { action: "approve" as const }
@@ -118,7 +133,8 @@ export async function continueScopeRevisionDecision(
       }
       feedback = { source: "human", text: decision.feedback ?? "" };
     } else {
-      const review = await runAgentStep(runtime, "reviewer", "reviewing_plan", "Review failure scope revision", {
+      const reviewLabel = after.mode === "finalization" ? "Review documentation scope revision" : "Review failure scope revision";
+      const review = await runAgentStep(runtime, "reviewer", "reviewing_plan", reviewLabel, {
         reviewType: "scope_revision",
         request: workflow.request,
         exploration: planning.exploration,
@@ -150,7 +166,7 @@ export async function continueScopeRevisionDecision(
     addedFiles: additions,
     artifact
   });
-  return { ...planning, plan: revised };
+  return { ...planning, plan: revised, scopeRevisionCount: after.scopeRevisionCount } as T;
 }
 
 async function createRevision(

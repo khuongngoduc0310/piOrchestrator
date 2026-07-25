@@ -5,6 +5,8 @@ import { CONFIG_DIR_NAME } from "@earendil-works/pi-coding-agent";
 import { afterEach, describe, expect, it } from "vitest";
 import { DashboardRunRepository } from "./dashboard-run-repository.js";
 import { AGENT_NAMES, SCHEMA_VERSION, type AgentTranscriptArtifact, type WorkflowState } from "../types.js";
+import { CheckpointStore } from "../persistence/checkpoint-store.js";
+import { DEFAULT_CONFIG } from "../config/config.js";
 
 const roots: string[] = [];
 
@@ -123,6 +125,46 @@ describe("DashboardRunRepository", () => {
     expect(blocked.resumeBlockedReason).toBe("finalization started");
     expect(resumable.latestCheckpoint).toEqual(cp);
     expect(resumable.resumeBlockedReason).toBeUndefined();
+  });
+
+  it("loads the latest validated checkpoint config and tolerates runs without checkpoints", async () => {
+    const { cwd, runsDir } = await fixture();
+    const runDir = await writeRun(runsDir, "run-1");
+    const runState = state("run-1", runDir);
+    const config = structuredClone(DEFAULT_CONFIG);
+    config.checks = ["historical check"];
+    config.limits.implementationRetries = 5;
+    await new CheckpointStore(runDir, "run-1").save({
+      runId: "run-1",
+      createdAt: "2026-07-22T12:00:00.000Z",
+      workspaceDigest: "b".repeat(64),
+      workspaceRoot: cwd,
+      config,
+      configDigest: "c".repeat(64),
+      memoryMode: "disabled",
+      memoryRevision: 0,
+      memoryDigest: "d".repeat(64),
+      selectedMemoryIds: [],
+      validatedChangedFiles: [],
+      validatedFileAttestations: [],
+      baselineRepaired: false,
+      baselineContext: { hasUncommittedChanges: false, hasStagedChanges: false, untrackedFiles: [] },
+      baselineReviewContext: { summary: { hasUncommittedChanges: false, hasStagedChanges: false, untrackedFiles: [] }, artifacts: { baselineJson: "baseline.json" } },
+      lessonStatus: "skipped",
+      mutationConfirmed: false,
+      state: runState,
+      cursor: { kind: "plan_approved", continuation: null },
+      bindings: {}
+    });
+    const repository = new DashboardRunRepository(cwd);
+
+    await expect(repository.loadLatestCheckpoint("run-1")).resolves.toMatchObject({
+      checkpointNumber: 1,
+      config: { checks: ["historical check"], limits: { implementationRetries: 5 } }
+    });
+    await writeRun(runsDir, "legacy-run");
+    await expect(repository.loadLatestCheckpoint("legacy-run")).resolves.toBeUndefined();
+    await expect(repository.loadLatestCheckpoint("missing-run")).resolves.toBeUndefined();
   });
 
   it("loads persisted inspection and a matching invocation transcript", async () => {

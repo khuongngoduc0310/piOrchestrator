@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { PlannerOutput } from "../types.js";
-import { filesOutsidePlan, validateFailureScopeRevision } from "./plan-revision.js";
+import { filesOutsidePlan, validateFailureScopeRevision, validateFinalPlanRevision } from "./plan-revision.js";
 
 const plan: PlannerOutput = {
   route: "quick_implementation",
@@ -47,5 +47,25 @@ describe("failure scope revisions", () => {
     });
     mutate(revised);
     expect(() => validateFailureScopeRevision(plan, revised, ["src/App.test.tsx"])).toThrow();
+  });
+});
+
+describe("final plan revisions", () => {
+  it("accepts additions while preserving the approved scope", () => {
+    const revised = structuredClone(plan);
+    revised.tasks[0].files.push("src/NewCard.tsx");
+    expect(validateFinalPlanRevision(plan, revised, { preserveAcceptanceCriteria: true })).toBe(revised);
+  });
+
+  it("rejects removal of an approved file", () => {
+    const revised = structuredClone(plan);
+    revised.tasks[0].files = ["src/Card.tsx"];
+    expect(() => validateFinalPlanRevision(plan, revised)).toThrow("removed approved files: src/Card.test.tsx");
+  });
+
+  it("optionally preserves acceptance criteria", () => {
+    const revised = structuredClone(plan);
+    revised.acceptanceCriteria = ["Different behavior"];
+    expect(() => validateFinalPlanRevision(plan, revised, { preserveAcceptanceCriteria: true })).toThrow("changed approved acceptance criteria");
   });
 });

@@ -130,6 +130,7 @@ export interface BaselineContext {
   diffArtifact?: string;
   stagedArtifact?: string;
   statusPorcelain?: string;
+  collectionError?: string;
 }
 
 export interface BaselineReviewContext {
@@ -157,9 +158,11 @@ export interface CompletionSummary {
   checks: CheckResult[];
   attempts: number;
   baselineRepaired: boolean;
+  diagnosis?: import("./agent-task-types.js").DebuggerOutput;
   review: {
     outcome: "reviewer_approved" | "accepted_by_user" | "no_findings" | "findings_reported" | "not_run";
     evidenceCount: number;
+    evidence: Array<{ path: string; detail: string }>;
     suggestions: string[];
     blockingIssues: string[];
     revisions: number;

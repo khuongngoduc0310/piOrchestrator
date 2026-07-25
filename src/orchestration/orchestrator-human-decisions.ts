@@ -126,7 +126,7 @@ export async function requestHumanDecision<T>(
     schemaVersion: 1 as const,
     requestId: id,
     decidedAt: runtime.timestamp(),
-    source: "tui",
+    source: ctx.mode === "rpc" ? "rpc" : "tui",
     action: promptResult.action,
     feedback: promptResult.feedback
   };

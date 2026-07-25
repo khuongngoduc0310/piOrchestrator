@@ -15,6 +15,8 @@ import {
   formatBaselineReport,
   formatCancelledRun,
   formatCompletedRun,
+  formatDiagnosisForApproval,
+  formatInvestigation,
   formatDocumentationReport,
   formatFailedRun,
   formatRepositoryReview,
@@ -66,6 +68,7 @@ const sampleCompletionSummary = (overrides: Partial<CompletionSummary> = {}): Co
   review: {
     outcome: "reviewer_approved",
     evidenceCount: 2,
+    evidence: [],
     suggestions: [],
     blockingIssues: [],
     revisions: 0,
@@ -126,6 +129,79 @@ describe("session-messages", () => {
     expect(msg).toContain("Baseline repair");
     expect(msg).toContain("Missing implementation");
     expect(msg).toContain("Add the missing code");
+  });
+
+  it("formatInvestigation reports diagnosis evidence and recommendation", () => {
+    const diagnosis: DebuggerOutput = {
+      category: "implementation_defect",
+      rootCause: "A stale branch handles the request",
+      evidence: [{ path: "src/index.ts", detail: "the stale branch is reachable" }],
+      recommendedFix: "Remove the stale branch",
+      affectedFiles: ["src/index.ts"],
+      confidence: "high"
+    };
+    const msg = formatInvestigation(diagnosis);
+    expect(msg).toContain("Investigation complete");
+    expect(msg).toContain("A stale branch handles the request");
+    expect(msg).toContain("Remove the stale branch");
+    expect(msg).toContain("src/index.ts");
+  });
+
+  it("formatDiagnosisForApproval presents the evidence used to authorize a bug fix", () => {
+    const diagnosis: DebuggerOutput = {
+      category: "implementation_defect",
+      rootCause: "A stale branch handles the request",
+      evidence: [{ path: "src/index.ts", detail: "the stale branch is reachable" }],
+      recommendedFix: "Remove the stale branch",
+      affectedFiles: ["src/index.ts", "src/index.test.ts"],
+      confidence: "low"
+    };
+
+    const msg = formatDiagnosisForApproval(diagnosis);
+
+    expect(msg).toContain("Bug diagnosis");
+    expect(msg).toContain("implementation_defect");
+    expect(msg).toContain("low");
+    expect(msg).toContain("A stale branch handles the request");
+    expect(msg).toContain("the stale branch is reachable");
+    expect(msg).toContain("Remove the stale branch");
+    expect(msg).toContain("src/index.ts");
+    expect(msg).toContain("src/index.test.ts");
+  });
+
+  it("formatDiagnosisForApproval keeps mutation-relevant fields ahead of truncated evidence", () => {
+    const diagnosis: DebuggerOutput = {
+      category: "implementation_defect",
+      rootCause: "A stale branch handles the request",
+      evidence: [{ path: "src/index.ts", detail: "x".repeat(20_000) }],
+      recommendedFix: "Remove the stale branch",
+      affectedFiles: ["src/index.ts"],
+      confidence: "low"
+    };
+
+    const msg = formatDiagnosisForApproval(diagnosis);
+
+    expect(msg).toContain("Remove the stale branch");
+    expect(msg).toContain("src/index.ts");
+    expect(msg).toContain("truncated");
+  });
+
+  it("formatDiagnosisForApproval includes every affected file even when the list exceeds the report limit", () => {
+    const affectedFiles = Array.from({ length: 40 }, (_, index) => `src/${String(index).padStart(2, "0")}-${"x".repeat(220)}.ts`);
+    const diagnosis: DebuggerOutput = {
+      category: "implementation_defect",
+      rootCause: "Several generated modules share the defect",
+      evidence: [],
+      recommendedFix: "Update every affected module",
+      affectedFiles,
+      confidence: "low"
+    };
+
+    const msg = formatDiagnosisForApproval(diagnosis);
+
+    expect(msg).toContain(affectedFiles[0]);
+    expect(msg).toContain(affectedFiles.at(-1));
+    expect(msg).toContain("Update every affected module");
   });
 
   it("formatVerifiedImplementation includes changed files and check summary", () => {
@@ -272,11 +348,33 @@ describe("session-messages", () => {
       changedFiles: [],
       checks: [],
       attempts: 0,
-      review: { outcome: "findings_reported", evidenceCount: 1, suggestions: [], blockingIssues: ["finding"], revisions: 0 }
+      review: { outcome: "findings_reported", evidenceCount: 1, evidence: [{ path: "src/index.ts", detail: "missing validation" }], suggestions: ["add input check"], blockingIssues: ["finding"], revisions: 0 }
     }));
     expect(msg).toContain("Documentation: skipped for review-only route");
     expect(msg).not.toContain("Implementation attempts");
     expect(msg).not.toContain("Baseline repaired");
+    expect(msg).toContain("finding");
+    expect(msg).toContain("src/index.ts");
+    expect(msg).toContain("add input check");
+  });
+
+  it("formatCompletedRun describes investigation diagnosis without delivery claims", () => {
+    const msg = formatCompletedRun(sampleCompletionSummary({
+      route: "investigation_only",
+      changedFiles: [],
+      checks: [],
+      diagnosis: {
+        category: "implementation_defect",
+        rootCause: "A stale branch handles the request",
+        evidence: [{ path: "src/index.ts", detail: "the stale branch is reachable" }],
+        recommendedFix: "Remove the stale branch",
+        affectedFiles: ["src/index.ts"],
+        confidence: "high"
+      }
+    }));
+    expect(msg).toContain("### Diagnosis");
+    expect(msg).toContain("Remove the stale branch");
+    expect(msg).not.toContain("### Delivered");
   });
 
   it("formatCompletedRun includes warning", () => {

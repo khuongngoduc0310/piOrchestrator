@@ -1,6 +1,6 @@
 import type { PlannerOutput, PlanTask } from "../types.js";
 
-function topologicalSort(tasks: PlanTask[]): PlanTask[] {
+export function topologicalSort(tasks: PlanTask[]): PlanTask[] {
   const visited = new Set<string>();
   const result: PlanTask[] = [];
   const taskMap = new Map(tasks.map(t => [t.id, t]));

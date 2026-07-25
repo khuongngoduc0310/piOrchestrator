@@ -54,7 +54,7 @@ export class OrchestratorRuntime {
   candidateLedger?: CandidateLedger;
   validatedChangedFiles = new Set<string>();
   validatedFileAttestations = new Map<string, ValidatedFileAttestation>();
-  mutationCommitStarted = false;
+  finalizationStarted = false;
   activeTranscripts = new Map<string, AgentTranscript>();
   transcriptRevision = 0;
   private dashboardCwd?: string;
@@ -151,11 +151,18 @@ export class OrchestratorRuntime {
 
   async getRunViewModel(runId: string): Promise<OrchestratorViewModel | undefined> {
     if (this.state?.runId === runId) return this.getViewModel();
-    const state = await this.historyRepository()?.loadRun(runId);
+    const repository = this.historyRepository();
+    if (!repository) return undefined;
+    const state = await repository.loadRun(runId);
     if (!state) return undefined;
+    const historicalConfig = (await repository.loadLatestCheckpoint(runId))?.config;
+    const configSummary: ConfigSummary = historicalConfig
+      ? { status: "valid", agentCount: AGENT_NAMES.length, checkCount: historicalConfig.checks.length }
+      : { status: "missing", agentCount: AGENT_NAMES.length, checkCount: 0 };
+    const maxAttempts = Math.max(1, state.attempt, (historicalConfig?.limits.implementationRetries ?? 0) + 1);
     const elapsedEnd = state.completedAt ?? state.updatedAt;
     const elapsedMs = Math.max(0, new Date(elapsedEnd).getTime() - new Date(state.startedAt).getTime());
-    return buildRunViewModel(state, this.getConfigSummary(), state.cwd, elapsedMs, Math.max(1, state.attempt));
+    return buildRunViewModel(state, configSummary, state.cwd, elapsedMs, maxAttempts);
   }
 
   async getRunAgentInspection(runId: string, name: AgentName) {
@@ -245,6 +252,7 @@ export class OrchestratorRuntime {
     let hasStagedChanges = false;
     let diffArtifact: string | undefined;
     let stagedArtifact: string | undefined;
+    let collectionError: string | undefined;
     try {
       gitHead = execSync("git rev-parse HEAD", { cwd, stdio: "pipe", timeout: 10_000, encoding: "utf8" }).trim();
       statusPorcelain = execSync("git status --porcelain", { cwd, stdio: "pipe", timeout: 10_000, encoding: "utf8" });
@@ -264,9 +272,10 @@ export class OrchestratorRuntime {
         await store.saveRaw(stagedArtifact, staged);
         stagedDiff = staged.slice(0, 2000);
       }
-    } catch {
+    } catch (error) {
+      collectionError = messageOf(error);
     }
-    return { gitHead, hasUncommittedChanges, hasStagedChanges, diffVsHead, stagedDiff, untrackedFiles, statusPorcelain, diffArtifact, stagedArtifact };
+    return { gitHead, hasUncommittedChanges, hasStagedChanges, diffVsHead, stagedDiff, untrackedFiles, statusPorcelain, diffArtifact, stagedArtifact, collectionError };
   }
 
   async startDashboard(cwd?: string): Promise<string> {
@@ -313,7 +322,7 @@ export class OrchestratorRuntime {
   }
 
   cancel(source: "command" | "shutdown" = "command"): boolean {
-    if (!this.activeRun || !this.controller || this.controller.signal.aborted || this.mutationCommitStarted) return false;
+    if (!this.activeRun || !this.controller || this.controller.signal.aborted || this.finalizationStarted) return false;
     this.controller.abort(new WorkflowCancelledError(`Workflow cancelled by ${source}`, source));
     return true;
   }

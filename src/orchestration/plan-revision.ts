@@ -40,3 +40,21 @@ export function validateFailureScopeRevision(
 
   return revisedPlan;
 }
+
+export function validateFinalPlanRevision(
+  previousPlan: PlannerOutput,
+  revisedPlan: PlannerOutput,
+  options: { preserveAcceptanceCriteria?: boolean } = {}
+): PlannerOutput {
+  if (revisedPlan.route !== previousPlan.route) throw new Error("Final plan revision changed the selected route");
+  if (options.preserveAcceptanceCriteria
+    && JSON.stringify(revisedPlan.acceptanceCriteria) !== JSON.stringify(previousPlan.acceptanceCriteria)) {
+    throw new Error("Final plan revision changed approved acceptance criteria");
+  }
+
+  const previousFiles = deriveMutationPathScope(previousPlan).planFiles;
+  const revisedFiles = new Set(deriveMutationPathScope(revisedPlan).planFiles);
+  const removed = previousFiles.filter(file => !revisedFiles.has(file));
+  if (removed.length > 0) throw new Error(`Final plan revision removed approved files: ${removed.join(", ")}`);
+  return revisedPlan;
+}

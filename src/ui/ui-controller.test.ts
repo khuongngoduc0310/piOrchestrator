@@ -102,7 +102,7 @@ describe("renderViewModelLines", () => {
     expect(lines[lines.length - 1]).toMatch(/┘/);
     const joined = lines.join(" ");
     expect(joined).toContain("[accent]●[/]");
-    expect(joined).toContain("Project checks are not configured");
+    expect(joined).toContain("Check setup is deferred until a mutation route is approved");
     expect(joined).toContain("/orchestrate");
     expect(joined).not.toContain("<request>");
   });
@@ -135,12 +135,21 @@ describe("renderViewModelLines", () => {
     expect(joined).toContain("0:30");
   });
 
-  it("renders completed mode with check count", () => {
-    const run = makeRun({ runStatus: "completed", stage: "completed", elapsedMs: 30000 });
+  it("does not claim configured checks passed for read-only completion", () => {
+    const run = makeRun({ route: "review_only", runStatus: "completed", stage: "completed", elapsedMs: 30000 });
     const vm = makeVM({ mode: "completed", run, agents: allIdleAgents(), recentSteps: makeSteps(8) });
     const lines = renderViewModelLines(vm, m);
     const joined = lines.join(" ");
-    expect(joined).toContain("[success]checks passed[/]");
+    expect(joined).not.toContain("checks passed");
+  });
+
+  it("renders paused mode as paused", () => {
+    const run = makeRun({ runStatus: "paused", stage: "paused", waitingFor: "Approval" });
+    const vm = makeVM({ mode: "paused", run, agents: allIdleAgents(), recentSteps: makeSteps(2) });
+    const joined = renderViewModelLines(vm, m).join(" ");
+    expect(joined).toContain("<b>Paused</>");
+    expect(joined).not.toContain("<b>Cancelled</>");
+    expect(statusText(vm, m)).toContain("orchestrator: paused");
   });
 
   it("renders failed mode with error color", () => {

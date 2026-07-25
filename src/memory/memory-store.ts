@@ -1,7 +1,8 @@
 import { createHash, randomUUID } from "node:crypto";
 import { hostname } from "node:os";
-import { mkdir, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
+import { mkdir, readFile, rm, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
+import { atomicReplace } from "../persistence/atomic-write.js";
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
 import {
   MEMORY_SCHEMA_VERSION,
@@ -233,14 +234,7 @@ async function writeMemory(cwd: string, document: MemoryDocument): Promise<void>
   const json = serializeMemory(validated);
   const dir = storeDir();
   await mkdir(dir, { recursive: true });
-  const temporary = path.join(dir, `.${projectKey(cwd)}.${process.pid}.${randomUUID()}.tmp`);
-  try {
-    await writeFile(temporary, json, "utf8");
-    await rename(temporary, getMemoryStorePath(cwd));
-  } catch (error) {
-    await rm(temporary, { force: true }).catch(() => undefined);
-    throw error;
-  }
+  await atomicReplace(getMemoryStorePath(cwd), json);
 }
 
 export async function getMemoryRevision(cwd: string): Promise<number> {

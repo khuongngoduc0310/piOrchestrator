@@ -1,36 +1,145 @@
 import { collectWorktreeChanges, removeWorktree, syncWorktreeChanges, verifySynchronizedSource } from "../workspace/worktree.js";
 import { computeFinalChecksDigest } from "../memory/memory-validation.js";
 import { formatCompletedRun } from "../ui/session-messages.js";
-import type { CompletionSummary } from "../types.js";
-import type { ImplementationPlanningResult, PlanningResult, ReadOnlyReviewResult, ReviewResult, SpecializedMutationResult, WorkflowContext } from "./orchestrator-context.js";
+import type { CompletionSummary, PlannerOutput, ReviewOutput } from "../types.js";
+import type { CheckResult, DebuggerOutput, DocumenterOutput } from "../types.js";
+import type { ImplementationPlanningResult, InvestigationResult, PlanningResult, ReadOnlyReviewResult, ReviewResult, SpecializedMutationResult, WorkflowContext } from "./orchestrator-context.js";
 import type { OrchestratorRuntime } from "./orchestrator-runtime.js";
 import { allGreen, EXTENSION_VERSION, messageOf } from "./orchestrator-helpers.js";
 import { runCheckStep, validateFinalDirectWorkspace, validateFinalWorktreeChanges } from "./orchestrator-workspace.js";
-import { hydrateLessonPreparation, persistAndPromoteLessons, prepareLessons, type SerializedLessonPreparation } from "./orchestrator-lessons.js";
+import { hydrateLessonPreparation, persistAndPromoteLessons, prepareLessons, serializeLessonPreparation, type LessonPreparation, type SerializedLessonPreparation } from "./orchestrator-lessons.js";
 import { persist, publishSessionMessage, throwIfAborted, transition } from "./orchestrator-state.js";
 import { saveWorkflowCheckpoint } from "./orchestrator-checkpoints.js";
-import type { CheckResult, DocumenterOutput } from "../types.js";
 import { parseDebuggerOutput, parseDocumenterOutput, parsePlannerOutput } from "../validation.js";
 import { runAgentStep } from "./orchestrator-agent-step.js";
 import { assertDocumenterComplete } from "./mutation-completion.js";
-import { deriveRoleMutationPaths } from "../workspace/workspace-guard.js";
+import { deriveRoleMutationPaths, isDocumentationPath } from "../workspace/workspace-guard.js";
 import { CheckFailureError } from "./workflow-errors.js";
 import { runDurableHumanGate } from "./orchestrator-human-gates.js";
 import { runReviewPhase } from "./orchestrator-review.js";
 import { runImplementationPhase } from "./orchestrator-implementation.js";
-import type { PlannerOutput } from "../types.js";
+import { filesOutsidePlan, validateFailureScopeRevision, validateFinalPlanRevision } from "./plan-revision.js";
+import { resolveParticipationPolicy, requiresHumanDecision } from "./participation-policy.js";
+import { reviseImplementationScope, type DocumentationScopePhase } from "./orchestrator-scope-revision.js";
+import { consumeScopeRevision } from "./scope-revision-budget.js";
+import { resolveAgentBlocker } from "./orchestrator-resolution.js";
+import { runAgentStepWithResolution } from "./orchestrator-resolution-coordinator.js";
 
 export type FinalizationContinuation =
-  | { point: "documenter_completed"; documentation: DocumenterOutput }
-  | { point: "lessons_screened"; preparation: SerializedLessonPreparation }
-  | { point: "final_checks_passed"; preparation: SerializedLessonPreparation; finalChecks: CheckResult[] }
+  | { point: "documenter_completed"; documentation: DocumenterOutput; review: ReviewResult }
+  | { point: "lessons_screened"; preparation: SerializedLessonPreparation; review: ReviewResult }
+  | { point: "final_checks_passed"; preparation: SerializedLessonPreparation; finalChecks: CheckResult[]; review: ReviewResult }
   | {
       point: "final_delivery";
       preparation: SerializedLessonPreparation;
       finalChecks: CheckResult[];
       changeRound: number;
+      review: ReviewResult;
       decision?: { action: "finish" | "request_changes"; feedback?: string };
     };
+
+async function runDocumenterWithScopeExpansion(
+  runtime: OrchestratorRuntime,
+  workflow: WorkflowContext,
+  review: ReviewResult,
+  restoredDocumentation?: DocumenterOutput
+): Promise<{ review: ReviewResult; documentation: DocumenterOutput }> {
+  let currentReview = review;
+  const { request, ctx, config } = workflow;
+  const { plan, baseline, codeReview, reviewApprovalSource, finalImplChecks, tester } = currentReview;
+  for (let attempts = 0; attempts <= config.limits.planRevisions; attempts++) {
+    let documentation: DocumenterOutput;
+    if (restoredDocumentation) {
+      documentation = restoredDocumentation;
+      restoredDocumentation = undefined;
+    } else {
+      const coordResult = await runAgentStepWithResolution(
+        runtime, workflow, currentReview,
+        "documenter", "documenting", "Update documentation and propose lessons",
+        {
+          action: "document",
+          request,
+          plan: currentReview.plan,
+          baselineChecks: currentReview.baseline,
+          codeReview,
+          approvalSource: reviewApprovalSource,
+          implementationChecks: currentReview.finalImplChecks,
+          builderOutputs: runtime.builderSessionOutputs,
+          tester
+        },
+        workflow.mutationCwd, ctx,
+        parseDocumenterOutput,
+        { mutationPlan: currentReview.plan }
+      );
+      documentation = coordResult.output as DocumenterOutput;
+      if (coordResult.resolutionRecord?.status === "resolved") {
+        currentReview = { ...coordResult.planning, codeReview, reviewApprovalSource, priorCodeReviews: currentReview.priorCodeReviews, finalImplChecks: currentReview.finalImplChecks, tester: currentReview.tester };
+      }
+    }
+    if (!documentation.blocker) {
+      assertDocumenterComplete(documentation);
+      await saveWorkflowCheckpoint(runtime, workflow, "documenter_completed", { review: currentReview, documentation }, {
+        exploration: currentReview.exploration,
+        plan: currentReview.plan,
+        baselineChecks: currentReview.baseline,
+        tester: currentReview.tester,
+        builderOutputs: runtime.builderSessionOutputs,
+        implementationChecks: currentReview.finalImplChecks,
+        codeReview,
+        priorCodeReviews: currentReview.priorCodeReviews,
+        reviewApprovalSource
+      });
+      return { review: currentReview, documentation };
+    }
+    if (documentation.blocker.kind !== "scope") {
+      continue;
+    }
+    const additions = filesOutsidePlan(currentReview.plan, documentation.blocker.requiredFiles);
+    if (additions.length === 0) throw new Error("Documenter scope blocker requested no files outside the approved plan");
+    validateDocumentationAdditions(additions);
+    const newScope = consumeScopeRevision(currentReview.scopeRevisionCount, config.limits.planRevisions, "during finalization");
+    const after: DocumentationScopePhase = { phase: "initial_documentation", blockedDocumentation: documentation, changeRound: 0 };
+    currentReview = await reviseImplementationScope(
+      runtime, workflow, currentReview, additions,
+      { checks: currentReview.finalImplChecks, blocker: documentation.blocker },
+      newScope,
+      { mode: "finalization", scopeRevisionCount: newScope, documentation: after }
+    );
+  }
+  throw new Error("Documenter scope revision was not approved within the plan revision limit");
+}
+
+function validateDocumentationAdditions(additions: readonly string[]): void {
+  const nonDoc = additions.filter(file => !isDocumentationPath(file));
+  if (nonDoc.length > 0) throw new Error(`Documenter scope blocker requested non-documentation files: ${nonDoc.join(", ")}`);
+}
+
+async function resolveDocumenterScopeBlockOnRepair(
+  runtime: OrchestratorRuntime,
+  workflow: WorkflowContext,
+  review: ReviewResult,
+  documentation: DocumenterOutput,
+  preparation: SerializedLessonPreparation,
+  failedChecks: CheckResult[],
+  diagnosis: DebuggerOutput,
+  attempt: number
+): Promise<ReviewResult> {
+  if (!documentation.blocker || documentation.blocker.kind !== "scope") {
+    throw new Error("resolveDocumenterScopeBlockOnRepair called without a scope blocker");
+  }
+  const { config } = workflow;
+  const additions = filesOutsidePlan(review.plan, documentation.blocker.requiredFiles);
+  if (additions.length === 0) throw new Error("Documenter repair scope blocker requested no files outside the approved plan");
+  validateDocumentationAdditions(additions);
+  const newScope = consumeScopeRevision(review.scopeRevisionCount, config.limits.planRevisions, "during finalization");
+  const after: DocumentationScopePhase = { phase: "repair_checks", blockedDocumentation: documentation, preparation, failedChecks, diagnosis, attempt, changeRound: 0 };
+  return reviseImplementationScope(
+    runtime, workflow, review, additions,
+    { checks: failedChecks, diagnosis, blocker: documentation.blocker },
+    newScope,
+    { mode: "finalization", scopeRevisionCount: newScope, documentation: after }
+  );
+}
 
 export async function runFinalizationPhase(
   runtime: OrchestratorRuntime,
@@ -40,10 +149,23 @@ export async function runFinalizationPhase(
   inheritedChangeRound = 0
 ): Promise<void> {
   const { request, ctx, config, store } = workflow;
-  const { plan, tester, codeReview, reviewApprovalSource, priorCodeReviews } = review;
-  let lessonPreparation = continuation?.point === "lessons_screened" || continuation?.point === "final_checks_passed" || continuation?.point === "final_delivery"
-    ? hydrateLessonPreparation(continuation.preparation)
-    : await prepareLessons(runtime, workflow, review, continuation?.point === "documenter_completed" ? continuation.documentation : undefined);
+  let currentReview = continuation?.review ?? review;
+  let documentation: DocumenterOutput | undefined;
+  let lessonPreparation: LessonPreparation | undefined;
+  if (continuation?.point === "documenter_completed") {
+    documentation = continuation.documentation;
+  } else if (continuation?.point === "lessons_screened" || continuation?.point === "final_checks_passed" || continuation?.point === "final_delivery") {
+    lessonPreparation = hydrateLessonPreparation(continuation.preparation);
+    documentation = lessonPreparation.documentation;
+  }
+  if (!documentation) {
+    const result = await runDocumenterWithScopeExpansion(runtime, workflow, currentReview, undefined);
+    currentReview = result.review;
+    documentation = result.documentation;
+  }
+  if (!lessonPreparation) {
+    lessonPreparation = await prepareLessons(runtime, workflow, currentReview, documentation);
+  }
   let finalChecks = continuation?.point === "final_checks_passed" || continuation?.point === "final_delivery" ? continuation.finalChecks : undefined;
   if (!finalChecks) {
     const maxAttempts = Math.max(1, config.limits.implementationRetries + 1);
@@ -57,50 +179,79 @@ export async function runFinalizationPhase(
       const diagnosis = await runAgentStep(runtime, "debugger", "debugging", "Diagnose final check failures", {
         action: "diagnose_verification",
         request,
-        plan,
+        plan: currentReview.plan,
         checks: finalChecks,
         phase: "final",
         attempt
       }, workflow.mutationCwd, ctx, parseDebuggerOutput, { attempt });
-      const authorized = new Set(deriveRoleMutationPaths("documenter", plan));
+      const authorized = new Set(deriveRoleMutationPaths("documenter", currentReview.plan));
       const repairable = diagnosis.affectedFiles.length > 0
         && diagnosis.affectedFiles.every(file => authorized.has(file))
         && !["environment_error", "tooling_error", "unknown"].includes(diagnosis.category);
       if (!repairable || attempt === maxAttempts) {
         throw new CheckFailureError("Final checks", finalChecks.filter(check => !check.passed).map(check => check.command), diagnosis);
       }
-      const documentation = await runAgentStep(runtime, "documenter", "documenting", "Repair documentation check failures", {
-        action: "repair_checks",
-        request,
-        plan,
-        checks: finalChecks,
-        diagnosis,
-        previous: lessonPreparation.documentation,
-        attempt
-      }, workflow.mutationCwd, ctx, parseDocumenterOutput, { attempt, mutationPlan: plan });
-      assertDocumenterComplete(documentation);
-      lessonPreparation = await prepareLessons(runtime, workflow, review, documentation);
+      const previousDocumentation = lessonPreparation.documentation;
+      const repairResult = await runAgentStepWithResolution(
+        runtime, workflow, currentReview,
+        "documenter", "documenting", "Repair documentation check failures",
+        {
+          action: "repair_checks",
+          request,
+          plan: currentReview.plan,
+          checks: finalChecks,
+          diagnosis,
+          previous: lessonPreparation.documentation,
+          attempt
+        },
+        workflow.mutationCwd, ctx, parseDocumenterOutput,
+        { attempt, mutationPlan: currentReview.plan }
+      );
+      const repairOutput = repairResult.output as DocumenterOutput;
+      if (repairResult.resolutionRecord?.status === "resolved") {
+        currentReview = { ...repairResult.planning, codeReview: currentReview.codeReview, reviewApprovalSource: currentReview.reviewApprovalSource, priorCodeReviews: currentReview.priorCodeReviews, finalImplChecks: currentReview.finalImplChecks, tester: currentReview.tester };
+        continue;
+      }
+      if (repairOutput.blocker) {
+        if (repairOutput.blocker.kind === "scope") {
+          currentReview = await resolveDocumenterScopeBlockOnRepair(
+            runtime, workflow, currentReview, repairOutput,
+            lessonPreparation ? serializeLessonPreparation(lessonPreparation) : { documentation: repairOutput, proposedCandidates: [], duplicateCandidateIds: [], machineEligibleCount: 0, machineRejectedCount: 0, duplicateCount: 0 },
+            finalChecks, diagnosis, attempt
+          );
+          attempt--;
+          continue;
+        }
+        continue;
+      }
+      assertDocumenterComplete(repairOutput);
+      documentation = {
+        ...repairOutput,
+        changedFiles: [...new Set([...previousDocumentation.changedFiles, ...repairOutput.changedFiles])]
+      };
+      lessonPreparation = await prepareLessons(runtime, workflow, currentReview, documentation);
     }
   }
   if (!finalChecks || !allGreen(finalChecks, config.checks.length)) throw new Error("Final checks did not reach a verified state");
   if (continuation?.point !== "final_checks_passed" && continuation?.point !== "final_delivery") {
     await saveWorkflowCheckpoint(runtime, workflow, "final_checks_passed", {
-      review,
+      review: currentReview,
       preparation: { ...lessonPreparation, duplicateCandidateIds: [...lessonPreparation.duplicateCandidateIds] },
       finalChecks
     }, {
-      exploration: review.exploration,
-      plan,
-      baselineChecks: review.baseline,
-      tester,
+      exploration: currentReview.exploration,
+      plan: currentReview.plan,
+      baselineChecks: currentReview.baseline,
+      tester: currentReview.tester,
       builderOutputs: runtime.builderSessionOutputs,
-      implementationChecks: review.finalImplChecks,
-      codeReview,
-      priorCodeReviews,
-      reviewApprovalSource
+      implementationChecks: currentReview.finalImplChecks,
+      codeReview: currentReview.codeReview,
+      priorCodeReviews: currentReview.priorCodeReviews,
+      reviewApprovalSource: currentReview.reviewApprovalSource
     });
   }
-  if (config.humanInTheLoop.importantDecisions) {
+  const policy = resolveParticipationPolicy(config);
+  if (requiresHumanDecision(policy, "final_delivery")) {
     const changeRound = continuation?.point === "final_delivery" ? continuation.changeRound : inheritedChangeRound;
     const decision = continuation?.point === "final_delivery" && continuation.decision
       ? continuation.decision
@@ -111,19 +262,19 @@ export async function runFinalizationPhase(
           "Final delivery approval",
           { point: "final_delivery", mode: "review", changeRound },
           {
-            exploration: review.exploration,
-            plan,
-            baselineChecks: review.baseline,
-            tester,
+            exploration: currentReview.exploration,
+            plan: currentReview.plan,
+            baselineChecks: currentReview.baseline,
+            tester: currentReview.tester,
             builderOutputs: runtime.builderSessionOutputs,
-            implementationChecks: review.finalImplChecks,
+            implementationChecks: currentReview.finalImplChecks,
             documentation: lessonPreparation.documentation,
-            codeReview,
-            priorCodeReviews,
-            reviewApprovalSource,
+            codeReview: currentReview.codeReview,
+            priorCodeReviews: currentReview.priorCodeReviews,
+            reviewApprovalSource: currentReview.reviewApprovalSource,
             decisionContext: {
               mode: "review",
-              review,
+              review: currentReview,
               preparation: { ...lessonPreparation, duplicateCandidateIds: [...lessonPreparation.duplicateCandidateIds] },
               finalChecks,
               changeRound
@@ -131,7 +282,7 @@ export async function runFinalizationPhase(
           },
           async signal => {
             const answer = await ctx.ui.select(
-              `Final checks are green. Deliver ${plan.summary}?`,
+              `Final checks are green. Deliver ${currentReview.plan.summary}?`,
               ["Finish delivery", "Request changes", "Cancel workflow"],
               { signal }
             );
@@ -144,7 +295,7 @@ export async function runFinalizationPhase(
           result => ({ action: result.action === "finish" ? "finish" : "request_changes", feedback: result.feedback })
         );
     if (decision.action === "request_changes") {
-      await applyFinalChangeRequest(runtime, workflow, review, decision.feedback ?? "", changeRound + 1);
+      await applyFinalChangeRequest(runtime, workflow, currentReview, decision.feedback ?? "", changeRound + 1);
       return;
     }
   }
@@ -171,26 +322,27 @@ export async function runFinalizationPhase(
     };
   }
   const reportedChanged = [...new Set([
-    ...(tester?.changedFiles ?? []),
+    ...(currentReview.tester?.changedFiles ?? []),
     ...runtime.builderSessionOutputs.flatMap(output => output.changedFiles),
     ...lessonPreparation.documentation.changedFiles
   ])];
   const allChanged = synchronizedFiles ?? (runtime.enforceWorkspacePolicy ? [...runtime.validatedChangedFiles].sort() : reportedChanged);
   const completionSummary: CompletionSummary = {
     request,
-    route: plan.route,
-    planSummary: plan.summary,
+    route: currentReview.plan.route,
+    planSummary: currentReview.plan.summary,
     changedFiles: allChanged,
-    testsAdded: tester?.testsAdded ?? [],
+    testsAdded: currentReview.tester?.testsAdded ?? [],
     checks: finalChecks,
     attempts: runtime.requireState().attempt,
     baselineRepaired: runtime.baselineRepaired,
     review: {
-      outcome: reviewApprovalSource === "user_override" ? "accepted_by_user" : "reviewer_approved",
-      evidenceCount: codeReview.evidence.length,
-      suggestions: codeReview.suggestions,
-      blockingIssues: codeReview.blockingIssues,
-      revisions: priorCodeReviews.length
+      outcome: currentReview.reviewApprovalSource === "user_override" ? "accepted_by_user" : "reviewer_approved",
+      evidenceCount: currentReview.codeReview.evidence.length,
+      evidence: currentReview.codeReview.evidence,
+      suggestions: currentReview.codeReview.suggestions,
+      blockingIssues: currentReview.codeReview.blockingIssues,
+      revisions: currentReview.priorCodeReviews.length
     },
     documentation: {
       changed: lessonPreparation.documentation.changedFiles.length > 0,
@@ -253,11 +405,9 @@ export async function applyFinalChangeRequest(
     previousPlan: review.plan,
     feedback: { source: "human", text: feedback }
   }, workflow.mutationCwd, workflow.ctx, parsePlannerOutput, { revision: changeRound });
-  if (plan.route !== workflow.route) throw new Error(`Planner returned route ${plan.route}; user selected ${workflow.route}`);
-  if (workflow.route === "quick_implementation"
-    && JSON.stringify(plan.acceptanceCriteria) !== JSON.stringify(review.plan.acceptanceCriteria)) {
-    throw new Error("A quick implementation final revision cannot change acceptance criteria because that route does not run Tester");
-  }
+  validateFinalPlanRevision(review.plan, plan, {
+    preserveAcceptanceCriteria: workflow.route === "quick_implementation"
+  });
   if (!approved) {
     await runDurableHumanGate(
       runtime,
@@ -304,7 +454,7 @@ export async function applyFinalChangeRequest(
 export async function runReadOnlyFinalizationPhase(
   runtime: OrchestratorRuntime,
   workflow: WorkflowContext,
-  review: ReadOnlyReviewResult | PlanningResult
+  review: ReadOnlyReviewResult | InvestigationResult | PlanningResult
 ): Promise<void> {
   const { request, ctx, store } = workflow;
   if (!["review_only", "investigation_only", "planning_only"].includes(workflow.route)) {
@@ -320,9 +470,11 @@ export async function runReadOnlyFinalizationPhase(
     checks: [],
     attempts: 0,
     baselineRepaired: false,
+    ...(workflow.route === "investigation_only" && "diagnosis" in review ? { diagnosis: review.diagnosis } : {}),
     review: {
       outcome: "codeReview" in review ? (review.codeReview.decision === "approved" ? "no_findings" : "findings_reported") : "not_run",
       evidenceCount: "codeReview" in review ? review.codeReview.evidence.length : 0,
+      evidence: "codeReview" in review ? review.codeReview.evidence : [],
       suggestions: "codeReview" in review ? review.codeReview.suggestions : [],
       blockingIssues: "codeReview" in review ? review.codeReview.blockingIssues : [],
       revisions: 0
@@ -351,10 +503,10 @@ export async function runReadOnlyFinalizationPhase(
   const state = runtime.requireState();
   state.status = "completed";
   state.completedAt = runtime.timestamp();
-  await transition(runtime, "completed", undefined, `${workflow.route} workflow completed`, ctx);
+  await transition(runtime, "completed", undefined, workflow.route === "investigation_only" ? "Investigation completed" : `${workflow.route} workflow completed`, ctx);
   publishSessionMessage(runtime, formatCompletedRun(completionSummary, state.dashboardUrl, state.runDir, state.warning, EXTENSION_VERSION), { kind: "completed" });
   await store.flush();
-  ctx.ui.notify("piOrchestrator review completed", "info");
+  ctx.ui.notify(workflow.route === "investigation_only" ? "piOrchestrator investigation completed" : "piOrchestrator review completed", "info");
 }
 
 export async function runSpecializedMutationFinalization(
@@ -376,7 +528,7 @@ export async function runSpecializedMutationFinalization(
     checks: finalChecks,
     attempts: 0,
     baselineRepaired: false,
-    review: { outcome: "not_run", evidenceCount: 0, suggestions: [], blockingIssues: [], revisions: 0 },
+    review: { outcome: "not_run", evidenceCount: 0, evidence: [], suggestions: [], blockingIssues: [], revisions: 0 },
     documentation: result.route === "documentation_only"
       ? { changed: result.documentation.changedFiles.length > 0, summary: result.documentation.summary }
       : { changed: false, summary: "Skipped for tests_only route" },
@@ -394,8 +546,7 @@ async function synchronizeFinalizedMutation(
 ): Promise<{ synchronizedFiles?: string[]; finalChecksDigest: string }> {
   const { ctx, store } = workflow;
   throwIfAborted(runtime);
-  runtime.requireState().resumeBlockedReason = "Finalization has started; uncertain side effects are never replayed";
-  await persist(runtime, ctx);
+  runtime.finalizationStarted = true;
   const finalChecksDigest = computeFinalChecksDigest(finalChecks);
   await store.saveJson("finalization-intent.json", {
     runId: workflow.runId,
@@ -405,6 +556,9 @@ async function synchronizeFinalizedMutation(
     finalChecksDigest
   });
   await store.flush();
+  runtime.requireState().resumeBlockedReason = "Finalization has started; uncertain side effects are never replayed";
+  await persist(runtime, ctx);
+  await store.flush();
   let synchronizedFiles: string[] | undefined;
   if (workflow.worktreeHandle) {
     const activeWorktree = workflow.worktreeHandle;
@@ -412,7 +566,6 @@ async function synchronizeFinalizedMutation(
     await store.saveRaw("worktree-final.patch", pendingChanges.patch.toString("utf8"));
     throwIfAborted(runtime);
     if (runtime.enforceWorkspacePolicy) await validateFinalWorktreeChanges(runtime, activeWorktree, pendingChanges.changedFiles);
-    runtime.mutationCommitStarted = true;
     try {
       const synchronized = await syncWorktreeChanges(activeWorktree, pendingChanges);
       await verifySynchronizedSource(activeWorktree, synchronized);

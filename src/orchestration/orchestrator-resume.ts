@@ -4,7 +4,7 @@ import { CheckpointStore, readSafeArtifact } from "../persistence/checkpoint-sto
 import { validateCheckResults, validateCheckResultsAgainstCommands, validateWorkflowStateForResume } from "../persistence/checkpoint-validation.js";
 import type { WorkflowCheckpoint } from "../persistence/checkpoint-types.js";
 import { loadConfig } from "../config/config.js";
-import type { ImplementationPlanningResult, ImplementationResult, PlanningResult, ReadOnlyReviewResult, ReviewResult, SpecializedMutationResult, WorkflowContext } from "./orchestrator-context.js";
+import type { ImplementationPlanningResult, ImplementationResult, InvestigationResult, PlanningResult, ReadOnlyReviewResult, ReviewResult, SpecializedMutationResult, WorkflowContext } from "./orchestrator-context.js";
 import { applyFinalChangeRequest, runFinalizationPhase, runReadOnlyFinalizationPhase, type FinalizationContinuation } from "./orchestrator-finalization.js";
 import { requestImplementationBudgetExtension, runImplementationPhase, type ImplementationContinuation } from "./orchestrator-implementation.js";
 import { hydrateLessonPreparation, type SerializedLessonPreparation } from "./orchestrator-lessons.js";
@@ -15,8 +15,10 @@ import type { OrchestratorRuntime } from "./orchestrator-runtime.js";
 import { fail, persist } from "./orchestrator-state.js";
 import { WorkflowPausedError } from "./workflow-errors.js";
 import { runCheckStep } from "./orchestrator-workspace.js";
-import { runSelectedRoute } from "./orchestrator-routes.js";
+import { continueBugFixAfterDiagnosis, runSelectedRoute } from "./orchestrator-routes.js";
+import { requestBugDiagnosisApproval } from "./orchestrator-human-gates.js";
 import { applySpecializedFinalChangeRequest, runSpecializedMutationRoute } from "./orchestrator-specialized-routes.js";
+import { resolveAgentBlocker } from "./orchestrator-resolution.js";
 import { RunStore, type RunLease } from "../persistence/store.js";
 import type { BuilderOutput, DocumenterOutput, ReviewApprovalSource, ReviewOutput, WorkflowState } from "../types.js";
 import {
@@ -38,6 +40,8 @@ import { assertBuilderComplete, assertDocumenterComplete, assertTesterComplete }
 import type { HumanDecisionAction, PendingHumanDecision, RecordedHumanDecision } from "./human-decision-types.js";
 import { continueScopeRevisionDecision, type ScopeRevisionDecisionContext } from "./orchestrator-scope-revision.js";
 import { validateFailureScopeRevision } from "./plan-revision.js";
+import { requiredAgentsForResume, requiredAgentsForRoute } from "./route-preflight.js";
+import { resolveParticipationPolicy, requiresHumanDecision } from "./participation-policy.js";
 
 const MAX_STATE_BYTES = 16 * 1024 * 1024;
 
@@ -76,6 +80,28 @@ export async function resumeWorkflow(
       throw error;
     }
 
+    const pendingDiagnosisDecision = checkpoint.cursor.kind === "human_decision_pending"
+      && humanDecisionContinuation(checkpoint.cursor.continuation, false).request.kind === "bug_diagnosis_approval";
+    const diagnosisReadyDecision = checkpoint.cursor.kind === "bug_diagnosis_ready"
+      && requiresHumanDecision(
+        resolveParticipationPolicy(checkpoint.config),
+        "diagnosis_approval",
+        { confidence: validateDebuggerOutput(objectValue(checkpoint.cursor.continuation, "bug diagnosis-ready checkpoint").diagnosis).confidence }
+      );
+    const requiredAgents = pendingDiagnosisDecision || diagnosisReadyDecision
+      ? []
+      : requiredAgentsForResume(checkpoint.state.route!, checkpoint.config, checkpoint.cursor.kind);
+    if (requiredAgents.length > 0) {
+      await runtime.agents.preflight(
+        checkpoint.config,
+        cwd,
+        runtime.extensionRoot,
+        controller.signal,
+        checkpoint.config.limits.agentTimeoutMs,
+        requiredAgents
+      );
+    }
+
     runtime.baselineContext = checkpoint.baselineContext;
     runtime.baselineReviewContext = checkpoint.baselineReviewContext;
     runtime.baselineRepaired = checkpoint.baselineRepaired;
@@ -85,7 +111,7 @@ export async function resumeWorkflow(
     runtime.validatedFileAttestations = new Map(checkpoint.validatedFileAttestations.map(attestation => [attestation.path, attestation]));
     runtime.selectedMemoryIds = new Set(checkpoint.selectedMemoryIds);
     runtime.explorerRelevantFiles = checkpoint.bindings.exploration?.relevantFiles.slice() ?? [];
-    runtime.mutationCommitStarted = false;
+    runtime.finalizationStarted = false;
 
     const workflow: WorkflowContext = {
       route: checkpoint.state.route!,
@@ -228,6 +254,13 @@ function validateContinuation(checkpoint: WorkflowCheckpoint): void {
     case "plan_approved": planningResult(value); return;
     case "checks_configured": planningResult(value); return;
     case "mutation_ready": implementationPlanningResult(value); return;
+    case "bug_diagnosis_ready": {
+      const item = objectValue(value, "bug diagnosis-ready checkpoint");
+      const planning = implementationPlanningResult(item.planning);
+      if (planning.plan.route !== "bug_fix") throw new Error("Bug diagnosis-ready checkpoint requires the bug_fix route");
+      validateDebuggerOutput(item.diagnosis);
+      return;
+    }
     case "bug_diagnosed": {
       const item = objectValue(value, "bug diagnosis checkpoint");
       implementationPlanningResult(item.planning);
@@ -286,6 +319,14 @@ function validateContinuation(checkpoint: WorkflowCheckpoint): void {
         nonNegativeInteger(item.allowedReviewFixes, "allowedReviewFixes");
         if (item.failureChecks !== undefined) validateCheckResults(item.failureChecks);
         if (item.failureDiagnosis !== undefined) validateDebuggerOutput(item.failureDiagnosis);
+      } else if (item.mode === "finalization") {
+        reviewResult(item.review);
+        validateDocumenterOutput(item.documentation);
+        if (item.changeRound !== undefined) nonNegativeInteger(item.changeRound, "changeRound");
+        if (item.preparation !== undefined) serializedLessonPreparation(item.preparation);
+        if (item.failedChecks !== undefined) validateCheckResults(item.failedChecks);
+        if (item.diagnosis !== undefined) validateDebuggerOutput(item.diagnosis);
+        if (item.attempt !== undefined) positiveInteger(item.attempt, "attempt");
       } else {
         throw new Error("Unsupported scope revision checkpoint mode");
       }
@@ -326,6 +367,7 @@ function validateContinuation(checkpoint: WorkflowCheckpoint): void {
       return;
     }
     case "repository_reviewed": readOnlyReviewResult(value); return;
+    case "investigation_completed": investigationResult(value); return;
     case "route_agent_completed": specializedMutationResult(value); return;
     case "route_final_checks_passed": {
       const item = objectValue(value, "specialized final-check checkpoint");
@@ -374,6 +416,22 @@ async function continueFromCheckpoint(runtime: OrchestratorRuntime, workflow: Wo
     case "mutation_ready": {
       const planning = implementationPlanningResult(continuation);
       await runSelectedRoute(runtime, workflow, planning, { prepared: true });
+      return;
+    }
+    case "bug_diagnosis_ready": {
+      const value = objectValue(continuation, "bug diagnosis-ready checkpoint");
+      const planning = implementationPlanningResult(value.planning);
+      const diagnosis = validateDebuggerOutput(value.diagnosis);
+      const approvalRequired = requiresHumanDecision(
+        resolveParticipationPolicy(workflow.config),
+        "diagnosis_approval",
+        { confidence: diagnosis.confidence }
+      );
+      if (approvalRequired) {
+        await requestBugDiagnosisApproval(runtime, workflow, planning, diagnosis);
+        await preflightRemainingRoute(runtime, workflow);
+      }
+      await continueBugFixAfterDiagnosis(runtime, workflow, planning, diagnosis, approvalRequired);
       return;
     }
     case "bug_diagnosed": {
@@ -456,6 +514,8 @@ async function continueFromCheckpoint(runtime: OrchestratorRuntime, workflow: Wo
           , failureChecks: value.failureChecks === undefined ? undefined : validateCheckResults(value.failureChecks)
           , failureDiagnosis: value.failureDiagnosis === undefined ? undefined : validateDebuggerOutput(value.failureDiagnosis)
         });
+      } else if (value.mode === "finalization") {
+        review = reviewResult(value.review);
       } else {
         throw new Error("Unsupported scope revision checkpoint mode");
       }
@@ -490,7 +550,7 @@ async function continueFromCheckpoint(runtime: OrchestratorRuntime, workflow: Wo
     case "documenter_completed": {
       const value = objectValue(continuation, "documenter checkpoint");
       const review = reviewResult(value.review);
-      const next: FinalizationContinuation = { point: "documenter_completed", documentation: validateDocumenterOutput(value.documentation) };
+      const next: FinalizationContinuation = { point: "documenter_completed", documentation: validateDocumenterOutput(value.documentation), review };
       await runFinalizationPhase(runtime, workflow, review, next);
       return;
     }
@@ -499,7 +559,7 @@ async function continueFromCheckpoint(runtime: OrchestratorRuntime, workflow: Wo
       const review = reviewResult(value.review);
       const preparation = serializedLessonPreparation(value.preparation);
       runtime.candidateLessons = hydrateLessonPreparation(preparation).proposedCandidates;
-      await runFinalizationPhase(runtime, workflow, review, { point: "lessons_screened", preparation });
+      await runFinalizationPhase(runtime, workflow, review, { point: "lessons_screened", preparation, review });
       return;
     }
     case "final_checks_passed": {
@@ -507,7 +567,7 @@ async function continueFromCheckpoint(runtime: OrchestratorRuntime, workflow: Wo
       const review = reviewResult(value.review);
       const preparation = serializedLessonPreparation(value.preparation);
       runtime.candidateLessons = hydrateLessonPreparation(preparation).proposedCandidates;
-      await runFinalizationPhase(runtime, workflow, review, { point: "final_checks_passed", preparation, finalChecks: validateCheckResults(value.finalChecks) });
+      await runFinalizationPhase(runtime, workflow, review, { point: "final_checks_passed", preparation, finalChecks: validateCheckResults(value.finalChecks), review });
       return;
     }
     case "human_decision_pending": {
@@ -523,6 +583,9 @@ async function continueFromCheckpoint(runtime: OrchestratorRuntime, workflow: Wo
     case "repository_reviewed":
       await runReadOnlyFinalizationPhase(runtime, workflow, readOnlyReviewResult(continuation));
       return;
+    case "investigation_completed":
+      await runReadOnlyFinalizationPhase(runtime, workflow, investigationResult(continuation));
+      return;
     case "route_agent_completed":
       await runSpecializedMutationRoute(runtime, workflow, implementationPlanningResult(continuation), specializedMutationResult(continuation));
       return;
@@ -530,6 +593,15 @@ async function continueFromCheckpoint(runtime: OrchestratorRuntime, workflow: Wo
       const value = objectValue(continuation, "specialized final-check checkpoint");
       const result = specializedMutationResult(value.result);
       await runSpecializedMutationRoute(runtime, workflow, result, result, validateCheckResults(value.finalChecks));
+      return;
+    }
+    case "resolution_pending": {
+      const value = objectValue(continuation, "resolution checkpoint");
+      const record = value.record as import("../agent-task-types.js").ResolutionRecord;
+      if (!record || !record.request) throw new Error("Resolution checkpoint missing resolution record");
+      const planning = implementationPlanningResult(value.planning);
+      workflow.ctx.ui.notify(`Resolving agent blocker (${record.request.kind}) from ${record.agent}`, "info");
+      await resolveAgentBlocker(runtime, workflow, planning, record.request);
       return;
     }
   }
@@ -559,6 +631,29 @@ async function continueHumanDecision(
         recorded ? planReviewDecision(recorded) : undefined
       );
       await runSelectedRoute(runtime, workflow, prepared, { prepared: true });
+      return;
+    }
+    if (request.resume.point === "bug_diagnosis_decision") {
+      if (workflow.route !== "bug_fix") throw new Error("Bug diagnosis decision requires the bug_fix route");
+      const { exploration, plan, baselineChecks, diagnosis } = checkpoint.bindings;
+      if (!exploration || !plan || !baselineChecks || !diagnosis) {
+        throw new Error("Bug diagnosis decision checkpoint is missing diagnosis bindings");
+      }
+      const planning: ImplementationPlanningResult = {
+        exploration: validateExplorerOutput(exploration),
+        plan: validatePlannerOutput(plan),
+        baseline: validateCheckResults(baselineChecks),
+        scopeRevisionCount: request.resume.scopeRevisionCount
+      };
+      runtime.requireState().pendingDecision = recorded ? undefined : request;
+      const validatedDiagnosis = validateDebuggerOutput(diagnosis);
+      if (recorded) {
+        bugDiagnosisDecision(recorded);
+      } else {
+        await requestBugDiagnosisApproval(runtime, workflow, planning, validatedDiagnosis);
+        await preflightRemainingRoute(runtime, workflow);
+      }
+      await continueBugFixAfterDiagnosis(runtime, workflow, planning, validatedDiagnosis, true);
       return;
     }
     if (request.resume.point === "mutation_confirmation") {
@@ -681,6 +776,36 @@ async function continueHumanDecision(
         await runFinalizationPhase(runtime, workflow, review);
         return;
       }
+      if (after.mode === "finalization") {
+        const review = revised as ReviewResult;
+        const docPhase = after.documentation;
+        const savedContinuation = {
+          mode: "finalization",
+          review,
+          documentation: docPhase.blockedDocumentation,
+          ...(docPhase.phase === "repair_checks" ? {
+            preparation: docPhase.preparation,
+            failedChecks: docPhase.failedChecks,
+            diagnosis: docPhase.diagnosis,
+            attempt: docPhase.attempt,
+            changeRound: docPhase.changeRound
+          } : { changeRound: docPhase.changeRound })
+        };
+        await saveWorkflowCheckpoint(runtime, workflow, "scope_revision_approved", savedContinuation, {
+          exploration: review.exploration,
+          plan: review.plan,
+          baselineChecks: review.baseline,
+          tester: review.tester,
+          builderOutputs: runtime.builderSessionOutputs,
+          implementationChecks: review.finalImplChecks,
+          codeReview: review.codeReview,
+          priorCodeReviews: review.priorCodeReviews,
+          reviewApprovalSource: review.reviewApprovalSource
+        });
+        await runFinalizationPhase(runtime, workflow, review);
+        return;
+      }
+      if (after.mode !== "bug_diagnosed") throw new Error("Unexpected scope revision mode after review");
       const planning = { ...(revised as ImplementationPlanningResult), scopeRevisionCount: after.scopeRevisionCount };
       await enterMutationPhase(runtime, workflow, {
         resume: { point: "mutation_confirmation", mode: "bug_diagnosed", scopeRevisionCount: after.scopeRevisionCount },
@@ -797,6 +922,7 @@ async function continueHumanDecision(
         preparation,
         finalChecks,
         changeRound,
+        review,
         decision: recorded ? finalDeliveryDecision(recorded) : undefined
       });
       return;
@@ -831,6 +957,18 @@ async function continueHumanDecision(
   await runSelectedRoute(runtime, workflow, planning);
 }
 
+async function preflightRemainingRoute(runtime: OrchestratorRuntime, workflow: WorkflowContext): Promise<void> {
+  const requiredAgents = requiredAgentsForRoute(workflow.route, workflow.config);
+  await runtime.agents.preflight(
+    workflow.config,
+    workflow.cwd,
+    runtime.extensionRoot,
+    runtime.requireController().signal,
+    workflow.config.limits.agentTimeoutMs,
+    requiredAgents
+  );
+}
+
 function implementationResultFromDecisionBindings(checkpoint: WorkflowCheckpoint, scopeRevisionCount: number): ImplementationResult {
   const { exploration, plan, baselineChecks, tester, implementationChecks, diagnosis } = checkpoint.bindings;
   if (!exploration || !plan || !baselineChecks || !implementationChecks) {
@@ -855,7 +993,7 @@ function scopeRevisionDecisionContext(
   const item = objectValue(value, "scope revision decision context");
   const afterValue = objectValue(item.after, "scope revision continuation");
   const mode = stringValue(afterValue.mode, "scope revision continuation mode");
-  const planning = mode === "review" ? implementationResult(item.planning) : implementationPlanningResult(item.planning);
+  const planning = mode === "review" || mode === "finalization" ? reviewResult(item.planning) : implementationPlanningResult(item.planning);
   const additions = arrayValue(item.additions, "scope revision additions").map((entry, index) => stringValue(entry, `scope revision additions[${index}]`));
   if (canonicalSha256(additions) !== canonicalSha256(resume.additions)) throw new Error("Scope revision additions do not match the pending decision");
   const scopeRevision = positiveInteger(item.scopeRevision, "scopeRevision");
@@ -898,21 +1036,57 @@ function scopeRevisionDecisionContext(
       diagnosis: validateDebuggerOutput(afterValue.diagnosis),
       scopeRevisionCount: positiveInteger(afterValue.scopeRevisionCount, "scopeRevisionCount")
     };
+  } else if (mode === "finalization") {
+    const documentationValue = objectValue(afterValue.documentation, "scope revision documentation");
+    const phase = stringValue(documentationValue.phase, "documentation phase");
+    const blockedDocumentation = validateDocumenterOutput(documentationValue.blockedDocumentation);
+    if (phase === "initial_documentation") {
+      after = {
+        mode,
+        scopeRevisionCount: positiveInteger(afterValue.scopeRevisionCount, "scopeRevisionCount"),
+        documentation: {
+          phase: "initial_documentation",
+          blockedDocumentation,
+          changeRound: nonNegativeInteger(documentationValue.changeRound, "changeRound")
+        }
+      };
+    } else if (phase === "repair_checks") {
+      after = {
+        mode,
+        scopeRevisionCount: positiveInteger(afterValue.scopeRevisionCount, "scopeRevisionCount"),
+        documentation: {
+          phase: "repair_checks",
+          blockedDocumentation,
+          preparation: serializedLessonPreparation(documentationValue.preparation),
+          failedChecks: validateCheckResults(documentationValue.failedChecks),
+          diagnosis: validateDebuggerOutput(documentationValue.diagnosis),
+          attempt: positiveInteger(documentationValue.attempt, "attempt"),
+          changeRound: nonNegativeInteger(documentationValue.changeRound, "changeRound")
+        }
+      };
+    } else {
+      throw new Error("Documentation scope phase is invalid");
+    }
   } else {
     throw new Error("Scope revision continuation mode is invalid");
   }
   return { planning, revised, additions, evidence, scopeRevision, reviewIndex, after };
 }
 
-function builderBlocker(value: unknown): NonNullable<import("../types.js").BuilderBlocker> {
+function builderBlocker(value: unknown): NonNullable<import("../types.js").AgentResolutionRequest> {
   const item = objectValue(value, "Builder blocker");
   const kind = stringValue(item.kind, "Builder blocker kind");
-  if (kind !== "scope" && kind !== "environment" && kind !== "tooling" && kind !== "insufficient_evidence") throw new Error("Builder blocker kind is invalid");
-  return {
-    kind,
-    reason: stringValue(item.reason, "Builder blocker reason"),
-    requiredFiles: arrayValue(item.requiredFiles, "Builder blocker requiredFiles").map((entry, index) => stringValue(entry, `Builder blocker requiredFiles[${index}]`))
-  };
+  const reason = stringValue(item.reason, "Builder blocker reason");
+  if (!["scope", "baseline_repair", "prerequisite_repair", "role_handoff", "environment", "tooling", "insufficient_evidence"].includes(kind)) {
+    throw new Error("Builder blocker kind is invalid");
+  }
+  if (kind === "scope") {
+    return { kind: "scope", reason, requiredFiles: arrayValue(item.requiredFiles, "Builder blocker requiredFiles").map((entry, index) => stringValue(entry, `Builder blocker requiredFiles[${index}]`)) };
+  }
+  if (kind === "baseline_repair" || kind === "prerequisite_repair" || kind === "role_handoff" || kind === "insufficient_evidence" || kind === "environment" || kind === "tooling") {
+    return { kind, reason, failedCheckCommands: [], evidence: [], affectedFiles: [], verification: [], requestedCapability: "", question: "", questions: [], suggestedRoles: [], inspectedEvidence: [], diagnostics: [], retryCondition: "", affectedCommands: [] } as any;
+  }
+  throw new Error("Unexpected builder blocker kind");
 }
 
 function reviewDecision(recorded: RecordedHumanDecision): { action: "accept" | "fix_again" } {
@@ -924,6 +1098,10 @@ function reviewDecision(recorded: RecordedHumanDecision): { action: "accept" | "
 function mutationConfirmation(recorded: RecordedHumanDecision): boolean {
   if (recorded.action === "proceed") return true;
   throw new Error(`Recorded ${recorded.action} action is invalid for mutation confirmation`);
+}
+
+function bugDiagnosisDecision(recorded: RecordedHumanDecision): void {
+  if (recorded.action !== "approve") throw new Error(`Recorded ${recorded.action} action is invalid for bug diagnosis approval`);
 }
 
 function repairBudgetDecision(recorded: RecordedHumanDecision): void {
@@ -958,7 +1136,7 @@ function pendingHumanDecision(value: unknown): PendingHumanDecision {
   const item = objectValue(value, "pending human decision");
   if (item.schemaVersion !== 1) throw new Error("Pending human decision schemaVersion must be 1");
   const kind = stringValue(item.kind, "pending human decision kind") as PendingHumanDecision["kind"];
-  if (!["plan_approval", "plan_revision_approval", "baseline_repair_approval", "mutation_confirmation", "scope_expansion", "code_review_rejection", "repair_budget_exhausted", "final_revision_approval", "final_delivery"].includes(kind)) {
+  if (!["plan_approval", "plan_revision_approval", "baseline_repair_approval", "bug_diagnosis_approval", "mutation_confirmation", "scope_expansion", "code_review_rejection", "repair_budget_exhausted", "final_revision_approval", "final_delivery"].includes(kind)) {
     throw new Error("Pending human decision kind is invalid");
   }
   const resumeValue = objectValue(item.resume, "pending human decision resume point");
@@ -1010,11 +1188,19 @@ function pendingHumanDecision(value: unknown): PendingHumanDecision {
     resume = { point, mode, changeRound: nonNegativeInteger(resumeValue.changeRound, "changeRound") };
   } else if (point === "baseline_repair_decision") {
     resume = { point } as PendingHumanDecision["resume"];
+  } else if (point === "bug_diagnosis_decision") {
+    resume = {
+      point,
+      scopeRevisionCount: nonNegativeInteger(resumeValue.scopeRevisionCount, "scopeRevisionCount")
+    };
   } else {
     throw new Error("Pending human decision resume point is invalid");
   }
   const requestedAt = stringValue(item.requestedAt, "pending human decision requestedAt");
   if (!Number.isFinite(Date.parse(requestedAt))) throw new Error("Pending human decision requestedAt is invalid");
+  if ((kind === "bug_diagnosis_approval") !== (resume.point === "bug_diagnosis_decision")) {
+    throw new Error("Bug diagnosis approval kind and resume point must be paired");
+  }
   return {
     schemaVersion: 1,
     id: stringValue(item.id, "pending human decision id"),
@@ -1098,6 +1284,11 @@ function reviewResult(value: unknown): ReviewResult {
 function readOnlyReviewResult(value: unknown): ReadOnlyReviewResult {
   const item = objectValue(value, "repository review continuation");
   return { ...planningResult(item), codeReview: validateReviewOutput(item.codeReview) };
+}
+
+function investigationResult(value: unknown): InvestigationResult {
+  const item = objectValue(value, "investigation continuation");
+  return { ...planningResult(item), diagnosis: validateDebuggerOutput(item.diagnosis) };
 }
 
 function specializedMutationResult(value: unknown): SpecializedMutationResult {

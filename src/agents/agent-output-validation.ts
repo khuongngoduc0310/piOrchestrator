@@ -167,20 +167,32 @@ export function validateReviewOutput(value: unknown, path = "review"): ReviewOut
 }
 
 function mutationBlocker(item: Record<string, unknown>, path: string): BuilderOutput["blocker"] {
-  let blocker: BuilderOutput["blocker"];
-  if (item.blocker !== undefined && item.blocker !== null) {
-    const blocked = record(item.blocker, `${path}.blocker`);
-    const kind = enumValue(blocked.kind, `${path}.blocker.kind`, ["scope", "environment", "tooling", "insufficient_evidence"] as const);
+  if (item.blocker === undefined || item.blocker === null) return undefined;
+  const blocked = record(item.blocker, `${path}.blocker`);
+  const kind = enumValue(blocked.kind, `${path}.blocker.kind`, ["scope", "baseline_repair", "prerequisite_repair", "role_handoff", "environment", "tooling", "insufficient_evidence"] as const);
+  const reason = string(blocked.reason, `${path}.blocker.reason`);
+  if (kind === "scope") {
     const requiredFiles = repositoryPaths(blocked.requiredFiles, `${path}.blocker.requiredFiles`);
-    if (kind === "scope" && requiredFiles.length === 0) {
-      throw new ValidationError(`${path}.blocker.requiredFiles`, "must not be empty for a scope blocker");
-    }
-    if (kind !== "scope" && requiredFiles.length > 0) {
-      throw new ValidationError(`${path}.blocker.requiredFiles`, "must be empty unless blocker kind is scope");
-    }
-    blocker = { kind, reason: string(blocked.reason, `${path}.blocker.reason`), requiredFiles };
+    if (requiredFiles.length === 0) throw new ValidationError(`${path}.blocker.requiredFiles`, "must not be empty for a scope blocker");
+    return { kind: "scope", reason, requiredFiles };
   }
-  return blocker;
+  if (kind === "role_handoff") {
+    const requestedRole = enumValue(blocked.requestedRole, `${path}.blocker.requestedRole`, ["explorer", "planner", "reviewer", "tester", "builder", "debugger", "documenter"] as const);
+    return { kind: "role_handoff", reason, requestedRole, requestedCapability: string(blocked.requestedCapability, `${path}.blocker.requestedCapability`), question: string(blocked.question, `${path}.blocker.question`), evidence: evidenceList(blocked.evidence, `${path}.blocker.evidence`) };
+  }
+  if (kind === "baseline_repair") {
+    return { kind: "baseline_repair", reason, failedCheckCommands: strings(blocked.failedCheckCommands, `${path}.blocker.failedCheckCommands`), evidence: evidenceList(blocked.evidence, `${path}.blocker.evidence`) };
+  }
+  if (kind === "prerequisite_repair") {
+    return { kind: "prerequisite_repair", reason, affectedFiles: repositoryPaths(blocked.affectedFiles, `${path}.blocker.affectedFiles`), evidence: evidenceList(blocked.evidence, `${path}.blocker.evidence`), verification: strings(blocked.verification, `${path}.blocker.verification`) };
+  }
+  if (kind === "insufficient_evidence") {
+    const rawRoles = strings(blocked.suggestedRoles, `${path}.blocker.suggestedRoles`);
+    const validRoles = ["explorer", "planner", "reviewer", "tester", "builder", "debugger", "documenter"] as const;
+    const suggestedRoles = rawRoles.map((role, i) => enumValue(role, `${path}.blocker.suggestedRoles[${i}]`, validRoles));
+    return { kind: "insufficient_evidence", reason, questions: strings(blocked.questions, `${path}.blocker.questions`), suggestedRoles, inspectedEvidence: evidenceList(blocked.inspectedEvidence, `${path}.blocker.inspectedEvidence`) };
+  }
+  return { kind, reason, diagnostics: strings(blocked.diagnostics, `${path}.blocker.diagnostics`), retryCondition: string(blocked.retryCondition, `${path}.blocker.retryCondition`), affectedCommands: strings(blocked.affectedCommands, `${path}.blocker.affectedCommands`) };
 }
 
 function mutationBase(value: unknown, path: string): BuilderOutput {

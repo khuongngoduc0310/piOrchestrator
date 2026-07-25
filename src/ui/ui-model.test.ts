@@ -85,6 +85,12 @@ describe("UiModel", () => {
       expect(vm.run!.elapsedMs).toBe(5000);
     });
 
+    it("does not report fewer maximum attempts than have been used", () => {
+      const vm = buildRunViewModel(sampleState({ attempt: 4 }), validConfig, "/project", 5000, 3);
+      expect(vm.run!.attempt).toBe(4);
+      expect(vm.run!.maxAttempts).toBe(4);
+    });
+
     it("exposes review-only routing and maps repository review to the review phase", () => {
       const vm = buildRunViewModel(sampleState({
         route: "review_only",
@@ -206,6 +212,13 @@ describe("UiModel", () => {
         expect(vm.run!.phaseIndex).toBe(expected);
       });
     }
+
+    it("maps investigation debugging to the read-only review phase", () => {
+      const state = sampleState({ stage: "debugging", route: "investigation_only" });
+      const vm = buildRunViewModel(state, validConfig, "/project", 0, 3);
+      expect(vm.run!.phaseIndex).toBe(6);
+      expect(vm.run!.skippedPhaseIndexes).not.toContain(6);
+    });
 
     it("maps testing to phase 4 for after-test-creation checks", () => {
       const state = sampleState({

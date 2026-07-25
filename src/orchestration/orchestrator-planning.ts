@@ -1,7 +1,7 @@
 import { ensureChecksConfigured } from "../checks/check-setup.js";
 import { formatApprovedPlan, formatBaselineReport } from "../ui/session-messages.js";
 import { parseBuilderOutput, parseDebuggerOutput, parseExplorerOutput, parsePlannerOutput, parseReviewOutput } from "../validation.js";
-import type { AgentName, CheckResult, DebuggerOutput, HumanPlanReviewResult, PlannerOutput } from "../types.js";
+import type { CheckResult, DebuggerOutput, HumanPlanReviewResult, PlannerOutput } from "../types.js";
 import type { ImplementationPlanningResult, PlanningResult, WorkflowContext } from "./orchestrator-context.js";
 import type { OrchestratorRuntime } from "./orchestrator-runtime.js";
 import { allGreen } from "./orchestrator-helpers.js";
@@ -14,23 +14,19 @@ import { createWorktree } from "../workspace/worktree.js";
 import { saveWorkflowCheckpoint } from "./orchestrator-checkpoints.js";
 import { deriveMutationPathScope } from "../workspace/workspace-guard.js";
 import { assertBuilderComplete } from "./mutation-completion.js";
-import { deriveRoleMutationPaths } from "../workspace/workspace-guard.js";
+import { requiredAgentsForRoute } from "./route-preflight.js";
+import { resolveParticipationPolicy, requiresHumanDecision } from "./participation-policy.js";
 
 export async function runPlanningPhase(runtime: OrchestratorRuntime, workflow: WorkflowContext): Promise<PlanningResult> {
   const { request, ctx, cwd, config, controller } = workflow;
   await transition(runtime, "preflight", undefined, "Validating configuration and models", ctx);
-  const planningAgents: AgentName[] = ["explorer", "planner"];
-  if (!config.humanInTheLoop.planApproval
-    || (config.limits.planRevisions > 0 && !config.humanInTheLoop.planRevisionApproval)) {
-    planningAgents.push("reviewer");
-  }
   await runtime.agents.preflight(
     config,
     cwd,
     runtime.extensionRoot,
     controller.signal,
     config.limits.agentTimeoutMs,
-    planningAgents
+    requiredAgentsForRoute(workflow.route, config)
   );
 
   const exploration = await runAgentStep(runtime, "explorer", "exploring", "Explore repository", { route: workflow.route, request }, cwd, ctx, parseExplorerOutput);
@@ -50,8 +46,11 @@ export async function continuePlanningDecision(
   const { request, ctx, cwd, config, store } = workflow;
   let plan = initialPlan;
   let planApproved = false;
+  const policy = resolveParticipationPolicy(config);
   for (let reviewIndex = firstReviewIndex; reviewIndex <= config.limits.planRevisions; reviewIndex++) {
-    const useHuman = reviewIndex === 0 ? config.humanInTheLoop.planApproval : config.humanInTheLoop.planRevisionApproval;
+    const useHuman = reviewIndex === 0
+      ? requiresHumanDecision(policy, "initial_plan")
+      : requiresHumanDecision(policy, "plan_revision");
     if (useHuman) {
       const label = reviewIndex === 0 ? "Review routed plan" : "Review revised plan";
       const humanDecision = recordedDecision ?? await runDurableHumanGate(
@@ -132,7 +131,7 @@ export async function prepareImplementationPhase(
   runtime: OrchestratorRuntime,
   workflow: WorkflowContext,
   planning: PlanningResult,
-  options: { agents?: readonly AgentName[]; allowBaselineRepair?: boolean; allowAuthorizedTestFailures?: boolean; deferMutation?: boolean } = {}
+  options: { allowBaselineRepair?: boolean; deferMutation?: boolean } = {}
 ): Promise<ImplementationPlanningResult> {
   const { request, ctx, cwd, store } = workflow;
   await runtime.agents.preflight(
@@ -141,7 +140,7 @@ export async function prepareImplementationPhase(
     runtime.extensionRoot,
     workflow.controller.signal,
     workflow.config.limits.agentTimeoutMs,
-    options.agents
+    requiredAgentsForRoute(workflow.route, workflow.config)
   );
   const configured = await ensureChecksConfigured(cwd, workflow.config, ctx);
   if (!configured) throw new WorkflowCancelledError("Workflow cancelled during project check setup", "human_gate");
@@ -156,25 +155,7 @@ export async function prepareImplementationPhase(
   let baseline = await runCheckStep(runtime, "baseline", "Run green baseline", cwd, ctx, { requireGreen: false });
   let baselineDiagnosis;
   if (!allGreen(baseline, config.checks.length)) {
-    if (options.allowAuthorizedTestFailures) {
-      baselineDiagnosis = await runAgentStep(
-        runtime,
-        "debugger",
-        "baseline",
-        "Diagnose tests-only baseline failures",
-        { action: "diagnose_baseline", request, checks: baseline },
-        cwd,
-        ctx,
-        parseDebuggerOutput
-      );
-      const authorized = new Set(deriveRoleMutationPaths("tester", planning.plan));
-      const affected = baselineDiagnosis.affectedFiles;
-      if (["environment_error", "tooling_error", "unknown"].includes(baselineDiagnosis.category)
-        || affected.length === 0
-        || affected.some(file => !authorized.has(file))) {
-        throw new Error(`tests_only baseline failures are not confined to authorized test files: ${baselineDiagnosis.rootCause}`);
-      }
-    } else if (options.allowBaselineRepair === false) throw new Error(`${workflow.route} requires a green baseline before mutation`);
+    if (options.allowBaselineRepair === false) throw new Error(`${workflow.route} requires a green baseline before mutation`);
     else {
     ctx.ui.notify("Baseline checks are not all green. Diagnosing failures...", "warning");
     const baselineDiagnosis = await runAgentStep(
@@ -313,7 +294,8 @@ export async function enterMutationPhase(
   recordedConfirmation = false
 ): Promise<void> {
   const { config, ctx, cwd, runId, store } = workflow;
-  if (!workflow.mutationConfirmed && config.humanInTheLoop.confirmBeforeMutation) {
+  const policy = resolveParticipationPolicy(config);
+  if (!workflow.mutationConfirmed && requiresHumanDecision(policy, "mutation_confirmation")) {
     const proceed = recordedConfirmation || await runDurableHumanGate(
       runtime,
       workflow,

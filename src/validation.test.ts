@@ -156,18 +156,37 @@ describe("structured output validation", () => {
       assumptions: [],
       unresolvedIssues: ["integration test is outside scope"]
     };
-    expect(validateBuilderOutput({
+    const scopeBlocker = validateBuilderOutput({
       ...base,
       blocker: { kind: "scope", reason: "test must change", requiredFiles: ["src/App.test.ts"] }
-    }).blocker?.requiredFiles).toEqual(["src/App.test.ts"]);
+    }).blocker;
+    expect(scopeBlocker && scopeBlocker.kind === "scope" ? scopeBlocker.requiredFiles : undefined).toEqual(["src/App.test.ts"]);
     expect(() => validateBuilderOutput({
       ...base,
       blocker: { kind: "scope", reason: "test must change", requiredFiles: [] }
     })).toThrow("builder.blocker.requiredFiles");
     expect(() => validateBuilderOutput({
       ...base,
-      blocker: { kind: "tooling", reason: "tool unavailable", requiredFiles: ["package.json"] }
-    })).toThrow("builder.blocker.requiredFiles");
+      blocker: { kind: "tooling", reason: "tool unavailable", diagnostics: [], retryCondition: "", affectedCommands: [] }
+    })).toThrow("builder.blocker.retryCondition");
+  });
+
+  it("accepts every AgentResolutionRequest variant on Builder output", () => {
+    const base = { summary: "blocked", changedFiles: [], commands: [], assumptions: [], unresolvedIssues: [] };
+    const scopeResult = validateBuilderOutput({ ...base, blocker: { kind: "scope", reason: "add tests", requiredFiles: ["src/test.ts"] } });
+    expect(scopeResult.blocker?.kind).toBe("scope");
+    const baselineResult = validateBuilderOutput({ ...base, blocker: { kind: "baseline_repair", reason: "lint fails", failedCheckCommands: ["npm run lint"], evidence: [{ path: "src/main.ts", detail: "lint error" }] } });
+    expect(baselineResult.blocker?.kind).toBe("baseline_repair");
+    const prereqResult = validateBuilderOutput({ ...base, blocker: { kind: "prerequisite_repair", reason: "dep missing", affectedFiles: ["src/dep.ts"], evidence: [{ path: "src/dep.ts", detail: "missing export" }], verification: ["verify import works"] } });
+    expect(prereqResult.blocker?.kind).toBe("prerequisite_repair");
+    const handoffResult = validateBuilderOutput({ ...base, blocker: { kind: "role_handoff", reason: "needs diagnosis", requestedRole: "debugger", requestedCapability: "find root cause", question: "why does this fail?", evidence: [{ path: "src/bug.ts", detail: "unexpected error" }] } });
+    expect(handoffResult.blocker?.kind).toBe("role_handoff");
+    const evidenceResult = validateBuilderOutput({ ...base, blocker: { kind: "insufficient_evidence", reason: "need more info", questions: ["what is the expected behavior?"], suggestedRoles: ["explorer"], inspectedEvidence: [{ path: "src/unknown.ts", detail: "no context" }] } });
+    expect(evidenceResult.blocker?.kind).toBe("insufficient_evidence");
+    const envResult = validateBuilderOutput({ ...base, blocker: { kind: "environment", reason: "no node", diagnostics: ["node not found"], retryCondition: "retry after install", affectedCommands: ["node --version"] } });
+    expect(envResult.blocker?.kind).toBe("environment");
+    const toolResult = validateBuilderOutput({ ...base, blocker: { kind: "tooling", reason: "tsc missing", diagnostics: ["tsc not found"], retryCondition: "retry after npm install", affectedCommands: ["npx tsc"] } });
+    expect(toolResult.blocker?.kind).toBe("tooling");
   });
 
   it("validates debugger categories", () => {

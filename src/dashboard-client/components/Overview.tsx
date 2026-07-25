@@ -1,3 +1,4 @@
+import React from "react";
 import type { OrchestratorViewModel } from "../../dashboard-types.js";
 import { UI_PHASE_LABELS } from "../../dashboard-types.js";
 
@@ -48,9 +49,9 @@ export function Overview({ snapshot, onSelectAgent }: OverviewProps) {
           <div className="getting-started">
             <div className="getting-started-title">What appears here</div>
             <ol>
-              <li>Exploration and an implementation plan</li>
+              <li>Exploration and a plan for the selected route</li>
               <li>Live agent activity, tools, and decisions</li>
-              <li>Checks, file changes, and saved artifacts</li>
+              <li>Saved artifacts, plus checks and file changes when the route uses them</li>
             </ol>
           </div>
         </div>

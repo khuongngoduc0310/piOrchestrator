@@ -45,7 +45,7 @@ describe("mutation completion gates", () => {
   });
 
   it("rejects structured blockers for every mutation role", () => {
-    const blocker = { kind: "tooling" as const, reason: "tool missing", requiredFiles: [] };
+    const blocker = { kind: "tooling" as const, reason: "tool missing", diagnostics: [], retryCondition: "install tool", affectedCommands: [] };
     expect(() => assertBuilderComplete({ ...builder, blocker })).toThrow("tool missing");
     expect(() => assertTesterComplete({ ...tester, blocker }, "tests_only")).toThrow("tool missing");
     expect(() => assertDocumenterComplete({ ...documenter, blocker })).toThrow("tool missing");

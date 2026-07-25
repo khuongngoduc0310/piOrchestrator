@@ -75,6 +75,7 @@ export type AgentTaskEnvelope<T> =
             attempt: 1;
             reason: "schema_validation_failed";
             fieldPath?: string;
+            expectedChangedFiles?: string[];
           }
         | {
             attempt: 1;
@@ -99,7 +100,7 @@ export interface PlanTask {
   id: string;
   description: string;
   files: string[];
-  /** Exact non-test-named files explicitly authorized for Tester support work. */
+  /** Exact classifier-approved fixture, mock, snapshot, setup, or test-config paths. */
   testSupportFiles?: string[];
   dependencies: string[];
   verification: string[];
@@ -138,7 +139,7 @@ export type PlannerTask =
       checks: CheckResult[];
       requiredFiles: string[];
       diagnosis?: DebuggerOutput;
-      blocker?: BuilderBlocker;
+      blocker?: AgentResolutionRequest;
       feedback?: { source: "human"; text: string } | { source: "reviewer"; review: ReviewOutput };
     }
   | { action: "repair_baseline"; route: "implementation"; request: string; diagnosis: DebuggerOutput; checkFailures: CheckResult[] };
@@ -163,7 +164,7 @@ export type ReviewerTask =
       checks: CheckResult[];
       requiredFiles: string[];
       diagnosis?: DebuggerOutput;
-      blocker?: BuilderBlocker;
+      blocker?: AgentResolutionRequest;
     }
   | {
       reviewType: "repository";
@@ -208,7 +209,7 @@ export interface TesterOutput {
   commands: CommandReport[];
   assumptions: string[];
   unresolvedIssues: string[];
-  blocker?: BuilderBlocker;
+  blocker?: AgentResolutionRequest;
 }
 
 export type TesterTask =
@@ -231,10 +232,34 @@ export type TesterTask =
       attempt: number;
     };
 
-export interface BuilderBlocker {
-  kind: "scope" | "environment" | "tooling" | "insufficient_evidence";
-  reason: string;
-  requiredFiles: string[];
+export type AgentResolutionRequest =
+  | { kind: "scope"; reason: string; requiredFiles: string[] }
+  | { kind: "baseline_repair"; reason: string; failedCheckCommands: string[]; evidence: RepositoryEvidence[] }
+  | { kind: "prerequisite_repair"; reason: string; affectedFiles: string[]; evidence: RepositoryEvidence[]; verification: string[] }
+  | { kind: "role_handoff"; reason: string; requestedRole: AgentName; requestedCapability: string; question: string; evidence: RepositoryEvidence[] }
+  | { kind: "insufficient_evidence"; reason: string; questions: string[]; suggestedRoles: AgentName[]; inspectedEvidence: RepositoryEvidence[] }
+  | { kind: "environment"; reason: string; diagnostics: string[]; retryCondition: string; affectedCommands: string[] }
+  | { kind: "tooling"; reason: string; diagnostics: string[]; retryCondition: string; affectedCommands: string[] };
+
+export const RESOLUTION_STATUSES = ["pending", "in_progress", "resolved", "failed", "superseded"] as const;
+export type ResolutionStatus = (typeof RESOLUTION_STATUSES)[number];
+
+export const RESOLUTION_OUTCOME_TYPES = ["retry", "scope_revision", "baseline_repair", "human_intervention", "abandoned"] as const;
+export type ResolutionOutcomeType = (typeof RESOLUTION_OUTCOME_TYPES)[number];
+
+export interface ResolutionOutcome {
+  readonly type: ResolutionOutcomeType;
+  readonly detail: string;
+}
+
+export interface ResolutionRecord {
+  id: string;
+  request: AgentResolutionRequest;
+  agent: AgentName;
+  status: ResolutionStatus;
+  outcome?: ResolutionOutcome;
+  createdAt: string;
+  updatedAt: string;
 }
 
 export interface BuilderOutput {
@@ -243,7 +268,7 @@ export interface BuilderOutput {
   commands: CommandReport[];
   assumptions: string[];
   unresolvedIssues: string[];
-  blocker?: BuilderBlocker;
+  blocker?: AgentResolutionRequest;
 }
 
 export type BuilderTask =
@@ -282,6 +307,7 @@ export interface DebuggerOutput {
 export type DebuggerTask =
   | { action: "diagnose_baseline"; request: string; checks: CheckResult[] }
   | { action: "diagnose_bug"; request: string; plan: PlannerOutput; exploration: ExplorerOutput; checks: CheckResult[] }
+  | { action: "diagnose_investigation"; request: string; plan: PlannerOutput; exploration: ExplorerOutput }
   | { action: "diagnose_implementation"; request: string; plan: PlannerOutput; checks: CheckResult[]; attempt: number }
   | { action: "diagnose_verification"; request: string; plan: PlannerOutput; checks: CheckResult[]; phase: "review_fix" | "final"; attempt: number };
 
@@ -304,7 +330,7 @@ export interface DocumenterOutput {
   proposedLessons: ProposedLesson[];
   commands: CommandReport[];
   unresolvedIssues: string[];
-  blocker?: BuilderBlocker;
+  blocker?: AgentResolutionRequest;
 }
 
 export type DocumenterTask =

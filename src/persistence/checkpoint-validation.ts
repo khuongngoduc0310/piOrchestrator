@@ -1,4 +1,4 @@
-import { AGENT_NAMES, SCHEMA_VERSION, WORKFLOW_ROUTES, type CheckResult, type OrchestratorConfig, type WorkflowState } from "../types.js";
+import { AGENT_NAMES, RESOLUTION_STATUSES, RESOLUTION_OUTCOME_TYPES, SCHEMA_VERSION, WORKFLOW_ROUTES, type CheckResult, type OrchestratorConfig, type ResolutionRecord, type WorkflowState } from "../types.js";
 import { validateOrchestratorConfig } from "../config/config-validation.js";
 import {
   CHECKPOINT_CURSOR_KINDS,
@@ -80,7 +80,7 @@ function validateBaselineContext(value: unknown, path: string): WorkflowCheckpoi
   optionalString(baseline.gitHead, `${path}.gitHead`);
   boolean(baseline.hasUncommittedChanges, `${path}.hasUncommittedChanges`);
   boolean(baseline.hasStagedChanges, `${path}.hasStagedChanges`);
-  for (const field of ["diffVsHead", "stagedDiff", "diffArtifact", "stagedArtifact", "statusPorcelain"] as const) {
+  for (const field of ["diffVsHead", "stagedDiff", "diffArtifact", "stagedArtifact", "statusPorcelain", "collectionError"] as const) {
     optionalString(baseline[field], `${path}.${field}`);
   }
   array(baseline.untrackedFiles, `${path}.untrackedFiles`, (entry, entryPath) => string(entry, entryPath));
@@ -259,6 +259,7 @@ export function validateWorkflowCheckpoint(value: unknown, path = "checkpoint"):
   const bindings = record(checkpoint.bindings, `${path}.bindings`);
   if (bindings.baselineChecks !== undefined) validateCheckResults(bindings.baselineChecks, `${path}.bindings.baselineChecks`);
   if (bindings.implementationChecks !== undefined) validateCheckResults(bindings.implementationChecks, `${path}.bindings.implementationChecks`);
+  if (bindings.resolutionLedger !== undefined) validateResolutionLedger(bindings.resolutionLedger, `${path}.bindings.resolutionLedger`);
   const state = validateWorkflowStateForResume(checkpoint.state, `${path}.state`);
   const runId = string(checkpoint.runId, `${path}.runId`);
   if (state.runId !== runId) throw new ValidationError(`${path}.state.runId`, "must match checkpoint runId");
@@ -316,6 +317,31 @@ export function validateWorkflowCheckpoint(value: unknown, path = "checkpoint"):
     cursor: checkpoint.cursor as WorkflowCheckpoint["cursor"],
     bindings: checkpoint.bindings as WorkflowCheckpoint["bindings"]
   };
+}
+
+function validateResolutionRecord(value: unknown, path: string): ResolutionRecord {
+  const obj = record(value, path) as Record<string, unknown>;
+  const request = obj.request;
+  if (!request || typeof request !== "object" || !("kind" in (request as Record<string, unknown>)) || typeof (request as Record<string, unknown>).kind !== "string") {
+    throw new ValidationError(`${path}.request`, "expected a resolution request with a kind");
+  }
+  const outcome = obj.outcome;
+  return {
+    id: string(obj.id, `${path}.id`),
+    request: request as ResolutionRecord["request"],
+    agent: enumValue(obj.agent, `${path}.agent`, AGENT_NAMES),
+    status: enumValue(obj.status, `${path}.status`, RESOLUTION_STATUSES),
+    outcome: outcome === undefined || outcome === null ? undefined : {
+      type: enumValue((outcome as Record<string, unknown>).type, `${path}.outcome.type`, RESOLUTION_OUTCOME_TYPES),
+      detail: string((outcome as Record<string, unknown>).detail, `${path}.outcome.detail`)
+    },
+    createdAt: isoDate(obj.createdAt, `${path}.createdAt`),
+    updatedAt: isoDate(obj.updatedAt, `${path}.updatedAt`)
+  };
+}
+
+export function validateResolutionLedger(value: unknown, path = "resolutionLedger"): ResolutionRecord[] {
+  return array(value, path, (entry, entryPath) => validateResolutionRecord(entry, entryPath));
 }
 
 export const validateCheckpoint = validateWorkflowCheckpoint;

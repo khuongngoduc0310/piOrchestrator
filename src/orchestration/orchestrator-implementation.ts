@@ -1,6 +1,6 @@
 import { formatVerifiedImplementation } from "../ui/session-messages.js";
 import { parseBuilderOutput, parseDebuggerOutput, parseTesterOutput } from "../validation.js";
-import type { BuilderOutput, CheckResult, DebuggerOutput, BuilderTask } from "../types.js";
+import type { BuilderOutput, CheckResult, DebuggerOutput, BuilderTask, TesterOutput } from "../types.js";
 import type { ImplementationPlanningResult, ImplementationResult, WorkflowContext } from "./orchestrator-context.js";
 import type { OrchestratorRuntime } from "./orchestrator-runtime.js";
 import { allGreen } from "./orchestrator-helpers.js";
@@ -15,6 +15,9 @@ import { assertTesterComplete } from "./mutation-completion.js";
 import { consumeScopeRevision } from "./scope-revision-budget.js";
 import { CheckFailureError } from "./workflow-errors.js";
 import { runDurableHumanGate } from "./orchestrator-human-gates.js";
+import { resolveParticipationPolicy, requiresHumanDecision } from "./participation-policy.js";
+import { resolveAgentBlocker } from "./orchestrator-resolution.js";
+import { runAgentStepWithResolution } from "./orchestrator-resolution-coordinator.js";
 
 export type ImplementationContinuation =
   | { point: "tester_completed"; tester: NonNullable<ImplementationResult["tester"]>; diagnosis?: DebuggerOutput }
@@ -58,11 +61,9 @@ export async function runImplementationPhase(
   let currentPlanning = planning;
   let { plan } = currentPlanning;
   const { baseline } = currentPlanning;
-  const tester = options.skipTester ? undefined : continuation?.tester ?? await runAgentStep(
-      runtime,
-      "tester",
-      "creating_tests",
-      "Create acceptance tests",
+  const testerResult = options.skipTester ? undefined : continuation?.tester ? { output: continuation.tester, planning: currentPlanning } : await runAgentStepWithResolution(
+      runtime, workflow, currentPlanning,
+      "tester", "creating_tests", "Create acceptance tests",
       {
         action: "create_tests",
         request,
@@ -71,12 +72,25 @@ export async function runImplementationPhase(
         baselineChecks: baseline,
         diagnosis: options.initialDiagnosis
       },
-      workflow.mutationCwd,
-      ctx,
+      workflow.mutationCwd, ctx,
       text => parseTesterOutput(text, plan.acceptanceCriteria),
       { mutationPlan: plan }
     );
-  if (tester) assertTesterComplete(tester, plan.route);
+  let tester: TesterOutput | undefined;
+  if (testerResult) {
+    tester = testerResult.output as TesterOutput;
+    currentPlanning = testerResult.planning;
+    plan = testerResult.planning.plan;
+    if (tester.blocker) {
+      if (tester.blocker.kind !== "scope") {
+        const resolved = await resolveAgentBlocker(runtime, workflow, currentPlanning, tester.blocker);
+        currentPlanning = resolved.planning;
+        plan = resolved.planning.plan;
+      }
+    } else {
+      assertTesterComplete(tester, plan.route);
+    }
+  }
   if (!options.skipTester && !continuation) {
     await saveWorkflowCheckpoint(runtime, workflow, "tester_completed", { planning, tester, diagnosis: options.initialDiagnosis }, {
       exploration: planning.exploration, plan, baselineChecks: baseline, tester
@@ -140,17 +154,18 @@ export async function runImplementationPhase(
       : { action: "fix_failure", request, plan, tester, checks: implAttemptChecks ?? checksAfterTests, diagnosis: diagnosis!, attempt };
     let builderOut: BuilderOutput;
     while (true) {
-      builderOut = await runAgentStep(
-        runtime,
-        "builder",
-        "implementing",
+      const result = await runAgentStepWithResolution(
+        runtime, workflow, currentPlanning,
+        "builder", "implementing",
         attempt === 1 ? "Implement approved plan" : "Fix diagnosed check failures",
         builderTask,
-        workflow.mutationCwd,
-        ctx,
+        workflow.mutationCwd, ctx,
         parseBuilderOutput,
         { attempt, mutationPlan: plan }
       );
+      builderOut = result.output as BuilderOutput;
+      currentPlanning = result.planning;
+      plan = result.planning.plan;
       runtime.builderSessionOutputs.push(builderOut);
       if (!builderOut.blocker) {
         if (builderOut.unresolvedIssues.length > 0) {
@@ -163,8 +178,16 @@ export async function runImplementationPhase(
         }
         break;
       }
+      if (result.resolutionRecord && result.resolutionRecord.status === "resolved") {
+        builderTask.plan = plan;
+        continue;
+      }
       if (builderOut.blocker.kind !== "scope") {
-        throw new Error(`Builder blocked (${builderOut.blocker.kind}): ${builderOut.blocker.reason}`);
+        const resolved = await resolveAgentBlocker(runtime, workflow, currentPlanning, builderOut.blocker);
+        currentPlanning = resolved.planning;
+        plan = resolved.planning.plan;
+        builderTask.plan = plan;
+        continue;
       }
       const additions = filesOutsidePlan(plan, builderOut.blocker.requiredFiles);
       if (additions.length === 0) throw new Error(`Builder reported an invalid scope blocker: ${builderOut.blocker.reason}`);
@@ -256,7 +279,8 @@ export async function requestImplementationBudgetExtension(
   allowedAttempts: number,
   scopeRevisionCount: number
 ): Promise<number> {
-  if (!workflow.config.humanInTheLoop.importantDecisions) {
+  const policy = resolveParticipationPolicy(workflow.config);
+  if (!requiresHumanDecision(policy, "repair_budget")) {
     throw new CheckFailureError("Implementation retry limit", failedCommands(failedChecks), diagnosis);
   }
   const nextAllowed = allowedAttempts + 1;

@@ -89,17 +89,18 @@ describe("config-settings", () => {
     expect(saved.limits.worktreeIsolation).toBe(false);
   });
 
-  it("toggles human review options", async () => {
+  it("toggles human review options via custom settings", async () => {
     const cwd = await setupConfig();
     let callCount = 0;
     const select = vi.fn(async () => {
       callCount++;
       if (callCount === 1) return "Workflow settings  — retries, timeouts, isolation, human review, dashboard";
       if (callCount === 2) return "Human review  — plan approval, revision review, mutation guard, important decisions";
-      if (callCount === 3) return " Review plan before approval";
-      if (callCount === 4) return " Review plan revisions";  // second toggle
-      if (callCount === 5) return "Back to categories";
-      if (callCount === 6) return "Save all changes";
+      if (callCount === 3) return "Custom / advanced";
+      if (callCount === 4) return " Review plan before approval";
+      if (callCount === 5) return " Review plan revisions";
+      if (callCount === 6) return "Back to categories";
+      if (callCount === 7) return "Save all changes";
       return "Cancel";
     });
     const confirm = vi.fn(async () => true);
@@ -109,19 +110,19 @@ describe("config-settings", () => {
     const saved = await loadConfig(cwd);
     expect(saved.humanInTheLoop.planApproval).toBe(true);
     expect(saved.humanInTheLoop.planRevisionApproval).toBe(true);
-    expect(saved.humanInTheLoop.confirmBeforeMutation).toBe(false);
   });
 
-  it("toggles important decisions", async () => {
-    const cwd = await setupConfig();
+  it("toggles important decisions via custom settings", async () => {
+    const cwd = await setupConfig({ humanInTheLoop: { ...DEFAULT_CONFIG.humanInTheLoop, importantDecisions: true } });
     let callCount = 0;
     const select = vi.fn(async () => {
       callCount++;
       if (callCount === 1) return "Workflow settings  — retries, timeouts, isolation, human review, dashboard";
       if (callCount === 2) return "Human review  — plan approval, revision review, mutation guard, important decisions";
-      if (callCount === 3) return " Important decisions — scope expansion, review rejection, repair limits, final delivery";
-      if (callCount === 4) return "Back to categories";
-      if (callCount === 5) return "Save all changes";
+      if (callCount === 3) return "Custom / advanced";
+      if (callCount === 4) return " Handle exceptional decisions — scope expansion, review rejection, repair limits";
+      if (callCount === 5) return "Back to categories";
+      if (callCount === 6) return "Save all changes";
       return "Cancel";
     });
     const confirm = vi.fn(async () => true);

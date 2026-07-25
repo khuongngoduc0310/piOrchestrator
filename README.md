@@ -4,7 +4,7 @@ A deterministic, sequential multi-agent workflow extension for the Pi coding age
 
 ## Workflow
 
-Explorer → Planner → Plan Reviewer → green baseline → Tester → Builder/check retries → Code Reviewer/fix reviews → Documenter → Lesson Reviewer → final checks.
+Every route begins with Explorer → Planner → Plan Reviewer. Read-only routes then report their route-specific result; approved mutation routes continue through deferred check setup and a green baseline into their fixed mutation/review/finalization phases.
 
 The orchestrator owns every transition, validation decision, and retry limit. Agents cannot advance workflow state themselves.
 
@@ -33,7 +33,7 @@ When Pi starts, piOrchestrator shows an adaptive terminal panel in the Pi widget
 ┌ piOrchestrator ───────────────────────────────────────┐
 │ IDLE · ready                                         │
 │ Project: 7 agents configured · 2 checks              │
-│ /orchestrate                                         │
+│ /orchestrate · /orchestrator-settings                │
 └───────────────────────────────────────────────────────┘
 ```
 
@@ -42,7 +42,7 @@ When Pi starts, piOrchestrator shows an adaptive terminal panel in the Pi widget
 ```text
 ┌ piOrchestrator · d238f168 ────────────────────────────┐
 │ RUNNING · phase 5/8 · attempt 1/3 · 01:24            │
-│ planner: ✓  reviewer: ✓  baseline: ✓  tests: →  build │
+│ expl✓ plan✓ revi✓ test→ buil· debu· docu·             │
 │ Active: tester · deepseek/deepseek-v4-flash          │
 │ Request: add a pause and resume button                │
 │ Recent: ✓ tests · → implement plan                    │
@@ -50,7 +50,7 @@ When Pi starts, piOrchestrator shows an adaptive terminal panel in the Pi widget
 └───────────────────────────────────────────────────────┘
 ```
 
-### Completed or failed
+### Paused, completed, or failed
 
 ```text
 ┌ piOrchestrator · d238f168 ────────────────────────────┐
@@ -60,7 +60,7 @@ When Pi starts, piOrchestrator shows an adaptive terminal panel in the Pi widget
 └───────────────────────────────────────────────────────┘
 ```
 
-The panel persists across workflow runs and clears only on Pi session shutdown.
+The panel shows idle setup guidance, live route/phase/agent activity, durable human-decision waits, paused resume information, and terminal outcomes. It keeps the latest run visible until another run starts and clears on Pi session shutdown. A completed read-only run does not claim that configured checks passed.
 
 ## Commands
 
@@ -82,23 +82,25 @@ The panel persists across workflow runs and clears only on Pi session shutdown.
 /agent-model builder openai/gpt-5.2-codex clear
 ```
 
-`/orchestrator-settings` opens a project-local wizard for choosing the model and compatible thinking level for every role. It lists only models currently authenticated and available through Pi, stages any number of changes, shows an old → new review, and validates all roles before one atomic save. Cancelling or a failed validation writes nothing. **Use model default** removes that role's explicit thinking override.
+`/orchestrator-settings` opens a project-local wizard for agent models or workflow settings. Agent settings list authenticated models and compatible thinking levels, stage role changes, show an old → new review, and validate every role before an atomic save; **Use model default** removes a role's explicit thinking override. Workflow settings cover retry limits, timeouts/output limits, mutation isolation, human review, and dashboard behavior, with review before an atomic save. Cancelling or failed validation writes nothing.
 
 `/agent-model` remains the direct single-role shortcut. `retain` keeps the role's current thinking setting; `clear` removes the explicit setting. Both commands resolve and check the complete role configuration before writing. These settings affect orchestrator-created role sessions only; they do not change the active parent chat model selected by Pi's `/model` command.
 
-`/orchestrator-resume [exact-run-id]` continues a failed or cancelled run from its latest validated checkpoint. Without an argument it opens an interactive browser listing recent resumable runs; selecting one requires confirmation before resuming. With an exact run ID the command resumes immediately without browsing. Resume requires the same project path, extension version, normalized configuration, project-memory content, and workspace contents. Isolated runs additionally require their original registered detached worktree at the expected commit. The command never accepts an abbreviated run ID and never repeats a Tester, Builder, review fix, or Documenter that completed at the checkpoint.
+`/orchestrator-resume [exact-run-id]` continues a paused, failed, or cancelled run from its latest validated checkpoint. Without an argument it opens an interactive browser that prioritizes paused decisions before other recent resumable runs; selecting one requires confirmation. With an exact run ID the command resumes immediately without browsing. A paused run reopens its durable pending decision rather than guessing an answer. Resume requires the same project path, extension version, normalized configuration, project-memory content, and workspace contents. Isolated runs additionally require their original registered detached worktree at the expected commit. The command never accepts an abbreviated run ID and never repeats a Tester, Builder, review fix, or Documenter that completed at the checkpoint.
 
 ## Configuration
 
-The first command creates the project-local config at:
+The first command that loads configuration creates the project-local config at:
 
 ```text
 .pi/orchestrator/config.json
 ```
 
-Pi's exported config directory name is used internally, so rebranded Pi distributions may use a different directory. Newly generated configs begin with `"checks": []`. On the first `/orchestrate`, the extension inspects the current project root's `package.json`, proposes supported checks, and asks you to **Approve**, **Edit**, or **Cancel**. Approved checks are saved atomically and the same invocation continues into baseline verification.
+Pi's exported config directory name is used internally, so rebranded Pi distributions may use a different directory. Newly generated configs begin with `"checks": []`. `/orchestrate` does not perform check setup up front: read-only and planning-only routes complete without checks. After a mutation route's plan is approved, the extension inspects the current project root's `package.json`, proposes supported checks, and asks you to **Approve**, **Edit**, or **Cancel**. Approved checks are saved atomically and the same invocation continues into baseline verification.
 
 Discovery is deliberately limited to Pi's current working directory; it never searches child folders or silently changes the workflow root. Start Pi from the directory containing the project's `package.json`. Node projects using npm, pnpm, Yarn, or Bun are supported. The `packageManager` field is authoritative, otherwise one lockfile is used; conflicting lockfiles are not guessed. Existing scripts are proposed in `test`, `typecheck`, `lint`, `build` order, and React Scripts tests receive non-watch flags. If nothing safe is discovered, choose **Edit commands** to enter one command per line. TUI and RPC modes can approve checks; JSON/print modes never auto-approve.
+
+Human participation is configured through the Autonomous, Balanced, Controlled, or Custom profile in `/orchestrator-settings`. The `humanInTheLoop.diagnosisApproval` custom setting accepts `"never"`, `"low_confidence"`, or `"always"`. It applies only to the initial actionable diagnosis produced for `bug_fix`: low-confidence mode pauses only when Debugger reports low confidence, while always mode pauses for every actionable bug diagnosis. Diagnosis approval occurs before diagnosis-driven scope expansion and mutation confirmation, which remain separate decisions. Cancelling stops before Tester, Builder, or worktree creation; non-interactive runs pause durably and can be continued with `/orchestrator-resume` without rerunning the initial diagnosis.
 
 Example limits:
 
@@ -138,9 +140,9 @@ Run `/orchestrate`, select one validated route, then enter the request in the in
 - `implementation` runs check setup, baseline verification, Tester, Builder and retries, code review and fixes, documentation, final checks, and optional worktree synchronization.
 - `review_only` runs Explorer, Planner approval, and a repository Reviewer, then reports findings without project checks or mutation-capable agents. A reviewer `changes_requested` decision is a successful findings report on this route and never invokes Builder.
 - `documentation_only` permits only Documenter changes to documentation-classified plan files, with green baseline and final checks.
-- `tests_only` permits only Tester changes to test-classified plan files, with green baseline and final checks.
+- `tests_only` starts from a green baseline and permits only Tester changes to test-classified or narrowly classified test-support plan paths. It adds or updates tests for existing expected behavior and must leave final checks green; it does not intentionally create a red test-first handoff to Builder.
 - `investigation_only` runs a read-only evidence and diagnosis workflow without checks or mutation agents.
-- `bug_fix` requires a green baseline, diagnoses root cause before regression tests, then runs Builder, review, documentation, and final checks.
+- `bug_fix` requires a green baseline, diagnoses root cause before regression tests, applies any configured durable diagnosis approval before scope expansion or mutation, then runs Builder, review, documentation, and final checks.
 - `quick_implementation` skips test-first generation but retains baseline, Builder verification, code review, documentation, and final checks.
 - `planning_only` completes after exploration and approved planning without checks or mutation agents.
 
@@ -150,13 +152,13 @@ Task `files` are exact mutation authorization paths for mutating routes and insp
 
 - Every role receives the same version-3 task envelope with an authoritative `task` object and nullable advisory `memoryContext`.
 - Every structured role response is parsed as raw JSON or exactly one fenced JSON block and validated with dependency-free, role-specific validators. Incidental prose around one fence is ignored; ambiguous multiple fences are rejected.
-- A malformed read-only role response receives one correction attempt with mutation-capable tools removed. Tester, Builder, and Documenter are never rerun for output correction because their first session may already have changed files.
+- A malformed read-only role response receives one correction attempt with mutation-capable tools removed. Malformed Tester, Builder, and Documenter output is not retried because the first session may already have changed files. If a valid mutating-role response reports the wrong `changedFiles`, one read-only correction session receives the observed file delta and may correct only its output; the workspace is re-audited and any correction-time mutation fails closed.
 - Plans require unique task IDs, valid dependencies, and an acyclic graph.
 - Tester reports map every approved acceptance criterion to explicit coverage and the observed pre-implementation result; code review receives that coverage directly.
 - Discovered checks are never executed or saved without explicit approval. Existing non-empty checks bypass discovery and are never rewritten.
 - Mutation routes require all configured baseline commands to pass before agent mutation. Check setup is deferred until after route approval, so read-only routes do not require or execute project checks. Cancelled setup, empty checks, or red baselines stop specialized mutation and bug-fix workflows safely.
 - Every Tester, Builder, review-fix, and Documenter mutation is followed by saved checks before further mutation or completion; the final check set runs after all agent sessions.
-- With worktree isolation enabled, the complete mutation phase runs from an exact snapshot of the current Git workspace. The main workspace is updated only after final checks and mutation-policy validation pass. Additions, deletions, renames, binaries, modes, and symlinks are synchronized conflict-safely; a conflicting worktree is retained with a recovery patch.
+- With worktree isolation enabled, no worktree is created during exploration or planning. It is created from an exact snapshot of the current Git workspace only when the approved workflow enters its mutation phase, after any required mutation confirmation; all mutation agents and checks then use it. The main workspace is updated only after final checks and mutation-policy validation pass. Additions, deletions, renames, binaries, modes, and symlinks are synchronized conflict-safely; a conflicting worktree is retained with a recovery patch.
 - The extension never deletes project files based on temporary-looking filenames. Unexpected mutations are reported and, when isolation is enabled, discarded with the worktree.
 - Required human gates fail closed outside TUI/RPC mode. Explicit rejection and `/orchestrator-cancel` are recorded as cancellation rather than workflow failure.
 - Builder fixes are checked immediately. Code-review fixes are checked and re-reviewed until approved or the configured limit is exhausted.
@@ -167,6 +169,8 @@ Task `files` are exact mutation authorization paths for mutating routes and insp
 ## SDK execution
 
 Roles run as fresh in-memory Pi SDK sessions, not nested `pi` subprocesses. Models are pre-resolved before mutation, events are reduced to bounded lifecycle/tool metadata, and every session is aborted/disposed on timeout, cancellation, or completion. Each invocation also records its Pi conversation transcript (user, assistant, collapsed reasoning, tool calls, and tool results) without retaining system prompts or sharing conversation memory between invocations. Project checks reuse `ExtensionAPI.exec` with per-command timeout and bounded stdout/stderr.
+
+The programmatic `Orchestrator.start()` and `Orchestrator.resume()` promises represent controller completion, including durable recording of a failed, cancelled, or paused workflow. After either promise resolves, callers must inspect `getState().status` for the workflow outcome. Setup failures that occur before workflow state is initialized still reject the promise.
 
 ## Run artifacts
 
@@ -215,7 +219,7 @@ Key areas:
 - **Recent timeline** — keyed step updates that preserve DOM state. Each entry shows time, status, label, agent, attempt, message, and artifact controls.
 - **Artifact viewer** — recent artifact list with size and truncation metadata. The viewer supports line wrapping and persistent content across workflow updates.
 
-When no workflow has run, the dashboard shows one of three states: ready with agent and check counts, setup-required for missing configuration, or a configuration-error message if the config file is invalid — without creating or modifying any files.
+When no workflow has run, the dashboard shows one of three states: ready with agent and check counts, setup-deferred for missing configuration, or a configuration-error message if the config file is invalid, without creating or modifying files. Its setup and overview guidance makes clear that read-only routes need no project checks and that checks/file changes appear only for routes that use them.
 
 The dashboard is a React application built into self-contained local assets under `src/dashboard-dist/`. It is read-only, bound to localhost with security headers (X-Content-Type-Options, CSP, cache control, no-store), and requires no external network dependencies. SSE clients receive the current state immediately upon connection.
 

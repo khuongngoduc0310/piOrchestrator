@@ -1,20 +1,25 @@
 import type { ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import { formatPlanForReview } from "./plan-review.js";
+import { createPlanReviewComponent, type PlanReviewResult } from "../ui/plan-review-component.js";
 import { saveConfig } from "../config/config.js";
 import type { CandidateLesson } from "../memory/memory-types.js";
 import type { CheckpointBindings } from "../persistence/checkpoint-types.js";
-import type { HumanGateState, HumanPlanReviewResult, HumanReviewDecision, OrchestratorConfig, PlannerOutput, ReviewOutput } from "../types.js";
+import type { DebuggerOutput, HumanGateState, HumanPlanReviewResult, HumanReviewDecision, OrchestratorConfig, PlannerOutput, ReviewOutput } from "../types.js";
 import type { OrchestratorRuntime } from "./orchestrator-runtime.js";
-import type { WorkflowContext } from "./orchestrator-context.js";
+import type { ImplementationPlanningResult, WorkflowContext } from "./orchestrator-context.js";
 import { formatCandidateForApproval, raceWithAbort } from "./orchestrator-helpers.js";
 import { requestHumanDecision, type GateInteraction } from "./orchestrator-human-decisions.js";
 import { HumanGateUnavailableError, WorkflowCancelledError } from "./workflow-errors.js";
+import { resolveParticipationPolicy, requiresHumanDecision } from "./participation-policy.js";
+import { applyParticipationProfile } from "./participation-policy.js";
+import { formatDiagnosisForApproval } from "../ui/session-messages.js";
 
 export function shouldSuggestHumanTouchpoints(config: OrchestratorConfig, ctx: ExtensionCommandContext): boolean {
+  const policy = resolveParticipationPolicy(config);
   return ctx.hasUI
-    && !config.humanInTheLoop.planApproval
-    && !config.humanInTheLoop.planRevisionApproval
-    && !config.humanInTheLoop.confirmBeforeMutation;
+    && !requiresHumanDecision(policy, "initial_plan")
+    && !requiresHumanDecision(policy, "mutation_confirmation")
+    && !requiresHumanDecision(policy, "final_delivery");
 }
 
 export async function suggestHumanTouchpoints(
@@ -23,24 +28,24 @@ export async function suggestHumanTouchpoints(
   ctx: ExtensionCommandContext
 ): Promise<void> {
   try {
-    const enableAll = await ctx.ui.confirm(
+    const interested = await ctx.ui.confirm(
       "You can be involved in the workflow",
-      "You can review and approve plans before they are executed. " +
-      "Would you like to enable human review of the implementation plan? " +
-      "You can always change this later in the config."
+      "You can review plans, confirm mutations, and approve delivery. Would you like to choose a participation profile?"
     );
-    if (!enableAll) return;
-    const choices = await ctx.ui.select("Which stages would you like to review?", [
-      "Plan approval (Recommended — review plan before implementation)",
-      "Plan + revisions (Recommended — review plan and any revisions)",
-      "All touchpoints (Plan, revisions, and confirmation before code changes)"
-    ]);
-    if (!choices) return;
-    config.humanInTheLoop.planApproval = true;
-    if (choices.startsWith("Plan + revisions") || choices.startsWith("All touchpoints")) config.humanInTheLoop.planRevisionApproval = true;
-    if (choices.startsWith("All touchpoints")) config.humanInTheLoop.confirmBeforeMutation = true;
-    await saveConfig(cwd, config);
-    ctx.ui.notify("Human touchpoints enabled and saved to config. You can edit .pi/orchestrator/config.json to adjust.", "info");
+    if (!interested) return;
+    const choice = await ctx.ui.select(
+      "Choose a participation profile",
+      [
+        "Balanced  — approve plan and confirm mutation",
+        "Controlled  — full human oversight",
+        "Cancel  — keep autonomous"
+      ]
+    );
+    if (!choice || choice.startsWith("Cancel")) return;
+    const profile = choice.startsWith("Balanced") ? "balanced" : "controlled";
+    const updated = applyParticipationProfile(config, profile);
+    await saveConfig(cwd, updated);
+    ctx.ui.notify(`Participation set to ${profile}. You can edit .pi/orchestrator/config.json to adjust.`, "info");
   } catch {
     // Suggestion is best-effort; the workflow continues with defaults.
   }
@@ -61,6 +66,42 @@ export async function runDurableHumanGate<T>(
   return requestHumanDecision(runtime, workflow, kind as import("./human-decision-types.js").HumanDecisionKind, "mandatory", resume, bindings, gi);
 }
 
+export async function requestBugDiagnosisApproval(
+  runtime: OrchestratorRuntime,
+  workflow: WorkflowContext,
+  planning: ImplementationPlanningResult,
+  diagnosis: DebuggerOutput
+): Promise<void> {
+  await runDurableHumanGate(
+    runtime,
+    workflow,
+    "bug_diagnosis_approval",
+    "Bug diagnosis approval",
+    { point: "bug_diagnosis_decision", scopeRevisionCount: planning.scopeRevisionCount },
+    {
+      exploration: planning.exploration,
+      plan: planning.plan,
+      baselineChecks: planning.baseline,
+      diagnosis
+    },
+    async signal => {
+      const viewed = await raceWithAbort(workflow.ctx.ui.editor(
+        "Review the diagnosis before it is used to change the repository",
+        formatDiagnosisForApproval(diagnosis)
+      ), signal);
+      if (viewed === undefined) return undefined;
+      const answer = await workflow.ctx.ui.select(
+        "Use this diagnosis for the bug fix?",
+        ["Approve diagnosis", "Cancel workflow"],
+        { signal }
+      );
+      if (!answer) return undefined;
+      return { action: answer === "Approve diagnosis" ? "approve" as const : "cancel" as const };
+    },
+    () => undefined
+  );
+}
+
 export async function promptHumanPlanReview(
   runtime: OrchestratorRuntime,
   plan: PlannerOutput,
@@ -69,6 +110,24 @@ export async function promptHumanPlanReview(
 ): Promise<HumanPlanReviewResult | undefined> {
   if (!ctx.hasUI) throw new HumanGateUnavailableError(`${label} requires TUI or RPC mode`);
   const signal = runtime.requireController().signal;
+
+  if (ctx.mode === "tui") {
+    const result = await raceWithAbort(
+      ctx.ui.custom<PlanReviewResult>((tui, theme, _kb, done) =>
+        createPlanReviewComponent(tui, theme, done, plan, label)
+      ),
+      signal
+    );
+    if (!result) return undefined;
+    if (result.action === "cancel") throw new WorkflowCancelledError("Workflow cancelled during plan review", "human_gate");
+    if (result.action === "approve") return { approved: true };
+    const feedback = await raceWithAbort(
+      ctx.ui.input("Describe what changes you need:", "e.g. Add error handling to the login task", { signal }),
+      signal
+    );
+    return feedback === undefined ? undefined : { approved: false, feedback };
+  }
+
   const title = `${label}\n\nReview the plan below. You can approve, request changes, or cancel.`;
   const viewed = await raceWithAbort(ctx.ui.editor(title, formatPlanForReview(plan)), signal);
   if (viewed === undefined) return undefined;
