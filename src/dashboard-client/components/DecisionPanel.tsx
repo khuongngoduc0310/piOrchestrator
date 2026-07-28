@@ -1,4 +1,4 @@
-import React, { useCallback, useRef, useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import { MarkdownPreview } from "./MarkdownPreview.js";
 import type { DashboardDecisionAction } from "../../dashboard-types.js";
 import type { HumanDecisionAction } from "../../orchestration/human-decision-types.js";
@@ -34,11 +34,14 @@ export function DecisionPanel({
   const [feedback, setFeedback] = useState("");
   const [showFeedback, setShowFeedback] = useState(false);
   const feedbackRef = useRef<HTMLTextAreaElement>(null);
+  const panelRef = useRef<HTMLDivElement>(null);
+  const confirmationRef = useRef<HTMLDivElement>(null);
+  const [confirmation, setConfirmation] = useState<DashboardDecisionAction | null>(null);
 
   const isSubmitting = submissionStatus === "submitting";
   const hasFeedback = feedback.trim().length > 0;
 
-  const handleAction = useCallback((action: DashboardDecisionAction) => {
+  function submitAction(action: DashboardDecisionAction) {
     if (isSubmitting) return;
     if (action.requiresFeedback && !showFeedback) {
       setShowFeedback(true);
@@ -46,19 +49,59 @@ export function DecisionPanel({
       return;
     }
     if (action.requiresFeedback && !hasFeedback) return;
+    if (["cancel", "proceed", "accept_current", "finish"].includes(action.value) && confirmation?.value !== action.value) {
+      setConfirmation(action);
+      return;
+    }
     onSubmitAction(action.value, action.requiresFeedback ? feedback.trim() : undefined);
-  }, [isSubmitting, showFeedback, hasFeedback, feedback, onSubmitAction]);
+  }
 
   const isPlanApproval = kind === "plan_approval" || kind === "plan_revision_approval";
   const isBaselineRepair = kind === "baseline_repair_approval";
+  const headings = extractHeadings(planMarkdown ?? "");
+  const evidence = evidenceStatus(planMarkdown ?? "", headings);
+
+  useEffect(() => {
+    if (confirmation) confirmationRef.current?.querySelector<HTMLElement>("button")?.focus();
+  }, [confirmation]);
+
+  useEffect(() => {
+    const panel = panelRef.current;
+    if (!panel) return;
+    const previousFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    const first = panel.querySelector<HTMLElement>("button, [href], input, textarea, [tabindex]:not([tabindex='-1'])");
+    (first ?? panel).focus();
+    function handleKey(event: KeyboardEvent) {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        setConfirmation(null);
+        return;
+      }
+      if (event.key !== "Tab") return;
+      const focusScope = confirmationRef.current ?? panelRef.current;
+      if (!focusScope) return;
+      const focusable = [...focusScope.querySelectorAll<HTMLElement>("button:not([disabled]), [href], input:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex='-1'])")];
+      if (!focusable.length) return;
+      const firstItem = focusable[0];
+      const lastItem = focusable[focusable.length - 1];
+      if (event.shiftKey && document.activeElement === firstItem) { event.preventDefault(); lastItem.focus(); }
+      else if (!event.shiftKey && document.activeElement === lastItem) { event.preventDefault(); firstItem.focus(); }
+    }
+    panel.addEventListener("keydown", handleKey);
+    return () => {
+      panel.removeEventListener("keydown", handleKey);
+      previousFocus?.focus();
+    };
+  }, []);
 
   return (
-    <div id="decision-panel" className="panel" role="dialog" aria-modal="true" aria-labelledby="decision-heading">
+    <div ref={panelRef} id="decision-panel" role="dialog" aria-modal="true" aria-labelledby="decision-heading" tabIndex={-1}>
       <div className="decision-header">
-        <div className="decision-badge">Decision required</div>
+        <div><div className="decision-badge">Decision required</div>
         <h2 id="decision-heading">{label}</h2>
         {isPlanApproval && <p className="muted">Review the plan below and approve, request changes, or cancel.</p>}
-        {isBaselineRepair && <p className="muted">Review the baseline repair plan below and approve, request changes, or cancel.</p>}
+        {isBaselineRepair && <p className="muted">Review the baseline repair plan below and approve, request changes, or cancel.</p>}</div>
+        <div className="decision-evidence-status">{evidence.map(item => <span key={item.label}>{item.label}: {item.available ? "available" : "unavailable"}</span>)}</div>
       </div>
 
       {previewStatus === "loading" && (
@@ -79,8 +122,9 @@ export function DecisionPanel({
       )}
 
       {previewStatus === "loaded" && planMarkdown && (
-        <div className="decision-plan">
-          <MarkdownPreview markdown={planMarkdown} />
+        <div className="decision-workspace">
+          <nav className="decision-outline" aria-label="Evidence outline"><strong>AVAILABLE EVIDENCE</strong>{headings.length ? headings.map((heading, index) => <button type="button" key={`${heading}-${index}`} onClick={() => panelRef.current?.querySelectorAll(".decision-plan h1, .decision-plan h2, .decision-plan h3")[index]?.scrollIntoView({ block: "start" })}>{heading}</button>) : <span className="muted">Plan has no headings</span>}<button type="button" disabled>Diff / unavailable</button></nav>
+          <article className="decision-plan" aria-label="Approval document"><MarkdownPreview markdown={planMarkdown} /></article>
         </div>
       )}
 
@@ -89,14 +133,14 @@ export function DecisionPanel({
           {showFeedback && allowedActions.some(action => action.requiresFeedback) && (
             <div className="decision-feedback">
               <label htmlFor="decision-feedback-input">
-                Describe what changes you need:
+                Markdown feedback describing the requested changes:
               </label>
               <textarea
                 id="decision-feedback-input"
                 ref={feedbackRef}
                 value={feedback}
                 onChange={(e) => setFeedback(e.target.value)}
-                placeholder="e.g. Add error handling to the login task"
+                placeholder="Use Markdown to describe required changes and evidence."
                 rows={3}
                 required
                 disabled={isSubmitting}
@@ -109,7 +153,7 @@ export function DecisionPanel({
                 key={action.value}
                 type="button"
                 className={`decision-btn ${action.value === "cancel" ? "cancel" : action.requiresFeedback ? "changes" : "approve"}`}
-                onClick={() => handleAction(action)}
+                onClick={() => submitAction(action)}
                 disabled={isSubmitting || (action.requiresFeedback && showFeedback && !hasFeedback)}
               >
                 {action.requiresFeedback && showFeedback ? `Submit: ${action.label}` : action.label}
@@ -122,8 +166,24 @@ export function DecisionPanel({
               <button type="button" onClick={onDismissError}>Dismiss</button>
             </div>
           )}
+          {confirmation && <div ref={confirmationRef} className="decision-confirm" role="alertdialog" aria-modal="true" aria-labelledby="decision-confirm-heading"><h3 id="decision-confirm-heading">Confirm {confirmation.label.toLowerCase()}</h3><p>This action can stop the workflow or accept evidence with unresolved risk. It cannot be dismissed by clicking outside.</p><div><button type="button" className="decision-btn changes" onClick={() => setConfirmation(null)}>Go back</button><button type="button" className="decision-btn cancel" onClick={() => submitAction(confirmation)}>Confirm {confirmation.label}</button></div></div>}
         </div>
       )}
     </div>
   );
+}
+
+export function extractHeadings(markdown: string): string[] {
+  return markdown.split("\n").map(line => line.match(/^#{1,3}\s+(.+)$/)?.[1]?.trim()).filter((value): value is string => Boolean(value));
+}
+
+function evidenceStatus(markdown: string, headings: string[]) {
+  const evidenceText = headings.join(" ").toLowerCase();
+  return [
+    { label: "Review document", available: markdown.trim().length > 0 },
+    { label: "Files", available: /\bfiles?\b|changed paths?|authorized paths?/.test(evidenceText) },
+    { label: "Checks", available: /\bchecks?\b|verification|test results?/.test(evidenceText) },
+    { label: "Risks", available: /\brisks?\b|assumptions?|blocking issues?/.test(evidenceText) },
+    { label: "Diff", available: false },
+  ];
 }

@@ -177,7 +177,7 @@ function ArtifactContent({
               ? "(error loading artifact)"
               : data
                 ? data.text
-                : "Loading…"}
+                : "Loading..."}
           </pre>
         )}
     </div>

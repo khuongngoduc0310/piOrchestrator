@@ -15,15 +15,13 @@ export function useDashboardStream(dispatch: React.Dispatch<DashboardAction>): v
 
   useEffect(() => {
     let cancelled = false;
+    let receivedLiveEvent = false;
 
     getCurrentState()
       .then((data) => {
-        if (cancelled) return;
+        if (cancelled || receivedLiveEvent) return;
         if (data) {
           handleSnapshot(data);
-          if (data.run?.id) {
-            dispatch({ type: "runSelected", runId: data.run.id });
-          }
         }
         return listRuns();
       })
@@ -45,6 +43,7 @@ export function useDashboardStream(dispatch: React.Dispatch<DashboardAction>): v
       try {
         const data = JSON.parse(e.data) as OrchestratorViewModel;
         if (!data) return;
+        receivedLiveEvent = true;
         const key = data.run ? `${data.run.id}:${data.run.runStatus}` : "";
         handleSnapshot(data);
         if (key && key !== lastRunStatusRef.current) {

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { OrchestratorViewModel, PendingDecisionInfo } from "../dashboard-types.js";
-import { dashboardReducer, INITIAL_STATE, isViewingLiveRun } from "./state.js";
+import { dashboardReducer, INITIAL_STATE, isSelectedLiveRun, isViewingLiveRun } from "./state.js";
 
 function snapshot(runId: string): OrchestratorViewModel {
   return {
@@ -83,6 +83,14 @@ describe("dashboard state", () => {
     expect(state.previewError).toBeNull();
   });
 
+  it("ignores a submission result from a superseded decision", () => {
+    let state = dashboardReducer(INITIAL_STATE, { type: "pendingDecisionUpdated", decision });
+    state = dashboardReducer(state, { type: "pendingDecisionUpdated", decision: { ...decision, id: "decision-2" } });
+    state = dashboardReducer(state, { type: "decisionSubmitted", decisionId: "decision-1" });
+    expect(state.currentDecisionId).toBe("decision-2");
+    expect(state.submissionStatus).toBe("idle");
+  });
+
   it("keeps an explicitly selected historical run when live state changes", () => {
     let state = dashboardReducer(INITIAL_STATE, {
       type: "liveSnapshotReceived",
@@ -104,6 +112,13 @@ describe("dashboard state", () => {
     expect(isViewingLiveRun(state)).toBe(false);
   });
 
+  it("clears the prior snapshot while a different historical run loads", () => {
+    let state = dashboardReducer(INITIAL_STATE, { type: "liveSnapshotReceived", snapshot: snapshot("run-live") });
+    state = dashboardReducer(state, { type: "runSelected", runId: "run-old" });
+    expect(state.displayedSnapshot).toBeNull();
+    expect(state.selectedRunId).toBe("run-old");
+  });
+
   it("does not treat agent history as the live run view", () => {
     let state = dashboardReducer(INITIAL_STATE, {
       type: "liveSnapshotReceived",
@@ -112,5 +127,29 @@ describe("dashboard state", () => {
     state = dashboardReducer(state, { type: "viewSelected", view: "agent-history" });
 
     expect(isViewingLiveRun(state)).toBe(false);
+    expect(isSelectedLiveRun(state)).toBe(true);
+  });
+
+  it("auto-opens a report when the live workflow completes and allows returning", () => {
+    let state = dashboardReducer(INITIAL_STATE, { type: "liveSnapshotReceived", snapshot: snapshot("run-live") });
+    state = dashboardReducer(state, { type: "liveSnapshotReceived", snapshot: { ...snapshot("run-live"), mode: "completed", run: { ...snapshot("run-live").run!, runStatus: "completed", stage: "completed" } } });
+    expect(state.view).toBe("report");
+    expect(isViewingLiveRun(state)).toBe(true);
+
+    state = dashboardReducer(state, { type: "viewSelected", view: "run" });
+    expect(state.view).toBe("run");
+  });
+
+  it("does not auto-open reports for historical snapshot loads", () => {
+    let state = dashboardReducer(INITIAL_STATE, { type: "runSelected", runId: "old" });
+    state = dashboardReducer(state, { type: "historicalSnapshotLoaded", runId: "old", snapshot: { ...snapshot("old"), mode: "completed", run: { ...snapshot("old").run!, runStatus: "completed", stage: "completed" } } });
+    expect(state.view).toBe("run");
+  });
+
+  it("keeps an initially completed live run in report view when it is selected", () => {
+    const completed = { ...snapshot("run-live"), mode: "completed" as const, run: { ...snapshot("run-live").run!, runStatus: "completed" as const, stage: "completed" as const } };
+    let state = dashboardReducer(INITIAL_STATE, { type: "liveSnapshotReceived", snapshot: completed });
+    state = dashboardReducer(state, { type: "runSelected", runId: "run-live" });
+    expect(state.view).toBe("report");
   });
 });

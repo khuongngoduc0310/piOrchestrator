@@ -99,9 +99,9 @@ export function Header({
       {connection !== "live" && (
         <div className={`connection-note ${connection}`} role="status" aria-live="polite">
           {connection === "connecting"
-            ? "Connecting to live workflow updates…"
+            ? "Connecting to live workflow updates..."
             : connection === "reconnecting"
-              ? "Live updates were interrupted. Reconnecting automatically…"
+              ? "Live updates were interrupted. Reconnecting automatically..."
               : "Live updates are unavailable. The dashboard will keep retrying automatically."}
         </div>
       )}
@@ -124,8 +124,8 @@ export function Header({
           )}
           {runs.map((run) => (
             <option key={run.id} value={run.id}>
-              {run.active ? "● " : ""}
-              {run.status} · {trunc(run.request, 58)}
+              {run.active ? "* " : ""}
+              {run.status} / {trunc(run.request, 58)}
             </option>
           ))}
         </select>
@@ -144,5 +144,5 @@ export function Header({
 
 function trunc(v: string | null | undefined, m: number): string {
   if (!v) return "";
-  return v.length <= m ? v : v.slice(0, m - 1) + "…";
+  return v.length <= m ? v : v.slice(0, m - 3) + "...";
 }

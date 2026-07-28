@@ -59,19 +59,19 @@ export function AgentGrid({ agents, selectedAgent, onSelectAgent }: AgentGridPro
 function statusLabel(s: AgentSummary["status"]): string {
   switch (s) {
     case "succeeded":
-      return "✓ Succeeded";
+      return "OK Succeeded";
     case "running":
-      return "→ Running";
+      return "> Running";
     case "failed":
       return "! Failed";
     case "cancelled":
-      return "— Cancelled";
+      return "- Cancelled";
     default:
-      return "● Idle";
+      return ". Idle";
   }
 }
 
 function trunc(v: string | null | undefined, m: number): string {
   if (!v) return "";
-  return v.length <= m ? v : v.slice(0, m - 1) + "…";
+  return v.length <= m ? v : v.slice(0, m - 3) + "...";
 }

@@ -26,7 +26,7 @@ export function Timeline({ steps, milestones = [], onOpenArtifact }: TimelinePro
             <div key={`milestone:${milestone.id}`} className="timeline-step milestone" role="listitem" data-milestone-id={milestone.id}>
               <span className="ts">{milestone.occurredAt.slice(11, 19)}</span>
               <span className="status-text succeeded">
-                <span aria-hidden="true">✓</span>
+                <span aria-hidden="true">OK</span>
                 <span className="visually-hidden">Milestone completed</span>
               </span>
               <div className="step-main">
@@ -47,12 +47,12 @@ export function Timeline({ steps, milestones = [], onOpenArtifact }: TimelinePro
                 : "cancelled";
         const icon =
           step.status === "succeeded"
-            ? "✓"
+            ? "OK"
             : step.status === "running"
-              ? "→"
+              ? ">"
               : step.status === "failed"
                 ? "!"
-                : "—";
+                : "-";
         const statusLabel = step.status.charAt(0).toUpperCase() + step.status.slice(1);
 
         return (

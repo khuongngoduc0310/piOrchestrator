@@ -182,7 +182,7 @@ export class OrchestratorRuntime {
   }
 
   async getRunAgentHistory(runId: string) {
-    if (this.state?.runId === runId) return buildAgentHistory(this.state);
+    if (this.state?.runId === runId) return buildAgentHistory(this.state, new Set(this.activeTranscripts.keys()));
     return this.historyRepository()?.getAgentHistory(runId);
   }
 

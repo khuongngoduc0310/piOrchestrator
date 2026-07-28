@@ -1,4 +1,4 @@
-import { useDeferredValue, useEffect, useState } from "react";
+import React, { useDeferredValue, useEffect, useState } from "react";
 import type { AgentHistoryResponse } from "../../dashboard-types.js";
 import type { AgentUsage } from "../../agent-types.js";
 import { getAgentHistory } from "../api.js";
@@ -8,11 +8,12 @@ import { TranscriptViewer } from "./TranscriptViewer.js";
 interface AgentHistoryProps {
   runId: string | null;
   revision?: number;
+  structureRevision?: string;
 }
 
 type DetailTab = "transcript" | "files";
 
-export function AgentHistory({ runId, revision }: AgentHistoryProps) {
+export function AgentHistory({ runId, revision, structureRevision }: AgentHistoryProps) {
   const [history, setHistory] = useState<AgentHistoryResponse | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(false);
@@ -21,6 +22,7 @@ export function AgentHistory({ runId, revision }: AgentHistoryProps) {
   const [query, setQuery] = useState("");
   const [sort, setSort] = useState("newest");
   const [selectedKey, setSelectedKey] = useState<string | null>(null);
+  const [comparisonKeys, setComparisonKeys] = useState<string[]>([]);
   const [detailTab, setDetailTab] = useState<DetailTab>("transcript");
   const [selectedDiffFile, setSelectedDiffFile] = useState(0);
   const deferredQuery = useDeferredValue(query.trim().toLowerCase());
@@ -43,14 +45,16 @@ export function AgentHistory({ runId, revision }: AgentHistoryProps) {
         if (!controller.signal.aborted) setLoading(false);
       });
     return () => controller.abort();
-  }, [runId, revision]);
+  }, [runId, structureRevision]);
 
   useEffect(() => {
+    setHistory(null);
     setSelectedKey(null);
     setAgentFilter("all");
     setStatusFilter("all");
     setQuery("");
     setSort("newest");
+    setComparisonKeys([]);
   }, [runId]);
 
   if (!runId) return <div className="panel empty-state">Select a workflow run to inspect agent usage.</div>;
@@ -67,6 +71,7 @@ export function AgentHistory({ runId, revision }: AgentHistoryProps) {
     return `${item.agent} ${item.stepLabel} ${item.provider ?? ""} ${item.model ?? ""}`.toLowerCase().includes(deferredQuery);
   }).sort((left, right) => compareInvocations(left, right, sort));
   const selected = history.invocations.find(item => item.key === selectedKey) ?? null;
+  const compared = comparisonKeys.map(key => history.invocations.find(item => item.key === key)).filter((item): item is AgentHistoryResponse["invocations"][number] => Boolean(item));
   const cacheDenominator = total ? total.input + total.cacheRead : 0;
   const cacheRate = total && cacheDenominator > 0 ? total.cacheRead / cacheDenominator : undefined;
 
@@ -104,7 +109,7 @@ export function AgentHistory({ runId, revision }: AgentHistoryProps) {
           <button className={`spend-card${agentFilter === agent.name ? " selected" : ""}`} type="button" key={agent.name} onClick={() => setAgentFilter(agentFilter === agent.name ? "all" : agent.name)}>
             <span className="agent-name">{agent.name}</span>
             <strong>{agent.usage ? formatCost(agent.usage.cost) : "Unavailable"}</strong>
-            <span className="muted">{agent.usage ? formatTokens(tokenTotal(agent.usage)) : "No usage"} · {agent.invocationCount} runs</span>
+            <span className="muted">{agent.usage ? formatTokens(tokenTotal(agent.usage)) : "No usage"} / {agent.invocationCount} runs</span>
           </button>
         ))}
       </div>
@@ -132,10 +137,11 @@ export function AgentHistory({ runId, revision }: AgentHistoryProps) {
         </div>
         <div className="history-table-wrap">
           <table className="history-table">
-            <thead><tr><th>Invocation</th><th>Model</th><th>Status</th><th>Tokens</th><th>Cache</th><th>Cost</th><th>Duration</th></tr></thead>
+            <thead><tr><th>Compare</th><th>Invocation</th><th>Model</th><th>Status</th><th>Tokens</th><th>Cache</th><th>Cost</th><th>Duration</th></tr></thead>
             <tbody>
               {filtered.map(item => (
                 <tr key={item.key} className={selectedKey === item.key ? "selected" : ""} onClick={() => setSelectedKey(item.key)}>
+                  <td><button type="button" className={`comparison-select${comparisonKeys.includes(item.key) ? " selected" : ""}`} aria-pressed={comparisonKeys.includes(item.key)} aria-label={`${comparisonKeys.includes(item.key) ? "Remove" : "Add"} ${item.agent} invocation ${item.sequence} ${comparisonKeys.includes(item.key) ? "from" : "to"} comparison`} onClick={event => { event.stopPropagation(); setComparisonKeys(keys => keys.includes(item.key) ? keys.filter(key => key !== item.key) : keys.length < 2 ? [...keys, item.key] : [keys[1], item.key]); }}>{comparisonKeys.includes(item.key) ? "Selected" : "Select"}</button></td>
                   <td>
                     <button
                       type="button"
@@ -147,7 +153,7 @@ export function AgentHistory({ runId, revision }: AgentHistoryProps) {
                       }}
                     >
                       <strong>{item.agent}</strong>
-                      <span>{item.stepLabel} · {item.mode.replace("_", " ")} #{item.sequence}</span>
+                      <span>{item.stepLabel} / {item.mode.replace("_", " ")} #{item.sequence}</span>
                     </button>
                   </td>
                   <td>{item.model ?? "Unknown"}<span>{item.provider ?? ""}</span></td>
@@ -164,15 +170,21 @@ export function AgentHistory({ runId, revision }: AgentHistoryProps) {
         </div>
       </div>
 
+      {compared.length > 0 && <section className="panel comparison-panel" aria-labelledby="comparison-heading"><div className="history-detail-title"><div><h3 id="comparison-heading">Invocation comparison</h3><span className="muted">Select any two invocations. A third selection replaces the oldest.</span></div><button type="button" className="close-btn" onClick={() => setComparisonKeys([])}>Clear</button></div><div className="comparison-grid">
+        <div className="comparison-labels"><span>Invocation</span><span>Provider / model</span><span>Status</span><span>Duration</span><span>Tokens</span><span>Cost</span><span>Changes</span></div>
+        {compared.map(item => <div className="comparison-column" key={item.key}><strong>{item.agent} #{item.sequence}</strong><span>{item.provider ?? "Unknown provider"} / {item.model ?? "Unknown model"}</span><span>{item.status}</span><span>{formatDuration(item.durationMs)}</span><span>{item.usage ? formatTokens(tokenTotal(item.usage)) : "Unavailable"}</span><span>{item.usage ? formatCost(item.usage.cost) : "Unavailable"}</span><span>{item.changedFileCount === undefined ? "Unavailable" : `${item.changedFileCount} files`}</span><button type="button" onClick={() => setSelectedKey(item.key)}>Open transcript / diff</button></div>)}
+        {compared.length === 1 && <div className="comparison-placeholder">Select one more invocation</div>}
+      </div></section>}
+
       {selected && (
         <div className="panel history-detail">
-          <div className="history-detail-title"><div><h3>{selected.agent} · {selected.stepLabel}</h3><span className="muted">{selected.model ?? "Unknown model"} · {selected.startedAt.replace("T", " ").slice(0, 19)}</span></div><button className="close-btn" type="button" onClick={() => setSelectedKey(null)}>Close</button></div>
+          <div className="history-detail-title"><div><h3>{selected.agent} / {selected.stepLabel}</h3><span className="muted">{selected.model ?? "Unknown model"} / {selected.startedAt.replace("T", " ").slice(0, 19)}</span></div><button className="close-btn" type="button" onClick={() => setSelectedKey(null)}>Close</button></div>
           <div className="inspector-tabs">
             <button className={`close-btn inspector-tab${detailTab === "transcript" ? " active" : ""}`} type="button" onClick={() => setDetailTab("transcript")}>Transcript</button>
             <button className={`close-btn inspector-tab${detailTab === "files" ? " active" : ""}`} type="button" onClick={() => setDetailTab("files")}>Files{selected.changedFileCount !== undefined ? ` (${selected.changedFileCount})` : ""}</button>
           </div>
           {detailTab === "transcript"
-            ? selected.hasTranscript ? <TranscriptViewer runId={runId} stepId={selected.stepId} sequence={selected.sequence} query="" /> : <div className="empty-state">No transcript captured.</div>
+            ? selected.hasTranscript || selected.status === "running" ? <TranscriptViewer runId={runId} stepId={selected.stepId} sequence={selected.sequence} query="" revision={revision} status={selected.status} /> : <div className="empty-state">No transcript captured.</div>
             : selected.hasDiff ? <DiffViewer runId={runId} stepId={selected.stepId} sequence={selected.sequence} selectedDiffFile={selectedDiffFile} onSelectDiffFile={setSelectedDiffFile} /> : <div className="empty-state">No file diff captured.</div>}
         </div>
       )}

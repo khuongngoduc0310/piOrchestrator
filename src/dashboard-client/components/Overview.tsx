@@ -13,12 +13,12 @@ export function Overview({ snapshot, onSelectAgent }: OverviewProps) {
       <>
         <div id="activity" className="panel">
           <div className="empty-state">
-            <p>Loading activity…</p>
+            <p>Loading activity...</p>
           </div>
         </div>
         <div id="run-details" className="panel">
           <div className="empty-state">
-            <p>Loading details…</p>
+            <p>Loading details...</p>
           </div>
         </div>
       </>
@@ -37,7 +37,7 @@ export function Overview({ snapshot, onSelectAgent }: OverviewProps) {
               <p className="muted">
                 {commands.map((c, i) => (
                   <span key={i}>
-                    {i > 0 && " · "}
+                    {i > 0 && " / "}
                     <code>{c}</code>
                   </span>
                 ))}
@@ -125,7 +125,7 @@ export function Overview({ snapshot, onSelectAgent }: OverviewProps) {
         {renderDetail("Status", run.runStatus)}
         {renderDetail("Stage", run.stage)}
         {renderDetail("Attempt", `${run.attempt}/${run.maxAttempts}`)}
-        {renderDetail("Checks", String(config?.checkCount ?? "—"))}
+        {renderDetail("Checks", String(config?.checkCount ?? "-"))}
         {renderDetail("Version", run.extensionVersion ?? "?")}
         {renderDetail("Artifacts", run.artifactPath)}
       </div>
@@ -137,12 +137,12 @@ function renderDetail(label: string, value: string | undefined) {
   return (
     <div className="value-row">
       <span className="label">{label}:</span>
-      <span className="value">{value ?? "—"}</span>
+      <span className="value">{value ?? "-"}</span>
     </div>
   );
 }
 
 function trunc(v: string | null | undefined, m: number): string {
   if (!v) return "";
-  return v.length <= m ? v : v.slice(0, m - 1) + "…";
+  return v.length <= m ? v : v.slice(0, m - 3) + "...";
 }

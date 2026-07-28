@@ -2,7 +2,10 @@ import { AGENT_NAMES, type AgentUsage } from "../agent-types.js";
 import type { AgentHistoryInvocation, AgentHistoryResponse, AgentUsageSummary } from "../dashboard-types.js";
 import type { WorkflowState } from "../workflow-types.js";
 
-export function buildAgentHistory(state: WorkflowState): AgentHistoryResponse {
+export function buildAgentHistory(
+  state: WorkflowState,
+  activeTranscriptKeys: ReadonlySet<string> = new Set(),
+): AgentHistoryResponse {
   const invocations: AgentHistoryInvocation[] = [];
   for (const step of state.steps) {
     if (!step.agent) continue;
@@ -24,7 +27,7 @@ export function buildAgentHistory(state: WorkflowState): AgentHistoryResponse {
         api: invocation.api,
         stopReason: invocation.stopReason,
         changedFileCount: invocation.changedFileCount,
-        hasTranscript: invocation.transcriptArtifact !== undefined,
+        hasTranscript: invocation.transcriptArtifact !== undefined || activeTranscriptKeys.has(`${step.id}:${invocation.sequence}`),
         hasDiff: invocation.fileDiffArtifact !== undefined
       });
     }

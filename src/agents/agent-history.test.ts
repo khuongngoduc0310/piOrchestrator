@@ -62,4 +62,26 @@ describe("buildAgentHistory", () => {
     expect(history.invocations[1]).toMatchObject({ agent: "explorer", sequence: 2, usage: undefined });
     expect(history.invocations[2]).toMatchObject({ hasTranscript: true, durationMs: 2_000 });
   });
+
+  it("marks an active runtime transcript as available without a persisted artifact", () => {
+    const state = {
+      runId: "run-live",
+      steps: [{
+        id: "step-1",
+        label: "Build",
+        agent: "builder",
+        invocations: [{
+          sequence: 1,
+          mode: "execute",
+          status: "running",
+          startedAt: "2026-01-01T00:00:00.000Z",
+          messageCount: 1,
+          truncated: false,
+        }],
+      }],
+    } as unknown as WorkflowState;
+
+    expect(buildAgentHistory(state).invocations[0].hasTranscript).toBe(false);
+    expect(buildAgentHistory(state, new Set(["step-1:1"])).invocations[0].hasTranscript).toBe(true);
+  });
 });

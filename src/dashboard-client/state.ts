@@ -7,7 +7,7 @@ import type { DashboardDecisionAction } from "../dashboard-types.js";
 
 export type ConnectionState = "connecting" | "live" | "reconnecting" | "disconnected";
 export type AgentMode = "auto" | "pinned" | "closed";
-export type DashboardView = "run" | "agent-history";
+export type DashboardView = "run" | "agent-history" | "report";
 export type PreviewStatus = "idle" | "loading" | "loaded" | "error";
 export type SubmissionStatus = "idle" | "submitting" | "submitted" | "error";
 
@@ -82,8 +82,8 @@ export type DashboardAction =
   | { type: "planPreviewLoaded"; decisionId: string; markdown: string; actions: DashboardDecisionAction[] }
   | { type: "planPreviewError"; decisionId: string; error: string }
   | { type: "decisionSubmitting" }
-  | { type: "decisionSubmitted" }
-  | { type: "decisionError"; error: string }
+  | { type: "decisionSubmitted"; decisionId: string }
+  | { type: "decisionError"; decisionId: string; error: string }
   | { type: "decisionDismissed" };
 
 export function dashboardReducer(
@@ -93,11 +93,21 @@ export function dashboardReducer(
   switch (action.type) {
     case "liveSnapshotReceived": {
       const live = action.snapshot;
+      const previous = state.liveSnapshot?.run;
+      const completedNow = live.run?.runStatus === "completed" &&
+        (previous?.id !== live.run.id || previous.runStatus !== "completed");
       const displayed =
         state.selectedRunId && state.selectedRunId !== (live.run?.id ?? null)
           ? state.displayedSnapshot
           : live;
-      return { ...state, liveSnapshot: live, displayedSnapshot: displayed };
+      return {
+        ...state,
+        liveSnapshot: live,
+        displayedSnapshot: displayed,
+        view: completedNow && (!state.selectedRunId || state.selectedRunId === live.run?.id)
+          ? "report"
+          : state.view,
+      };
     }
     case "displayLiveRun": {
       if (!state.liveSnapshot) return state;
@@ -108,9 +118,13 @@ export function dashboardReducer(
       };
     }
     case "runSelected": {
+      const selectingCompletedLiveRun = state.liveSnapshot?.run?.id === action.runId &&
+        state.liveSnapshot.run.runStatus === "completed";
+      const selectingLiveRun = state.liveSnapshot?.run?.id === action.runId;
       return {
         ...state,
         selectedRunId: action.runId,
+        displayedSnapshot: selectingLiveRun ? state.liveSnapshot : null,
         selectedAgent: null,
         agentMode: "auto",
         selectedInvocation: null,
@@ -118,6 +132,7 @@ export function dashboardReducer(
         transcriptQuery: "",
         selectedDiffFile: 0,
         selectedArtifact: null,
+        view: selectingCompletedLiveRun ? "report" : "run",
       };
     }
     case "historicalSnapshotLoaded": {
@@ -199,11 +214,11 @@ export function dashboardReducer(
         };
       }
       const decisionId = action.decision.id;
-      // Same decision from repeated SSE snapshot — preserve loaded state
+      // Same decision from repeated SSE snapshot: preserve loaded state.
       if (decisionId === state.currentDecisionId) {
         return { ...state, pendingDecision: action.decision };
       }
-      // New decision — clear everything and start fresh
+      // New decision: clear everything and start fresh.
       return {
         ...state,
         currentDecisionId: decisionId,
@@ -244,9 +259,11 @@ export function dashboardReducer(
       return { ...state, submissionStatus: "submitting", submissionError: null };
     }
     case "decisionSubmitted": {
+      if (action.decisionId !== state.currentDecisionId) return state;
       return { ...state, submissionStatus: "submitted" };
     }
     case "decisionError": {
+      if (action.decisionId !== state.currentDecisionId) return state;
       return { ...state, submissionStatus: "error", submissionError: action.error };
     }
     case "decisionDismissed": {
@@ -256,9 +273,13 @@ export function dashboardReducer(
 }
 
 export function isViewingLiveRun(state: DashboardState): boolean {
+  return (state.view === "run" || state.view === "report") && isSelectedLiveRun(state);
+}
+
+export function isSelectedLiveRun(state: DashboardState): boolean {
   const liveRunId = state.liveSnapshot?.run?.id ?? null;
   const displayedRunId = state.displayedSnapshot?.run?.id ?? liveRunId;
-  return state.view === "run" && liveRunId !== null &&
+  return liveRunId !== null &&
     (state.selectedRunId === null || state.selectedRunId === liveRunId) &&
     displayedRunId === liveRunId;
 }

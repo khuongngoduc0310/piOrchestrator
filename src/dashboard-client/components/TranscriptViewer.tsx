@@ -1,5 +1,5 @@
-import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
-import { getTranscript } from "../api.js";
+import React, { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
+import { DashboardApiError, getTranscript } from "../api.js";
 import type { AgentTranscript } from "../../agent-types.js";
 
 interface TranscriptViewerProps {
@@ -7,6 +7,8 @@ interface TranscriptViewerProps {
   stepId: string;
   sequence: number;
   query: string;
+  revision?: number;
+  status?: string;
 }
 
 export function TranscriptViewer({
@@ -14,39 +16,19 @@ export function TranscriptViewer({
   stepId,
   sequence,
   query,
+  revision,
+  status,
 }: TranscriptViewerProps) {
   const [data, setData] = useState<AgentTranscript | null>(null);
   const [error, setError] = useState(false);
+  const [waiting, setWaiting] = useState(false);
   const reqRef = useRef(0);
+  const identityRef = useRef("");
   const transcriptRef = useRef<HTMLDivElement>(null);
   const scrollPosRef = useRef(0);
   const followTailRef = useRef(true);
   const openDetailsRef = useRef<Set<string>>(new Set());
   const focusedKeyRef = useRef<string | null>(null);
-
-  useEffect(() => {
-    const controller = new AbortController();
-    const req = ++reqRef.current;
-    scrollPosRef.current = 0;
-    followTailRef.current = true;
-    openDetailsRef.current.clear();
-    focusedKeyRef.current = null;
-    setData(null);
-    setError(false);
-
-    getTranscript(runId, stepId, sequence, controller.signal)
-      .then((result) => {
-        if (req === reqRef.current) {
-          setData(result);
-        }
-      })
-      .catch(() => {
-        if (req === reqRef.current && !controller.signal.aborted) {
-          setError(true);
-        }
-      });
-    return () => controller.abort();
-  }, [runId, stepId, sequence]);
 
   // Record scroll / details / focus before DOM update
   const recordState = useCallback(() => {
@@ -61,11 +43,51 @@ export function TranscriptViewer({
     });
 
     const active = document.activeElement;
+    focusedKeyRef.current = null;
     if (active && el.contains(active)) {
       const focused = active.closest<HTMLElement>("[data-detail-key]");
       if (focused) focusedKeyRef.current = focused.dataset.detailKey ?? null;
     }
   }, []);
+
+  useEffect(() => {
+    const controller = new AbortController();
+    const req = ++reqRef.current;
+    const identity = `${runId}:${stepId}:${sequence}`;
+    const identityChanged = identityRef.current !== identity;
+    identityRef.current = identity;
+
+    if (identityChanged) {
+      scrollPosRef.current = 0;
+      followTailRef.current = true;
+      openDetailsRef.current.clear();
+      focusedKeyRef.current = null;
+      setData(null);
+    } else {
+      recordState();
+    }
+    setError(false);
+    setWaiting(false);
+
+    getTranscript(runId, stepId, sequence, controller.signal)
+      .then((result) => {
+        if (req === reqRef.current) {
+          recordState();
+          setData(result);
+          setError(false);
+          setWaiting(false);
+        }
+      })
+      .catch((requestError: unknown) => {
+        if (req !== reqRef.current || controller.signal.aborted) return;
+        if (status === "running" && requestError instanceof DashboardApiError && requestError.status === 404) {
+          setWaiting(true);
+          return;
+        }
+        setError(true);
+      });
+    return () => controller.abort();
+  }, [runId, stepId, sequence, revision, status, recordState]);
 
   // Restore scroll / details / focus after render
   useLayoutEffect(() => {
@@ -102,8 +124,12 @@ export function TranscriptViewer({
     );
   }
 
+  if (waiting && !data) {
+    return <div className="empty-state" role="status">Waiting for the first transcript event...</div>;
+  }
+
   if (!data) {
-    return <div className="empty-state">Loading…</div>;
+    return <div className="empty-state">Loading...</div>;
   }
 
   return (

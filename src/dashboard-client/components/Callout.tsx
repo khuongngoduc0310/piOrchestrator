@@ -38,8 +38,8 @@ export function Callout({ snapshot, onOpenArtifact }: CalloutProps) {
       <div id="callout" className="completed" role="status" aria-live="polite">
         <div className="callout-title">Ready</div>
         <div className="callout-body">
-          Agents: {config?.agentCount ?? 0} · Checks: {config?.checkCount ?? 0}
-          {snapshot.cwd ? ` · ${snapshot.cwd}` : ""}
+          Agents: {config?.agentCount ?? 0} / Checks: {config?.checkCount ?? 0}
+          {snapshot.cwd ? ` / ${snapshot.cwd}` : ""}
         </div>
       </div>
     );
@@ -80,7 +80,7 @@ export function Callout({ snapshot, onOpenArtifact }: CalloutProps) {
           )}
           {run.resumeCommand && (
             <div className="callout-body">
-              Safe checkpoint: {run.checkpoint?.cursor ?? "available"} · {run.resumeCommand}
+              Safe checkpoint: {run.checkpoint?.cursor ?? "available"} / {run.resumeCommand}
             </div>
           )}
           {run.resumeBlockedReason && (

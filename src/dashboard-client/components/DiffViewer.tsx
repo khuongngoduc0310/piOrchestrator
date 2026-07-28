@@ -45,7 +45,7 @@ export function DiffViewer({
   }
 
   if (!data) {
-    return <div className="empty-state">Loading…</div>;
+    return <div className="empty-state">Loading...</div>;
   }
 
   const metadata = data.metadata ?? {};
@@ -135,7 +135,7 @@ function renderFileDiff(
   if (file.binary) {
     return (
       <span className="diff-line meta">
-        Binary change · {file.status} · {diffPath(file)}
+        Binary change / {file.status} / {diffPath(file)}
       </span>
     );
   }

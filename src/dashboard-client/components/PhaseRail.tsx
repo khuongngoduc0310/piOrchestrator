@@ -18,7 +18,10 @@ export function PhaseRail({ run }: PhaseRailProps) {
     : null;
 
   return (
-    <div id="phases">
+    <section className="phase-graph" aria-labelledby="phase-graph-heading">
+      <div className="section-kicker">AUTHORITATIVE ROUTE</div>
+      <h2 id="phase-graph-heading">Workflow progress</h2>
+      <div id="phases" role="list" aria-label="Route phases">
       {UI_PHASE_LABELS.slice(0, phaseCount).map((label, i) => {
         const isSkipped = skipped.includes(i);
         const isTerminalPhase = terminalStatus !== null && i === phaseIndex;
@@ -31,7 +34,7 @@ export function PhaseRail({ run }: PhaseRailProps) {
             : i === phaseIndex
               ? "phase active"
               : "phase pending";
-        const icon = isSkipped ? "–" : isTerminalPhase ? terminalStatus === "failed" ? "!" : "×" : i < phaseIndex || (completed && i === phaseIndex) ? "✓" : i === phaseIndex ? "→" : "•";
+        const icon = isSkipped ? "-" : isTerminalPhase ? terminalStatus === "failed" ? "!" : "x" : i < phaseIndex || (completed && i === phaseIndex) ? "OK" : i === phaseIndex ? ">" : ".";
         const ariaLabel = isSkipped
           ? `Skipped: ${label}`
           : isTerminalPhase
@@ -48,6 +51,7 @@ export function PhaseRail({ run }: PhaseRailProps) {
             className={cls}
             aria-current={!completed && !terminalStatus && i === phaseIndex ? "step" : undefined}
             aria-label={ariaLabel}
+            role="listitem"
           >
             <span className="phase-icon" aria-hidden="true">
               {icon}
@@ -56,6 +60,7 @@ export function PhaseRail({ run }: PhaseRailProps) {
           </div>
         );
       })}
-    </div>
+      </div>
+    </section>
   );
 }

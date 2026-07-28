@@ -144,7 +144,7 @@ function renderInline(text: string): ReactNode[] {
     // Find next special character
     const nextSpecial = remaining.search(/[\n*`[\]]/);
     if (nextSpecial === 0) {
-      // Unmatched special char — emit literally
+      // Emit an unmatched special character literally.
       parts.push(remaining[0]);
       remaining = remaining.slice(1);
       continue;

@@ -11,6 +11,7 @@ import type {
 } from "../state.js";
 import { TranscriptViewer } from "./TranscriptViewer.js";
 import { DiffViewer } from "./DiffViewer.js";
+import { preferredInvocationKey } from "../workspace.js";
 
 interface AgentInspectorProps {
   snapshot: OrchestratorViewModel | null;
@@ -51,6 +52,8 @@ export function AgentInspector({
   const [loading, setLoading] = useState(false);
   const [invocations, setInvocations] = useState<FlattenedInvocation[]>([]);
   const reqRef = useRef(0);
+  const inspectionIdentityRef = useRef("");
+  const manualSelectionRef = useRef(false);
   const selectedItem = invocations.find(item => item.key === selectedInvocation) ?? null;
 
   const agents = snapshot?.agents ?? [];
@@ -66,8 +69,14 @@ export function AgentInspector({
     }
     const controller = new AbortController();
     const req = ++reqRef.current;
-    setInspection(null);
-    setInvocations([]);
+    const identity = `${runId}:${selectedAgent}`;
+    const identityChanged = inspectionIdentityRef.current !== identity;
+    inspectionIdentityRef.current = identity;
+    if (identityChanged) {
+      setInspection(null);
+      setInvocations([]);
+      manualSelectionRef.current = false;
+    }
     setLoading(true);
     getAgentInspection(runId, selectedAgent, controller.signal)
       .then((data) => {
@@ -98,23 +107,32 @@ export function AgentInspector({
       .catch(() => {
         if (req === reqRef.current && !controller.signal.aborted) {
           setLoading(false);
-          setInspection(null);
-          setInvocations([]);
+          if (identityChanged) {
+            setInspection(null);
+            setInvocations([]);
+          }
         }
       });
     return () => controller.abort();
   }, [runId, selectedAgent, agentMode, summary?.invocationCount, summary?.status]);
+
+  useEffect(() => {
+    const preferred = preferredInvocationKey(invocations, selectedInvocation, manualSelectionRef.current);
+    if (preferred && preferred !== selectedInvocation) dispatch({ type: "invocationSelected", key: preferred });
+  }, [dispatch, invocations, selectedInvocation]);
 
   const handleClose = useCallback(() => {
     dispatch({ type: "agentClosed" });
   }, [dispatch]);
 
   const handleAutoFollow = useCallback(() => {
+    manualSelectionRef.current = false;
     dispatch({ type: "agentAutoFollowed", agent: snapshot?.run?.activeAgent ?? null });
   }, [dispatch, snapshot?.run?.activeAgent]);
 
   const handleSelectInvocation = useCallback(
     (item: FlattenedInvocation) => {
+      manualSelectionRef.current = true;
       dispatch({ type: "invocationSelected", key: item.key });
     },
     [dispatch],
@@ -133,7 +151,7 @@ export function AgentInspector({
     <div id="agent-inspector" className="agent-inspector panel">
       {loading && !inspection && (
         <div className="empty-state">
-          <p>Loading agent history…</p>
+          <p>Loading agent history...</p>
         </div>
       )}
 
@@ -200,7 +218,7 @@ export function AgentInspector({
             <div className="tool-row">
               Tool: {inspection.currentTool}
               {inspection.currentToolArgs
-                ? ` · ${inspection.currentToolArgs.slice(0, 120)}`
+                ? ` / ${inspection.currentToolArgs.slice(0, 120)}`
                 : ""}
             </div>
           )}
@@ -216,7 +234,7 @@ export function AgentInspector({
                   const fileInfo =
                     item.changedFileCount === undefined
                       ? ""
-                      : ` · ${item.changedFileCount} files`;
+                      : ` / ${item.changedFileCount} files`;
                   const selected = item.key === selectedInvocation;
                   return (
                     <button
@@ -226,7 +244,7 @@ export function AgentInspector({
                       title={item.status}
                       onClick={() => handleSelectInvocation(item)}
                     >
-                      {item.label} · {item.mode.replace("_", " ")} #
+                      {item.label} / {item.mode.replace("_", " ")} #
                       {item.sequence}
                       {fileInfo}
                     </button>
@@ -242,6 +260,7 @@ export function AgentInspector({
                   inspectorTab={inspectorTab}
                   transcriptQuery={transcriptQuery}
                   selectedDiffFile={selectedDiffFile}
+                  transcriptRevision={snapshot?.run?.transcriptRevision ?? inspection.transcriptRevision}
                   dispatch={dispatch}
                   onSelectTab={handleSelectTab}
                 />
@@ -265,7 +284,7 @@ export function AgentInspector({
                       ? step.startedAt.slice(11, 19) + " "
                       : ""}
                     {step.label}
-                    {step.message ? ` · ${step.message}` : ""}
+                    {step.message ? ` / ${step.message}` : ""}
                     {step.artifact && (
                       <ArtifactBtn name={step.artifact} onOpen={onOpenArtifact} />
                     )}
@@ -312,6 +331,7 @@ function InvocationPanel({
   inspectorTab,
   transcriptQuery,
   selectedDiffFile,
+  transcriptRevision,
   dispatch,
   onSelectTab,
 }: {
@@ -320,6 +340,7 @@ function InvocationPanel({
   inspectorTab: "transcript" | "files";
   transcriptQuery: string;
   selectedDiffFile: number;
+  transcriptRevision?: number;
   dispatch: React.Dispatch<DashboardAction>;
   onSelectTab: (tab: "transcript" | "files") => void;
 }) {
@@ -366,6 +387,8 @@ function InvocationPanel({
             stepId={item.stepId}
             sequence={item.sequence}
             query={transcriptQuery}
+            revision={transcriptRevision}
+            status={item.status}
           />
         ) : (
           <DiffViewer

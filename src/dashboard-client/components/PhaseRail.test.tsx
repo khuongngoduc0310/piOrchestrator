@@ -29,7 +29,7 @@ describe("PhaseRail", () => {
     const finalPhase = screen.getByLabelText("Completed: Finalize");
     expect(finalPhase.classList.contains("done")).toBe(true);
     expect(finalPhase.hasAttribute("aria-current")).toBe(false);
-    expect(finalPhase.textContent).toContain("✓");
+    expect(finalPhase.textContent).toContain("OK");
   });
 
   it.each([
@@ -42,5 +42,12 @@ describe("PhaseRail", () => {
     expect(finalPhase.classList.contains("active")).toBe(false);
     expect(finalPhase.classList.contains(runStatus)).toBe(true);
     expect(finalPhase.hasAttribute("aria-current")).toBe(false);
+  });
+
+  it("keeps skipped route phases unhighlighted while identifying the current phase", () => {
+    render(<PhaseRail run={run({ phaseIndex: 5, skippedPhaseIndexes: [3, 4] })} />);
+    expect(screen.getByLabelText("Skipped: Baseline").classList.contains("active")).toBe(false);
+    expect(screen.getByLabelText("Skipped: Tests").classList.contains("active")).toBe(false);
+    expect(screen.getByLabelText("Current: Implementation").getAttribute("aria-current")).toBe("step");
   });
 });
