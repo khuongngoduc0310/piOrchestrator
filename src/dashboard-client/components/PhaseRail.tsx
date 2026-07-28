@@ -13,21 +13,29 @@ export function PhaseRail({ run }: PhaseRailProps) {
   const phaseCount = run.phaseCount ?? UI_PHASE_LABELS.length;
   const skipped = run.skippedPhaseIndexes ?? [];
   const completed = run.runStatus === "completed";
+  const terminalStatus = run.runStatus === "failed" || run.runStatus === "cancelled"
+    ? run.runStatus
+    : null;
 
   return (
     <div id="phases">
       {UI_PHASE_LABELS.slice(0, phaseCount).map((label, i) => {
         const isSkipped = skipped.includes(i);
+        const isTerminalPhase = terminalStatus !== null && i === phaseIndex;
         const cls = isSkipped
           ? "phase skipped"
+          : isTerminalPhase
+            ? `phase ${terminalStatus}`
           : i < phaseIndex || (completed && i === phaseIndex)
             ? "phase done"
             : i === phaseIndex
               ? "phase active"
               : "phase pending";
-        const icon = isSkipped ? "–" : i < phaseIndex || (completed && i === phaseIndex) ? "✓" : i === phaseIndex ? "→" : "•";
+        const icon = isSkipped ? "–" : isTerminalPhase ? terminalStatus === "failed" ? "!" : "×" : i < phaseIndex || (completed && i === phaseIndex) ? "✓" : i === phaseIndex ? "→" : "•";
         const ariaLabel = isSkipped
           ? `Skipped: ${label}`
+          : isTerminalPhase
+            ? `${terminalStatus === "failed" ? "Failed" : "Cancelled"}: ${label}`
           : i < phaseIndex || (completed && i === phaseIndex)
             ? `Completed: ${label}`
             : i === phaseIndex
@@ -38,7 +46,7 @@ export function PhaseRail({ run }: PhaseRailProps) {
           <div
             key={i}
             className={cls}
-            aria-current={!completed && i === phaseIndex ? "step" : undefined}
+            aria-current={!completed && !terminalStatus && i === phaseIndex ? "step" : undefined}
             aria-label={ariaLabel}
           >
             <span className="phase-icon" aria-hidden="true">

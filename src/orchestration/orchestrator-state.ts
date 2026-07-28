@@ -1,7 +1,7 @@
 import type { ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import { AgentCancelledError } from "../agents/agent-runner.js";
 import { formatCancelledRun, formatFailedRun } from "../ui/session-messages.js";
-import type { AgentName, Stage, StepRecord } from "../types.js";
+import type { AgentName, Stage, StepRecord, WorkflowMilestone } from "../types.js";
 import type { OrchestratorRuntime } from "./orchestrator-runtime.js";
 import { messageOf } from "./orchestrator-helpers.js";
 import { WorkflowCancelledError, WorkflowPausedError, WorkflowTerminationError } from "./workflow-errors.js";
@@ -35,7 +35,8 @@ export async function transition(
   stage: Stage,
   activeAgent: AgentName | undefined,
   message: string,
-  ctx: ExtensionCommandContext
+  ctx: ExtensionCommandContext,
+  options: { publish?: boolean } = {}
 ): Promise<void> {
   const state = runtime.requireState();
   state.stage = stage;
@@ -43,12 +44,21 @@ export async function transition(
   state.message = message;
   state.updatedAt = runtime.timestamp();
   await runtime.store?.event("transition", { stage, activeAgent, message });
-  await persist(runtime, ctx);
+  await persist(runtime, ctx, options);
 }
 
-export async function persist(runtime: OrchestratorRuntime, ctx: ExtensionCommandContext): Promise<void> {
+export async function persist(
+  runtime: OrchestratorRuntime,
+  ctx: ExtensionCommandContext,
+  options: { publish?: boolean } = {}
+): Promise<void> {
   const state = runtime.requireState();
   await runtime.store?.saveState(state);
+  if (options.publish !== false) publishPersistedState(runtime, ctx);
+}
+
+export function publishPersistedState(runtime: OrchestratorRuntime, ctx: ExtensionCommandContext): void {
+  const state = runtime.requireState();
   const vm = runtime.getViewModel();
   if (vm) runtime.dashboard.publish(vm);
   if (runtime.config && runtime.onStateChange) runtime.onStateChange(state, runtime.config, ctx);
@@ -154,6 +164,54 @@ export function publishSessionMessage(runtime: OrchestratorRuntime, content: str
   } catch {
     // Session messaging is supplementary; never fail the workflow.
   }
+}
+
+export function recordMilestone(
+  runtime: OrchestratorRuntime,
+  milestone: Pick<WorkflowMilestone, "id" | "kind" | "title" | "details" | "decisionId">
+): WorkflowMilestone {
+  const state = runtime.requireState();
+  const existing = state.milestones?.find(entry => entry.id === milestone.id);
+  if (existing) return existing;
+
+  const entry: WorkflowMilestone = {
+    id: milestone.id,
+    sequence: (state.milestones?.length ?? 0) + 1,
+    kind: milestone.kind,
+    title: milestone.title,
+    details: milestone.details,
+    occurredAt: runtime.timestamp(),
+    ...(milestone.decisionId === undefined ? {} : { decisionId: milestone.decisionId })
+  };
+  (state.milestones ??= []).push(entry);
+  return entry;
+}
+
+export function recordMarkdownMilestone(
+  runtime: OrchestratorRuntime,
+  id: string,
+  kind: string,
+  content: string,
+  decisionId?: string
+): WorkflowMilestone {
+  const match = /^##\s+([^\r\n]+)(?:\r?\n\r?\n)?([\s\S]*)$/.exec(content.trim());
+  if (!match) throw new Error(`Milestone ${id} must start with a level-two Markdown heading`);
+  return recordMilestone(runtime, {
+    id,
+    kind,
+    title: match[1].trim(),
+    details: match[2].trim(),
+    ...(decisionId === undefined ? {} : { decisionId })
+  });
+}
+
+export function publishMilestone(runtime: OrchestratorRuntime, entry: WorkflowMilestone): void {
+  publishSessionMessage(runtime, `## ${entry.title}\n\n${entry.details}`, {
+    kind: entry.kind,
+    milestoneId: entry.id,
+    milestoneKind: entry.kind,
+    decisionId: entry.decisionId
+  });
 }
 
 export function throwIfAborted(runtime: OrchestratorRuntime): void {

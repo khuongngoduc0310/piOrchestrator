@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import type { IndexedAcceptanceCriterion } from "./types.js";
 import {
   validateBuilderOutput,
   validateDebuggerOutput,
@@ -18,6 +19,7 @@ const validPlan = {
   summary: "Do it safely",
   assumptions: [],
   acceptanceCriteria: ["Checks pass"],
+  automatedAcceptanceCriteria: [0],
   tasks: [
     { id: "a", description: "First", files: ["src/a.ts"], dependencies: [], verification: ["test"] },
     { id: "b", description: "Second", files: ["src/b.ts"], dependencies: ["a"], verification: ["test"] }
@@ -45,7 +47,18 @@ describe("structured output validation", () => {
   });
 
   it("accepts supported workflow routes and rejects missing or unknown routes", () => {
-    for (const route of WORKFLOW_ROUTES) expect(validatePlannerOutput({ ...validPlan, route }).route).toBe(route);
+    for (const route of WORKFLOW_ROUTES) {
+      const planWithRoute = {
+        ...validPlan,
+        route,
+        automatedAcceptanceCriteria: route === "documentation_only" || route === "review_only" || route === "investigation_only" || route === "planning_only"
+          ? []
+          : route === "tests_only"
+          ? [0]
+          : [0]
+      };
+      expect(validatePlannerOutput(planWithRoute).route).toBe(route);
+    }
     const { route: _route, ...missingRoute } = validPlan;
     expect(() => validatePlannerOutput(missingRoute)).toThrow("plan.route");
     expect(() => validatePlannerOutput({ ...validPlan, route: "arbitrary_agents" })).toThrow("plan.route");
@@ -203,7 +216,7 @@ describe("structured output validation", () => {
   });
 
   it("requires exhaustive tester acceptance coverage", () => {
-    const criteria = ["First works", "Second works"];
+    const criteria: IndexedAcceptanceCriterion[] = [{ index: 0, text: "First works" }, { index: 1, text: "Second works" }];
     const base = {
       summary: "tests",
       changedFiles: ["src/index.test.ts"],
@@ -212,11 +225,11 @@ describe("structured output validation", () => {
       assumptions: [],
       unresolvedIssues: []
     };
-    const coverage = criteria.map((criterion, criterionIndex) => ({
-      criterionIndex,
-      criterion,
+    const coverage = criteria.map(c => ({
+      criterionIndex: c.index,
+      criterion: c.text,
       status: "covered",
-      tests: [`src/index.test.ts: criterion ${criterionIndex}`],
+      tests: [`src/index.test.ts: criterion ${c.index}`],
       preImplementationResult: "failed_as_expected",
       evidence: "failed before implementation"
     }));

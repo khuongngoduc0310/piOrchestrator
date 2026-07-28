@@ -1,4 +1,4 @@
-import { AGENT_NAMES, RESOLUTION_STATUSES, RESOLUTION_OUTCOME_TYPES, SCHEMA_VERSION, WORKFLOW_ROUTES, type CheckResult, type OrchestratorConfig, type ResolutionRecord, type WorkflowState } from "../types.js";
+import { AGENT_NAMES, RESOLUTION_STATUSES, RESOLUTION_OUTCOME_TYPES, SCHEMA_VERSION, SUPPORTED_HANDOFF_ROLES, WORKFLOW_ROUTES, type CheckResult, type OrchestratorConfig, type ResolutionRecord, type WorkflowState } from "../types.js";
 import type { AgentResolutionRequest } from "../agent-task-types.js";
 import { validateOrchestratorConfig } from "../config/config-validation.js";
 import {
@@ -183,6 +183,25 @@ export function validateWorkflowStateForResume(value: unknown, path = "state"): 
     }
     return entry;
   });
+  if (state.milestones !== undefined) {
+    const milestoneIds = new Set<string>();
+    array(state.milestones, `${path}.milestones`, (entry, entryPath) => {
+      const milestone = record(entry, entryPath);
+      const id = string(milestone.id, `${entryPath}.id`);
+      if (milestoneIds.has(id)) throw new ValidationError(`${entryPath}.id`, "must be unique");
+      milestoneIds.add(id);
+      const sequence = integer(milestone.sequence, `${entryPath}.sequence`, 1);
+      if (sequence !== milestoneIds.size) {
+        throw new ValidationError(`${entryPath}.sequence`, `expected ${milestoneIds.size}`);
+      }
+      string(milestone.kind, `${entryPath}.kind`);
+      string(milestone.title, `${entryPath}.title`);
+      string(milestone.details, `${entryPath}.details`, true);
+      isoDate(milestone.occurredAt, `${entryPath}.occurredAt`);
+      if (milestone.decisionId !== undefined) string(milestone.decisionId, `${entryPath}.decisionId`);
+      return entry;
+    });
+  }
   if (state.latestCheckpoint !== undefined) {
     const cp = record(state.latestCheckpoint, `${path}.latestCheckpoint`);
     integer(cp.number, `${path}.latestCheckpoint.number`, 1);
@@ -320,12 +339,10 @@ export function validateWorkflowCheckpoint(value: unknown, path = "checkpoint"):
   };
 }
 
-const SUPPORTED_HANDOFF_ROLES: readonly string[] = ["debugger", "explorer", "planner"];
-
 function validateRepositoryEvidence(value: unknown, path: string): void {
   const evidence = record(value, path);
   string(evidence.path, `${path}.path`);
-  string(evidence.content, `${path}.content`);
+  string(evidence.detail, `${path}.detail`);
 }
 
 function validateResolutionRequest(value: unknown, path: string): AgentResolutionRequest {
@@ -350,10 +367,7 @@ function validateResolutionRequest(value: unknown, path: string): AgentResolutio
       return req as AgentResolutionRequest;
     }
     case "role_handoff": {
-      const role = string(req.requestedRole, `${path}.requestedRole`);
-      if (!SUPPORTED_HANDOFF_ROLES.includes(role)) {
-        throw new ValidationError(`${path}.requestedRole`, `unsupported handoff role; supported: ${SUPPORTED_HANDOFF_ROLES.join(", ")}`);
-      }
+      const role = enumValue(req.requestedRole, `${path}.requestedRole`, SUPPORTED_HANDOFF_ROLES);
       string(req.requestedCapability, `${path}.requestedCapability`);
       string(req.question, `${path}.question`);
       array(req.evidence, `${path}.evidence`, (entry, entryPath) => validateRepositoryEvidence(entry, entryPath));

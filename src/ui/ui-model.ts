@@ -33,6 +33,8 @@ export function buildIdleViewModel(
       config,
       agents,
       recentSteps: [],
+      timelineSteps: [],
+      milestones: [],
       commands: COMMANDS
     };
   }
@@ -43,6 +45,8 @@ export function buildIdleViewModel(
     config,
     agents,
     recentSteps: [],
+    timelineSteps: [],
+    milestones: [],
     commands: COMMANDS
   };
 }
@@ -89,6 +93,10 @@ export function buildRunViewModel(
   const hasLiveGate = state.humanGate !== undefined;
   const hasWaitingFor = state.waitingFor !== undefined && state.waitingFor.length > 0;
 
+  const pendingDecision = state.pendingDecision
+    ? { id: state.pendingDecision.id, kind: state.pendingDecision.kind, label: state.pendingDecision.label, requestedAt: state.pendingDecision.requestedAt, dashboardAvailable: false }
+    : undefined;
+
   const runSummary: RunSummary = {
     id: state.runId,
     request: state.request,
@@ -113,6 +121,7 @@ export function buildRunViewModel(
     toolStatus: state.toolStatus,
     dashboardUrl: state.dashboardUrl,
     extensionVersion: state.extensionVersion,
+    pendingDecision,
     checkpoint: state.latestCheckpoint,
     resumeCommand: (state.status === "paused" || state.status === "failed" || state.status === "cancelled") && state.latestCheckpoint && !state.resumeBlockedReason ? `/orchestrator-resume ${state.runId}` : undefined,
     resumeCount: state.resumeCount,
@@ -120,6 +129,7 @@ export function buildRunViewModel(
   };
 
   const visibleSteps = state.steps.slice(-12);
+  const timelineSteps = state.steps.map(({ invocations: _invocations, ...step }) => step);
 
   const completedOrFailed = state.status === "completed" || state.status === "failed" || state.status === "cancelled";
   const runMode: OrchestratorViewModel["mode"] = state.status === "paused" && hasLiveGate ? "waiting" : state.status === "paused" ? "paused" : completedOrFailed ? state.status : hasWaitingFor ? "waiting" : "running";
@@ -131,6 +141,8 @@ export function buildRunViewModel(
     run: runSummary,
     agents,
     recentSteps: visibleSteps,
+    timelineSteps,
+    milestones: state.milestones ?? [],
     commands: state.status === "completed"
       ? COMMANDS
       : state.status === "running"

@@ -1,11 +1,15 @@
 import type {
   DashboardRunHistoryItem,
   OrchestratorViewModel,
+  PendingDecisionInfo,
 } from "../dashboard-types.js";
+import type { DashboardDecisionAction } from "../dashboard-types.js";
 
 export type ConnectionState = "connecting" | "live" | "reconnecting" | "disconnected";
 export type AgentMode = "auto" | "pinned" | "closed";
 export type DashboardView = "run" | "agent-history";
+export type PreviewStatus = "idle" | "loading" | "loaded" | "error";
+export type SubmissionStatus = "idle" | "submitting" | "submitted" | "error";
 
 export interface DashboardState {
   liveSnapshot: OrchestratorViewModel | null;
@@ -21,6 +25,14 @@ export interface DashboardState {
   selectedDiffFile: number;
   selectedArtifact: string | null;
   view: DashboardView;
+  pendingDecision: PendingDecisionInfo | null;
+  currentDecisionId: string | null;
+  allowedActions: DashboardDecisionAction[];
+  planMarkdown: string | null;
+  previewStatus: PreviewStatus;
+  previewError: string | null;
+  submissionStatus: SubmissionStatus;
+  submissionError: string | null;
 }
 
 export const INITIAL_STATE: DashboardState = {
@@ -37,6 +49,14 @@ export const INITIAL_STATE: DashboardState = {
   selectedDiffFile: 0,
   selectedArtifact: null,
   view: "run",
+  pendingDecision: null,
+  currentDecisionId: null,
+  allowedActions: [],
+  planMarkdown: null,
+  previewStatus: "idle",
+  previewError: null,
+  submissionStatus: "idle",
+  submissionError: null,
 };
 
 export type DashboardAction =
@@ -56,7 +76,15 @@ export type DashboardAction =
   | { type: "diffFileSelected"; index: number }
   | { type: "artifactSelected"; name: string }
   | { type: "artifactClosed" }
-  | { type: "viewSelected"; view: DashboardView };
+  | { type: "viewSelected"; view: DashboardView }
+  | { type: "pendingDecisionUpdated"; decision: PendingDecisionInfo | null }
+  | { type: "planPreviewRetryRequested" }
+  | { type: "planPreviewLoaded"; decisionId: string; markdown: string; actions: DashboardDecisionAction[] }
+  | { type: "planPreviewError"; decisionId: string; error: string }
+  | { type: "decisionSubmitting" }
+  | { type: "decisionSubmitted" }
+  | { type: "decisionError"; error: string }
+  | { type: "decisionDismissed" };
 
 export function dashboardReducer(
   state: DashboardState,
@@ -156,5 +184,81 @@ export function dashboardReducer(
     case "viewSelected": {
       return { ...state, view: action.view };
     }
+    case "pendingDecisionUpdated": {
+      if (!action.decision) {
+        return {
+          ...state,
+          pendingDecision: null,
+          currentDecisionId: null,
+          allowedActions: [],
+          planMarkdown: null,
+          previewStatus: "idle",
+          previewError: null,
+          submissionStatus: "idle",
+          submissionError: null,
+        };
+      }
+      const decisionId = action.decision.id;
+      // Same decision from repeated SSE snapshot — preserve loaded state
+      if (decisionId === state.currentDecisionId) {
+        return { ...state, pendingDecision: action.decision };
+      }
+      // New decision — clear everything and start fresh
+      return {
+        ...state,
+        currentDecisionId: decisionId,
+        pendingDecision: action.decision,
+        allowedActions: [],
+        planMarkdown: null,
+        previewStatus: "loading",
+        previewError: null,
+        submissionStatus: "idle",
+        submissionError: null,
+      };
+    }
+    case "planPreviewRetryRequested": {
+      if (!state.currentDecisionId) return state;
+      return {
+        ...state,
+        planMarkdown: null,
+        allowedActions: [],
+        previewStatus: "loading",
+        previewError: null,
+      };
+    }
+    case "planPreviewLoaded": {
+      if (action.decisionId !== state.currentDecisionId) return state;
+      return {
+        ...state,
+        planMarkdown: action.markdown,
+        allowedActions: action.actions,
+        previewStatus: "loaded",
+        previewError: null,
+      };
+    }
+    case "planPreviewError": {
+      if (action.decisionId !== state.currentDecisionId) return state;
+      return { ...state, previewStatus: "error", previewError: action.error };
+    }
+    case "decisionSubmitting": {
+      return { ...state, submissionStatus: "submitting", submissionError: null };
+    }
+    case "decisionSubmitted": {
+      return { ...state, submissionStatus: "submitted" };
+    }
+    case "decisionError": {
+      return { ...state, submissionStatus: "error", submissionError: action.error };
+    }
+    case "decisionDismissed": {
+      return { ...state, submissionStatus: "idle", submissionError: null };
+    }
   }
+}
+
+export function isViewingLiveRun(state: DashboardState): boolean {
+  const liveRunId = state.liveSnapshot?.run?.id ?? null;
+  const displayedRunId = state.displayedSnapshot?.run?.id ?? liveRunId;
+  return state.view === "run" && liveRunId !== null &&
+    (state.selectedRunId === null || state.selectedRunId === liveRunId) &&
+    displayedRunId === liveRunId;
 }

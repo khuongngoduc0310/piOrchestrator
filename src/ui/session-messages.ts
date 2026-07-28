@@ -206,7 +206,6 @@ export function formatDocumentationReport(
 
 export function formatCompletedRun(
   summary: CompletionSummary,
-  dashboardUrl?: string,
   runDir?: string,
   warning?: string,
   extensionVersion?: string
@@ -287,7 +286,6 @@ export function formatCompletedRun(
     text += `- Implementation attempts: ${summary.attempts}\n`;
   }
   if (extensionVersion) text += `- Extension version: ${extensionVersion}\n`;
-  if (dashboardUrl) text += `- Dashboard: \`${dashboardUrl}\`\n`;
   if (runDir) text += `- Artifacts: \`${runDir}\`\n`;
   if (warning) text += `\n**Warning:** ${warning}\n`;
 

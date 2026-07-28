@@ -5,10 +5,10 @@ import type { ImplementationResult, ReviewResult, WorkflowContext } from "./orch
 import type { OrchestratorRuntime } from "./orchestrator-runtime.js";
 import { runAgentStep } from "./orchestrator-agent-step.js";
 import { runCheckStep } from "./orchestrator-workspace.js";
-import { promptHumanReviewDecision, runDurableHumanGate } from "./orchestrator-human-gates.js";
-import { publishSessionMessage } from "./orchestrator-state.js";
+import { decisionAction, promptHumanReviewDecision, runDurableHumanGate } from "./orchestrator-human-gates.js";
+import { publishMilestone, recordMarkdownMilestone } from "./orchestrator-state.js";
 import { CheckFailureError, WorkflowCancelledError } from "./workflow-errors.js";
-import { saveWorkflowCheckpoint } from "./orchestrator-checkpoints.js";
+import { CheckpointPostCommitError, saveWorkflowCheckpoint } from "./orchestrator-checkpoints.js";
 import { filesOutsidePlan } from "./plan-revision.js";
 import { reviseImplementationScope } from "./orchestrator-scope-revision.js";
 import { consumeScopeRevision } from "./scope-revision-budget.js";
@@ -16,6 +16,7 @@ import { allGreen } from "./orchestrator-helpers.js";
 import type { CheckResult, DebuggerOutput, HumanReviewDecision } from "../types.js";
 import { resolveParticipationPolicy, requiresHumanDecision } from "./participation-policy.js";
 import { resolveAgentBlocker } from "./orchestrator-resolution.js";
+import { canonicalSha256 } from "../workspace/workspace-guard.js";
 
 export type ReviewContinuation =
   | {
@@ -69,6 +70,7 @@ export async function runReviewPhase(
   const priorCodeReviews: ReviewOutput[] = continuation?.priorCodeReviews.slice() ?? [];
   let allowedReviewFixes = continuation?.allowedReviewFixes ?? config.limits.reviewRevisions;
   let firstReview = 0;
+  let completedReviewFixes = firstReview;
   let pendingReviewFix = continuation?.point === "scope_revision_approved";
   let pendingReviewDecision = continuation?.point === "review_decision";
   let recordedReviewDecision = continuation?.point === "review_decision" ? continuation.decision : undefined;
@@ -143,6 +145,7 @@ export async function runReviewPhase(
     firstReview = continuation.completedFixes;
   }
   for (let fixes = firstReview; fixes <= allowedReviewFixes; fixes++) {
+    completedReviewFixes = fixes;
     if (!pendingReviewFix) {
       if (!pendingReviewDecision) codeReview = await runAgentStep(
         runtime,
@@ -169,7 +172,6 @@ export async function runReviewPhase(
       const currentCodeReview = codeReview;
       if (currentCodeReview.decision === "approved") {
         reviewApproved = true;
-        publishSessionMessage(runtime, formatApprovedReview(currentCodeReview, finalImplChecks, fixes, "reviewer"), { kind: "review_approved" });
         break;
       }
       if (!pendingReviewDecision) priorCodeReviews.push(currentCodeReview);
@@ -204,13 +206,21 @@ export async function runReviewPhase(
                 if (answer.action === "fix_again") return { action: "fix_again" as const };
                 return { action: "cancel" as const };
               },
-              result => ({ action: result.action === "accept_current" ? "accept" : "fix_again" })
+              result => ({ action: result.action === "accept_current" ? "accept" : "fix_again" }),
+              {
+                format: "markdown",
+                content: `## Code review requires a decision\n\nThe reviewer still reports blocking issues after ${fixes} fix round(s).\n\n### Blocking issues\n\n${currentCodeReview.blockingIssues.map(issue => `- ${issue}`).join("\n") || "None reported"}\n\n### Evidence\n\n${currentCodeReview.evidence.map(item => `- \`${item.path}\` - ${item.detail}`).join("\n") || "None reported"}`,
+                actions: [
+                  decisionAction("accept_current", "Accept current implementation"),
+                  decisionAction("fix_again", "Allow one more targeted fix"),
+                  decisionAction("cancel", "Cancel workflow"),
+                ],
+              }
             );
         recordedReviewDecision = undefined;
         if (decision.action === "accept") {
           reviewApproved = true;
           reviewApprovalSource = "user_override";
-          publishSessionMessage(runtime, formatApprovedReview(currentCodeReview, finalImplChecks, fixes, "user_override"), { kind: "review_approved" });
           break;
         }
         if (decision.action === "fix_again") allowedReviewFixes++;
@@ -314,17 +324,34 @@ export async function runReviewPhase(
     if (!allGreen(finalImplChecks, config.checks.length)) await handleFailedReviewChecks(finalImplChecks, fixes + 1);
   }
   if (!reviewApproved || !codeReview) throw new Error("Code review was not approved within the revision limit");
+  const reviewReport = formatApprovedReview(codeReview, finalImplChecks, completedReviewFixes, reviewApprovalSource);
+  const reviewMilestoneId = `code-review-complete:${canonicalSha256(reviewReport)}`;
+  const reviewMilestoneExisted = runtime.requireState().milestones?.some(entry => entry.id === reviewMilestoneId) === true;
+  const reviewMilestone = recordMarkdownMilestone(
+    runtime,
+    reviewMilestoneId,
+    "review_approved",
+    reviewReport
+  );
   const result = { ...currentImplementation, scopeRevisionCount, finalImplChecks, codeReview, reviewApprovalSource, priorCodeReviews };
-  await saveWorkflowCheckpoint(runtime, workflow, "review_approved", result, {
-    exploration,
-    plan,
-    baselineChecks: currentImplementation.baseline,
-    tester,
-    builderOutputs: runtime.builderSessionOutputs,
-    implementationChecks: finalImplChecks,
-    codeReview,
-    priorCodeReviews,
-    reviewApprovalSource
-  });
+  try {
+    await saveWorkflowCheckpoint(runtime, workflow, "review_approved", result, {
+      exploration,
+      plan,
+      baselineChecks: currentImplementation.baseline,
+      tester,
+      builderOutputs: runtime.builderSessionOutputs,
+      implementationChecks: finalImplChecks,
+      codeReview,
+      priorCodeReviews,
+      reviewApprovalSource
+    });
+  } catch (error) {
+    if (!(error instanceof CheckpointPostCommitError) && !reviewMilestoneExisted) {
+      runtime.requireState().milestones = runtime.requireState().milestones?.filter(entry => entry.id !== reviewMilestoneId);
+    }
+    throw error;
+  }
+  if (!reviewMilestoneExisted) publishMilestone(runtime, reviewMilestone);
   return result;
 }

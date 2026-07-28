@@ -6,6 +6,8 @@ import type {
   OrchestratorViewModel,
 } from "../dashboard-types.js";
 import type { AgentTranscript } from "../agent-types.js";
+import type { DashboardDecisionAction } from "../dashboard-types.js";
+import type { HumanDecisionAction } from "../orchestration/human-decision-types.js";
 
 export class DashboardApiError extends Error {
   constructor(
@@ -103,4 +105,34 @@ export function getArtifact(
     `/api/runs/${encodeURIComponent(runId)}/artifacts/${encodeURIComponent(name)}`,
     signal,
   );
+}
+
+export async function getDecisionPreview(
+  decisionId: string,
+  signal?: AbortSignal,
+): Promise<{ format: string; content: string; actions: DashboardDecisionAction[] }> {
+  const res = await fetch(
+    `/api/decisions/${encodeURIComponent(decisionId)}/preview`,
+    { cache: "no-store", signal },
+  );
+  if (res.status === 409) throw new DashboardApiError(409, "Decision is no longer active");
+  if (!res.ok) throw new DashboardApiError(res.status, `HTTP ${res.status}`);
+  return res.json() as Promise<{ format: string; content: string; actions: DashboardDecisionAction[] }>;
+}
+
+export async function submitDecision(
+  id: string,
+  action: HumanDecisionAction,
+  feedback?: string,
+  signal?: AbortSignal,
+): Promise<void> {
+  const res = await fetch("/api/decision", {
+    method: "POST",
+    cache: "no-store",
+    signal,
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ id, action, feedback }),
+  });
+  if (!res.ok) throw new DashboardApiError(res.status, `HTTP ${res.status}`);
+  await res.json();
 }

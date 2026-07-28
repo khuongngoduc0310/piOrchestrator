@@ -1,8 +1,8 @@
-import type { AgentName } from "./agent-types.js";
+import type { AgentName, SupportedHandoffRole } from "./agent-types.js";
 import type { MemoryContext } from "./memory/memory-types.js";
 import type { BaselineReviewContext, CheckResult } from "./workflow-types.js";
 
-export const AGENT_TASK_SCHEMA_VERSION = 3 as const;
+export const AGENT_TASK_SCHEMA_VERSION = 4 as const;
 
 export const COMMAND_STATUSES = ["passed", "failed", "timed_out", "cancelled"] as const;
 export type CommandStatus = (typeof COMMAND_STATUSES)[number];
@@ -106,11 +106,17 @@ export interface PlanTask {
   verification: string[];
 }
 
+export interface IndexedAcceptanceCriterion {
+  readonly index: number;
+  readonly text: string;
+}
+
 export interface PlannerOutput {
   route: WorkflowRoute;
   summary: string;
   assumptions: string[];
   acceptanceCriteria: string[];
+  automatedAcceptanceCriteria: number[];
   tasks: PlanTask[];
   risks: string[];
 }
@@ -236,7 +242,7 @@ export type AgentResolutionRequest =
   | { kind: "scope"; reason: string; requiredFiles: string[] }
   | { kind: "baseline_repair"; reason: string; failedCheckCommands: string[]; evidence: RepositoryEvidence[] }
   | { kind: "prerequisite_repair"; reason: string; affectedFiles: string[]; evidence: RepositoryEvidence[]; verification: string[] }
-  | { kind: "role_handoff"; reason: string; requestedRole: AgentName; requestedCapability: string; question: string; evidence: RepositoryEvidence[] }
+  | { kind: "role_handoff"; reason: string; requestedRole: SupportedHandoffRole; requestedCapability: string; question: string; evidence: RepositoryEvidence[] }
   | { kind: "insufficient_evidence"; reason: string; questions: string[]; suggestedRoles: AgentName[]; inspectedEvidence: RepositoryEvidence[] }
   | { kind: "environment"; reason: string; diagnostics: string[]; retryCondition: string; affectedCommands: string[] }
   | { kind: "tooling"; reason: string; diagnostics: string[]; retryCondition: string; affectedCommands: string[] };

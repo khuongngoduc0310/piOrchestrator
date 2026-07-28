@@ -31,4 +31,16 @@ describe("PhaseRail", () => {
     expect(finalPhase.hasAttribute("aria-current")).toBe(false);
     expect(finalPhase.textContent).toContain("✓");
   });
+
+  it.each([
+    ["failed", "Failed: Finalize"],
+    ["cancelled", "Cancelled: Finalize"],
+  ] as const)("does not mark a %s run phase as current", (runStatus, label) => {
+    render(<PhaseRail run={run({ runStatus, stage: runStatus })} />);
+
+    const finalPhase = screen.getByLabelText(label);
+    expect(finalPhase.classList.contains("active")).toBe(false);
+    expect(finalPhase.classList.contains(runStatus)).toBe(true);
+    expect(finalPhase.hasAttribute("aria-current")).toBe(false);
+  });
 });

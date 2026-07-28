@@ -49,6 +49,44 @@ describe("checkpoint validation", () => {
     expect(() => validateWorkflowStateForResume({ ...validState, latestCheckpoint: { number: 1, cursor: "plan_approved", createdAt: "invalid-date" } })).toThrow("ISO date");
   });
 
+  it("accepts legacy state without milestones and strictly validates milestones when present", () => {
+    const validState = {
+      schemaVersion: SCHEMA_VERSION,
+      extensionVersion: "test",
+      runId: "run-1",
+      request: "fix bug",
+      route: "implementation",
+      cwd: "/tmp",
+      runDir: "/tmp/runs/run-1",
+      stage: "planning",
+      status: "running",
+      attempt: 0,
+      startedAt: "2026-07-22T10:00:00.000Z",
+      updatedAt: "2026-07-22T10:01:00.000Z",
+      agents: Object.fromEntries(["explorer", "planner", "reviewer", "tester", "builder", "debugger", "documenter"]
+        .map(name => [name, { status: "idle", model: "test" }])),
+      steps: []
+    };
+    const milestone = {
+      id: "plan-approved",
+      sequence: 1,
+      kind: "plan.approved",
+      title: "Plan approved",
+      details: "The approved plan is ready for implementation.",
+      occurredAt: "2026-07-22T10:02:00.000Z",
+      decisionId: "decision-1"
+    };
+
+    expect(() => validateWorkflowStateForResume(validState)).not.toThrow();
+    expect(validateWorkflowStateForResume({ ...validState, milestones: [milestone] }).milestones).toEqual([milestone]);
+    expect(() => validateWorkflowStateForResume({ ...validState, milestones: "invalid" })).toThrow("expected an array");
+    expect(() => validateWorkflowStateForResume({ ...validState, milestones: [{ ...milestone, kind: "" }] })).toThrow("kind: must not be empty");
+    expect(() => validateWorkflowStateForResume({ ...validState, milestones: [{ ...milestone, occurredAt: "invalid" }] })).toThrow("ISO date");
+    expect(() => validateWorkflowStateForResume({ ...validState, milestones: [milestone, { ...milestone, sequence: 2 }] })).toThrow("id: must be unique");
+    expect(() => validateWorkflowStateForResume({ ...validState, milestones: [{ ...milestone, sequence: 2 }] })).toThrow("sequence: expected 1");
+    expect(() => validateWorkflowStateForResume({ ...validState, milestones: [{ ...milestone, decisionId: "" }] })).toThrow("decisionId: must not be empty");
+  });
+
   it("rejects non-empty resumeBlockedReason when present", () => {
     const validState = {
       schemaVersion: SCHEMA_VERSION,
@@ -216,6 +254,27 @@ describe("checkpoint validation", () => {
       }
     };
     expect(() => validateWorkflowCheckpoint(withLedger)).not.toThrow();
+    const withHandoffEvidence = {
+      ...base,
+      bindings: {
+        resolutionLedger: [{
+          id: "res-2",
+          request: {
+            kind: "role_handoff",
+            reason: "criterion is not automated",
+            requestedRole: "planner",
+            requestedCapability: "reclassify criterion",
+            question: "Should this criterion be non-automated?",
+            evidence: [{ path: "README.md", detail: "Documentation-only requirement" }]
+          },
+          agent: "tester",
+          status: "pending",
+          createdAt: "2026-07-22T10:30:00.000Z",
+          updatedAt: "2026-07-22T10:30:00.000Z"
+        }]
+      }
+    };
+    expect(() => validateWorkflowCheckpoint(withHandoffEvidence)).not.toThrow();
     const withBadLedger = {
       ...base,
       bindings: {

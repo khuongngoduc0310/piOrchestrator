@@ -1,5 +1,5 @@
-import { useCallback, useEffect, useReducer } from "react";
-import { dashboardReducer, INITIAL_STATE } from "./state.js";
+import { useCallback, useEffect, useReducer, useRef } from "react";
+import { dashboardReducer, INITIAL_STATE, isViewingLiveRun } from "./state.js";
 import type { DashboardAction } from "./state.js";
 import { useDashboardStream } from "./hooks/useDashboardStream.js";
 import { useElapsedTime } from "./hooks/useElapsedTime.js";
@@ -13,10 +13,14 @@ import { AgentInspector } from "./components/AgentInspector.js";
 import { Timeline } from "./components/Timeline.js";
 import { ArtifactViewer } from "./components/ArtifactViewer.js";
 import { AgentHistory } from "./components/AgentHistory.js";
+import { DecisionPanel } from "./components/DecisionPanel.js";
+import { getDecisionPreview, submitDecision } from "./api.js";
+import type { HumanDecisionAction } from "../orchestration/human-decision-types.js";
 
 export function App() {
   const [state, dispatch] = useReducer(dashboardReducer, INITIAL_STATE);
   const dispatchAction = dispatch as React.Dispatch<DashboardAction>;
+  const abortRef = useRef<AbortController | null>(null);
 
   useDashboardStream(dispatchAction);
 
@@ -28,7 +32,6 @@ export function App() {
 
   const handleSelectAgent = useCallback(
     (agent: string) => {
-      // Pin the agent on click
       if (agent === state.selectedAgent && state.agentMode === "pinned") {
         dispatchAction({ type: "agentClosed" });
       } else {
@@ -50,12 +53,69 @@ export function App() {
     dispatchAction({ type: "artifactClosed" });
   }, [dispatchAction]);
 
+  // Fetch preview when a new decision enters loading state
+  useEffect(() => {
+    if (state.previewStatus !== "loading" || !state.currentDecisionId || !state.pendingDecision?.dashboardAvailable) return;
+    abortRef.current?.abort();
+    const ac = new AbortController();
+    abortRef.current = ac;
+    const id = state.currentDecisionId;
+    getDecisionPreview(id, ac.signal)
+      .then((result) => {
+        if (ac.signal.aborted) return;
+        dispatchAction({
+          type: "planPreviewLoaded",
+          decisionId: id,
+          markdown: result.content,
+          actions: result.actions,
+        });
+      })
+      .catch((err: unknown) => {
+        if (ac.signal.aborted) return;
+        const msg = err instanceof Error ? err.message : "Failed to load preview";
+        dispatchAction({ type: "planPreviewError", decisionId: id, error: msg });
+      });
+    return () => { ac.abort(); };
+  }, [state.previewStatus, state.currentDecisionId, state.pendingDecision?.dashboardAvailable, dispatchAction]);
+
+  const handleRetryPreview = useCallback(() => {
+    if (!state.currentDecisionId) return;
+    dispatchAction({ type: "planPreviewRetryRequested" });
+  }, [state.currentDecisionId, dispatchAction]);
+
+  const handleSubmitAction = useCallback(
+    async (action: HumanDecisionAction, feedback?: string) => {
+      if (!state.currentDecisionId) return;
+      dispatchAction({ type: "decisionSubmitting" });
+      try {
+        await submitDecision(state.currentDecisionId, action, feedback);
+        dispatchAction({ type: "decisionSubmitted" });
+      } catch (err) {
+        dispatchAction({
+          type: "decisionError",
+          error: err instanceof Error ? err.message : "Submission failed",
+        });
+      }
+    },
+    [state.currentDecisionId, dispatchAction],
+  );
+
+  const handleDismissError = useCallback(() => {
+    dispatchAction({ type: "decisionDismissed" });
+  }, [dispatchAction]);
+
   useEffect(() => {
     const activeAgent = snap?.run?.activeAgent ?? null;
     if (state.agentMode === "auto" && state.selectedAgent !== activeAgent) {
       dispatchAction({ type: "agentAutoSelected", agent: activeAgent });
     }
   }, [state.agentMode, snap?.run?.activeAgent, state.selectedAgent, dispatchAction]);
+
+  const showOverlay =
+    isViewingLiveRun(state) &&
+    state.pendingDecision?.dashboardAvailable &&
+    state.pendingDecision &&
+    state.submissionStatus !== "submitted";
 
   return (
     <div className="shell">
@@ -138,7 +198,8 @@ export function App() {
         <section id="timeline" aria-label="Timeline" tabIndex={-1}>
           <h2 className="section-heading">Timeline</h2>
           <Timeline
-            steps={snap?.recentSteps ?? []}
+            steps={snap?.timelineSteps ?? snap?.recentSteps ?? []}
+            milestones={snap?.milestones ?? []}
             onOpenArtifact={handleOpenArtifact}
           />
         </section>
@@ -158,6 +219,37 @@ export function App() {
           revision={snap?.run?.transcriptRevision}
         />
       </main>}
+
+      {showOverlay && (
+        <div className="decision-overlay">
+          <DecisionPanel
+            decisionId={state.currentDecisionId!}
+            kind={state.pendingDecision!.kind}
+            label={state.pendingDecision!.label}
+            planMarkdown={state.planMarkdown}
+            allowedActions={state.allowedActions}
+            previewStatus={state.previewStatus}
+            previewError={state.previewError}
+            submissionStatus={state.submissionStatus}
+            submissionError={state.submissionError}
+            onRetryPreview={handleRetryPreview}
+            onSubmitAction={handleSubmitAction}
+            onDismissError={handleDismissError}
+          />
+        </div>
+      )}
+
+      {isViewingLiveRun(state) && state.submissionStatus === "submitted" && (
+        <div className="decision-overlay">
+          <div className="panel decision-submitted">
+            <div className="decision-submitted-icon">&#10003;</div>
+            <h2>Decision submitted</h2>
+            <p className="muted">
+              The workflow will continue based on your decision.
+            </p>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

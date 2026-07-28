@@ -46,7 +46,7 @@ export interface RecordedHumanDecision {
   schemaVersion: 1;
   requestId: string;
   decidedAt: string;
-  source: "tui" | "rpc";
+  source: "tui" | "rpc" | "dashboard";
   action: HumanDecisionAction;
   feedback?: string;
 }

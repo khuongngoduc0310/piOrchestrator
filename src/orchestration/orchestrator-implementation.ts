@@ -1,4 +1,4 @@
-import { formatVerifiedImplementation } from "../ui/session-messages.js";
+import { formatDiagnosisForApproval, formatVerifiedImplementation } from "../ui/session-messages.js";
 import { parseBuilderOutput, parseDebuggerOutput, parseTesterOutput } from "../validation.js";
 import type { BuilderOutput, CheckResult, DebuggerOutput, BuilderTask, TesterOutput } from "../types.js";
 import type { ImplementationPlanningResult, ImplementationResult, WorkflowContext } from "./orchestrator-context.js";
@@ -14,10 +14,10 @@ import { reviseImplementationScope, type ScopeRevisionAfter } from "./orchestrat
 import { assertTesterComplete } from "./mutation-completion.js";
 import { consumeScopeRevision } from "./scope-revision-budget.js";
 import { CheckFailureError } from "./workflow-errors.js";
-import { runDurableHumanGate } from "./orchestrator-human-gates.js";
+import { decisionAction, runDurableHumanGate } from "./orchestrator-human-gates.js";
 import { resolveParticipationPolicy, requiresHumanDecision } from "./participation-policy.js";
-import { resolveAgentBlocker } from "./orchestrator-resolution.js";
 import { runAgentStepWithResolution } from "./orchestrator-resolution-coordinator.js";
+import { automatedCriteria } from "./acceptance-criteria.js";
 
 export type ImplementationContinuation =
   | { point: "tester_completed"; tester: NonNullable<ImplementationResult["tester"]>; diagnosis?: DebuggerOutput }
@@ -61,39 +61,51 @@ export async function runImplementationPhase(
   let currentPlanning = planning;
   let { plan } = currentPlanning;
   const { baseline } = currentPlanning;
-  const testerResult = options.skipTester ? undefined : continuation?.tester ? { output: continuation.tester, planning: currentPlanning } : await runAgentStepWithResolution(
-      runtime, workflow, currentPlanning,
-      "tester", "creating_tests", "Create acceptance tests",
-      {
-        action: "create_tests",
-        request,
-        plan,
-        acceptanceCriteria: plan.acceptanceCriteria.map((text, index) => ({ index, text })),
-        baselineChecks: baseline,
-        diagnosis: options.initialDiagnosis
-      },
-      workflow.mutationCwd, ctx,
-      text => parseTesterOutput(text, plan.acceptanceCriteria),
-      { mutationPlan: plan }
-    );
   let tester: TesterOutput | undefined;
-  if (testerResult) {
-    tester = testerResult.output as TesterOutput;
-    currentPlanning = testerResult.planning;
-    plan = testerResult.planning.plan;
-    if (tester.blocker) {
-      if (tester.blocker.kind !== "scope") {
-        const resolved = await resolveAgentBlocker(runtime, workflow, currentPlanning, tester.blocker);
-        currentPlanning = resolved.planning;
-        plan = resolved.planning.plan;
-      }
-    } else {
+  if (!options.skipTester) {
+    if (continuation?.tester) {
+      tester = continuation.tester;
       assertTesterComplete(tester, plan.route);
+    } else {
+      while (true) {
+        const previousPlan = plan;
+        const testerResult = await runAgentStepWithResolution(
+          runtime, workflow, currentPlanning,
+          "tester", "creating_tests", "Create acceptance tests",
+          {
+            action: "create_tests",
+            request,
+            plan,
+            acceptanceCriteria: automatedCriteria(plan),
+            baselineChecks: baseline,
+            diagnosis: options.initialDiagnosis
+          },
+          workflow.mutationCwd, ctx,
+          text => parseTesterOutput(text, automatedCriteria(plan)),
+          { mutationPlan: plan }
+        );
+        tester = testerResult.output as TesterOutput;
+        currentPlanning = testerResult.planning;
+        plan = testerResult.planning.plan;
+        if (!tester.blocker) {
+          assertTesterComplete(tester, plan.route);
+          break;
+        }
+        const plannerHandoff = tester.blocker.kind === "role_handoff" && tester.blocker.requestedRole === "planner";
+        if (testerResult.resolutionRecord?.status !== "resolved" || !plannerHandoff) {
+          throw new Error(`Tester returned an unresolved blocker: ${tester.blocker.reason}`);
+        }
+        if (JSON.stringify(plan) === JSON.stringify(previousPlan)) {
+          throw new Error(`Tester Planner handoff did not change the plan: ${tester.blocker.reason}`);
+        }
+        const scopeRevisionCount = consumeScopeRevision(currentPlanning.scopeRevisionCount, config.limits.planRevisions, "during Tester classification repair");
+        currentPlanning = { ...currentPlanning, scopeRevisionCount };
+      }
     }
   }
   if (!options.skipTester && !continuation) {
-    await saveWorkflowCheckpoint(runtime, workflow, "tester_completed", { planning, tester, diagnosis: options.initialDiagnosis }, {
-      exploration: planning.exploration, plan, baselineChecks: baseline, tester
+    await saveWorkflowCheckpoint(runtime, workflow, "tester_completed", { planning: currentPlanning, tester, diagnosis: options.initialDiagnosis }, {
+      exploration: currentPlanning.exploration, plan, baselineChecks: baseline, tester
       , diagnosis: options.initialDiagnosis
     });
   }
@@ -183,11 +195,7 @@ export async function runImplementationPhase(
         continue;
       }
       if (builderOut.blocker.kind !== "scope") {
-        const resolved = await resolveAgentBlocker(runtime, workflow, currentPlanning, builderOut.blocker);
-        currentPlanning = resolved.planning;
-        plan = resolved.planning.plan;
-        builderTask.plan = plan;
-        continue;
+        throw new Error(`Builder returned an unresolved blocker: ${builderOut.blocker.reason}`);
       }
       const additions = filesOutsidePlan(plan, builderOut.blocker.requiredFiles);
       if (additions.length === 0) throw new Error(`Builder reported an invalid scope blocker: ${builderOut.blocker.reason}`);
@@ -309,7 +317,15 @@ export async function requestImplementationBudgetExtension(
       if (!answer) return undefined;
       return answer === "Allow one more repair" ? { action: "fix_again" as const } : { action: "cancel" as const };
     },
-    () => true
+    () => true,
+    {
+      format: "markdown",
+      content: `## Implementation repair budget exhausted\n\nChecks are still failing after ${completedAttempt} attempt(s). Approving another repair authorizes one additional targeted mutation round.\n\n### Failing checks\n\n${failedChecks.map(check => `- \`${check.command}\` (exit ${check.exitCode ?? "unknown"})`).join("\n")}\n\n${formatDiagnosisForApproval(diagnosis)}`,
+      actions: [
+        decisionAction("fix_again", "Allow one more repair"),
+        decisionAction("cancel", "Stop workflow"),
+      ],
+    }
   );
   return nextAllowed;
 }

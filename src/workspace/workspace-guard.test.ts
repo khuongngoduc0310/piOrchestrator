@@ -37,6 +37,7 @@ function plan(files: string[]): PlannerOutput {
     summary: "guarded change",
     assumptions: [],
     acceptanceCriteria: ["works"],
+    automatedAcceptanceCriteria: [0],
     tasks: [{ id: "one", description: "change", files, dependencies: [], verification: ["test"] }],
     risks: []
   };

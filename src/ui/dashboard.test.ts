@@ -171,6 +171,141 @@ describe("DashboardServer", () => {
     await dashboard.stop();
   });
 
+  it("resolves an active dashboard decision exactly once", async () => {
+    const { dashboard, url } = await server();
+    const controller = new AbortController();
+    const decision = dashboard.registerDecision("decision-1", {
+      format: "markdown",
+      content: "# Review",
+      actions: [
+        { value: "approve", label: "Approve", requiresFeedback: false },
+        { value: "revise", label: "Request changes", requiresFeedback: true },
+        { value: "cancel", label: "Cancel", requiresFeedback: false },
+      ]
+    }, controller.signal);
+
+    const responsePromise = fetch(`${url}/api/decision`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ id: "decision-1", action: "approve" })
+    });
+    const submission = await decision;
+    submission.acknowledge();
+    const response = await responsePromise;
+
+    expect(response.status).toBe(200);
+    expect(submission).toMatchObject({ action: "approve", feedback: undefined });
+    expect((await fetch(`${url}/api/decision`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ id: "decision-1", action: "approve" })
+    })).status).toBe(409);
+    await dashboard.stop();
+  });
+
+  it("rejects dashboard actions that are not allowed for the active decision", async () => {
+    const { dashboard, url } = await server();
+    const controller = new AbortController();
+    const decision = dashboard.registerDecision("decision-2", {
+      format: "markdown",
+      content: "# Review",
+      actions: [
+        { value: "approve", label: "Approve", requiresFeedback: false },
+        { value: "cancel", label: "Cancel", requiresFeedback: false },
+      ]
+    }, controller.signal);
+
+    const response = await fetch(`${url}/api/decision`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ id: "decision-2", action: "revise", feedback: "change it" })
+    });
+
+    expect(response.status).toBe(400);
+    expect(await response.json()).toMatchObject({ ok: false });
+    controller.abort();
+    await expect(decision).rejects.toThrow(/aborted/i);
+    await dashboard.stop();
+  });
+
+  it("keeps a registered decision active when the last SSE client disconnects", async () => {
+    const { dashboard, url } = await server();
+    const controller = new AbortController();
+    const decision = dashboard.registerDecision("decision-disconnect", {
+      format: "markdown",
+      content: "# Review after disconnect",
+      actions: [{ value: "proceed", label: "Proceed", requiresFeedback: false }],
+    }, controller.signal);
+    const events = await fetch(`${url}/events`);
+    await events.body!.cancel();
+
+    const preview = await fetch(`${url}/api/decisions/decision-disconnect/preview`);
+    expect(preview.status).toBe(200);
+    const responsePromise = fetch(`${url}/api/decision`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ id: "decision-disconnect", action: "proceed" }),
+    });
+    const submission = await decision;
+    submission.acknowledge();
+    const response = await responsePromise;
+    expect(response.status).toBe(200);
+    expect(submission).toMatchObject({ action: "proceed", feedback: undefined });
+    await dashboard.stop();
+  });
+
+  it("rejects pre-aborted and duplicate decision IDs", async () => {
+    const { dashboard } = await server();
+    const presentation = {
+      format: "markdown" as const,
+      content: "# Review",
+      actions: [{ value: "approve" as const, label: "Approve", requiresFeedback: false }],
+    };
+    const aborted = new AbortController();
+    aborted.abort(new Error("already cancelled"));
+    expect(() => dashboard.registerDecision("pre-aborted", presentation, aborted.signal)).toThrow("already cancelled");
+
+    const active = new AbortController();
+    const decision = dashboard.registerDecision("duplicate", presentation, active.signal);
+    expect(() => dashboard.registerDecision("duplicate", presentation, new AbortController().signal)).toThrow("already registered");
+    active.abort();
+    await expect(decision).rejects.toThrow(/aborted/i);
+    await dashboard.stop();
+  });
+
+  it("requires nonblank feedback for actions that declare it", async () => {
+    const { dashboard, url } = await server();
+    const decision = dashboard.registerDecision("feedback", {
+      format: "markdown",
+      content: "# Review",
+      actions: [{ value: "request_changes", label: "Request changes", requiresFeedback: true }],
+    }, new AbortController().signal);
+    const submit = (feedback: string) => fetch(`${url}/api/decision`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ id: "feedback", action: "request_changes", feedback }),
+    });
+
+    expect((await submit("   ")).status).toBe(400);
+    const responsePromise = submit("  Add coverage  ");
+    const submission = await decision;
+    submission.acknowledge();
+    expect((await responsePromise).status).toBe(200);
+    expect(submission).toMatchObject({ action: "request_changes", feedback: "Add coverage" });
+    await dashboard.stop();
+  });
+
+  it("aborts active decisions when the server stops", async () => {
+    const { dashboard } = await server();
+    const decision = dashboard.registerDecision("server-stop", {
+      format: "markdown",
+      content: "# Review",
+      actions: [{ value: "approve", label: "Approve", requiresFeedback: false }],
+    }, new AbortController().signal);
+    await dashboard.stop();
+    await expect(decision).rejects.toThrow("Dashboard server stopped");
+  });
+
   it("returns lastState from /api/state when provider returns undefined", async () => {
     const dashboard = new DashboardServer(emptyProvider);
     const url = await dashboard.start(0);

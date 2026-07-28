@@ -106,7 +106,7 @@ export async function runAgentStepWithResolution<A extends AgentName>(
   await saveWorkflowCheckpoint(
     runtime, workflow, "resolution_resolved",
     { record, planning: resolved.planning },
-    { exploration: planning.exploration, plan: planning.plan, resolutionLedger: [...ledger] }
+    { exploration: resolved.planning.exploration, plan: resolved.planning.plan, resolutionLedger: [...ledger] }
   );
 
   return { output, planning: resolved.planning, resolutionRecord: record, resolutionOutcome: outcome, resolutionLedger: ledger };

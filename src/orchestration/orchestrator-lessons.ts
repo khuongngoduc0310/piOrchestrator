@@ -10,8 +10,9 @@ import type { OrchestratorRuntime } from "./orchestrator-runtime.js";
 import { countCandidateStates, EXTENSION_VERSION, projectTrusted } from "./orchestrator-helpers.js";
 import { runAgentStep } from "./orchestrator-agent-step.js";
 import { promptHumanMemoryApproval } from "./orchestrator-human-gates.js";
-import { persist, publishSessionMessage } from "./orchestrator-state.js";
-import { saveWorkflowCheckpoint } from "./orchestrator-checkpoints.js";
+import { persist, publishMilestone, recordMarkdownMilestone } from "./orchestrator-state.js";
+import { CheckpointPostCommitError, saveWorkflowCheckpoint } from "./orchestrator-checkpoints.js";
+import { canonicalSha256 } from "../workspace/workspace-guard.js";
 
 export interface LessonPreparation {
   documentation: DocumenterOutput;
@@ -98,19 +99,35 @@ export async function prepareLessons(
       if (duplicates.length > 0) await store.saveJson("candidate-duplicates.json", duplicates.map(candidate => ({ id: candidate.id, title: candidate.title })));
     }
   }
-  publishSessionMessage(runtime, formatDocumentationReport(documentation, runtime.lessonStatus), { kind: "documentation_updated" });
+  const documentationReport = formatDocumentationReport(documentation, runtime.lessonStatus);
+  const documentationMilestoneId = `documentation-reviewed:${canonicalSha256(documentationReport)}`;
+  const documentationMilestoneExisted = runtime.requireState().milestones?.some(entry => entry.id === documentationMilestoneId) === true;
+  const documentationMilestone = recordMarkdownMilestone(
+    runtime,
+    documentationMilestoneId,
+    documentation.changedFiles.length > 0 ? "documentation_updated" : "documentation_reviewed",
+    documentationReport
+  );
   const result = { documentation, proposedCandidates, duplicateCandidateIds, machineEligibleCount, machineRejectedCount, duplicateCount };
-  await saveWorkflowCheckpoint(runtime, workflow, "lessons_screened", { review, preparation: serializeLessonPreparation(result) }, {
-    exploration: review.exploration,
-    plan,
-    baselineChecks: baseline,
-    tester,
-    builderOutputs: runtime.builderSessionOutputs,
-    implementationChecks: finalImplChecks,
-    codeReview,
-    priorCodeReviews: review.priorCodeReviews,
-    reviewApprovalSource
-  });
+  try {
+    await saveWorkflowCheckpoint(runtime, workflow, "lessons_screened", { review, preparation: serializeLessonPreparation(result) }, {
+      exploration: review.exploration,
+      plan,
+      baselineChecks: baseline,
+      tester,
+      builderOutputs: runtime.builderSessionOutputs,
+      implementationChecks: finalImplChecks,
+      codeReview,
+      priorCodeReviews: review.priorCodeReviews,
+      reviewApprovalSource
+    });
+  } catch (error) {
+    if (!(error instanceof CheckpointPostCommitError) && !documentationMilestoneExisted) {
+      runtime.requireState().milestones = runtime.requireState().milestones?.filter(entry => entry.id !== documentationMilestoneId);
+    }
+    throw error;
+  }
+  if (!documentationMilestoneExisted) publishMilestone(runtime, documentationMilestone);
   return result;
 }
 

@@ -9,14 +9,14 @@ import type { OrchestratorRuntime } from "./orchestrator-runtime.js";
 import { allGreen, EXTENSION_VERSION, messageOf } from "./orchestrator-helpers.js";
 import { runCheckStep, validateFinalDirectWorkspace, validateFinalWorktreeChanges } from "./orchestrator-workspace.js";
 import { hydrateLessonPreparation, persistAndPromoteLessons, prepareLessons, serializeLessonPreparation, type LessonPreparation, type SerializedLessonPreparation } from "./orchestrator-lessons.js";
-import { persist, publishSessionMessage, throwIfAborted, transition } from "./orchestrator-state.js";
+import { persist, publishMilestone, publishPersistedState, recordMarkdownMilestone, throwIfAborted, transition } from "./orchestrator-state.js";
 import { saveWorkflowCheckpoint } from "./orchestrator-checkpoints.js";
 import { parseDebuggerOutput, parseDocumenterOutput, parsePlannerOutput } from "../validation.js";
 import { runAgentStep } from "./orchestrator-agent-step.js";
 import { assertDocumenterComplete } from "./mutation-completion.js";
 import { deriveRoleMutationPaths, isDocumentationPath } from "../workspace/workspace-guard.js";
 import { CheckFailureError } from "./workflow-errors.js";
-import { runDurableHumanGate } from "./orchestrator-human-gates.js";
+import { decisionAction, runDurableHumanGate } from "./orchestrator-human-gates.js";
 import { runReviewPhase } from "./orchestrator-review.js";
 import { runImplementationPhase } from "./orchestrator-implementation.js";
 import { filesOutsidePlan, validateFailureScopeRevision, validateFinalPlanRevision } from "./plan-revision.js";
@@ -25,6 +25,7 @@ import { reviseImplementationScope, type DocumentationScopePhase } from "./orche
 import { consumeScopeRevision } from "./scope-revision-budget.js";
 import { resolveAgentBlocker } from "./orchestrator-resolution.js";
 import { runAgentStepWithResolution } from "./orchestrator-resolution-coordinator.js";
+import { formatPlanForReview } from "./plan-review.js";
 import {
   computePreparationDigest,
   validateCheckpointRef,
@@ -326,7 +327,16 @@ export async function runFinalizationPhase(
             const feedback = await ctx.ui.input("Describe the required final changes:", "Be specific about behavior and files", { signal });
             return feedback === undefined ? undefined : { action: "request_changes" as const, feedback };
           },
-          result => ({ action: result.action === "finish" ? "finish" : "request_changes", feedback: result.feedback })
+          result => ({ action: result.action === "finish" ? "finish" : "request_changes", feedback: result.feedback }),
+          {
+            format: "markdown",
+            content: `## Final delivery approval\n\nAll ${finalChecks.length} final project check(s) are green. Review the approved delivery scope before finishing or requesting a final revision.\n\n${formatPlanForReview(currentReview.plan)}`,
+            actions: [
+              decisionAction("finish", "Finish delivery"),
+              decisionAction("request_changes", "Request final changes", true),
+              decisionAction("cancel", "Cancel workflow"),
+            ]
+          }
         );
     if (decision.action === "request_changes") {
       await applyFinalChangeRequest(runtime, workflow, currentReview, decision.feedback ?? "", changeRound + 1);
@@ -410,13 +420,7 @@ export async function runFinalizationPhase(
     finalChecksDigest,
     completedAt: runtime.timestamp()
   });
-  const state = runtime.requireState();
-  state.status = "completed";
-  state.completedAt = runtime.timestamp();
-  await transition(runtime, "completed", undefined, "Workflow completed", ctx);
-  publishSessionMessage(runtime, formatCompletedRun(completionSummary, state.dashboardUrl, state.runDir, state.warning, EXTENSION_VERSION), { kind: "completed" });
-  await store.flush();
-  ctx.ui.notify("piOrchestrator workflow completed", "info");
+  await commitCompletedRun(runtime, workflow, completionSummary, "Workflow completed", "piOrchestrator workflow completed");
 }
 
 export async function applyFinalChangeRequest(
@@ -468,7 +472,15 @@ export async function applyFinalChangeRequest(
         );
         return answer === undefined ? undefined : { action: answer === "Approve revised plan" ? "approve" as const : "cancel" as const };
       },
-      () => ({ approved: true })
+      () => ({ approved: true }),
+      {
+        format: "markdown",
+        content: formatPlanForReview(plan),
+        actions: [
+          decisionAction("approve", "Approve revised plan"),
+          decisionAction("cancel", "Cancel workflow"),
+        ]
+      }
     );
   }
   const planning: ImplementationPlanningResult = {
@@ -534,13 +546,13 @@ export async function runReadOnlyFinalizationPhase(
   };
   await store.saveJson("completion-summary.json", completionSummary);
   throwIfAborted(runtime);
-  const state = runtime.requireState();
-  state.status = "completed";
-  state.completedAt = runtime.timestamp();
-  await transition(runtime, "completed", undefined, workflow.route === "investigation_only" ? "Investigation completed" : `${workflow.route} workflow completed`, ctx);
-  publishSessionMessage(runtime, formatCompletedRun(completionSummary, state.dashboardUrl, state.runDir, state.warning, EXTENSION_VERSION), { kind: "completed" });
-  await store.flush();
-  ctx.ui.notify(workflow.route === "investigation_only" ? "piOrchestrator investigation completed" : "piOrchestrator review completed", "info");
+  await commitCompletedRun(
+    runtime,
+    workflow,
+    completionSummary,
+    workflow.route === "investigation_only" ? "Investigation completed" : `${workflow.route} workflow completed`,
+    workflow.route === "investigation_only" ? "piOrchestrator investigation completed" : "piOrchestrator review completed"
+  );
 }
 
 export async function runSpecializedMutationFinalization(
@@ -735,13 +747,34 @@ async function completeRun(
     finalChecksDigest,
     completedAt: runtime.timestamp()
   });
+  await commitCompletedRun(runtime, workflow, summary, message, "piOrchestrator workflow completed");
+}
+
+async function commitCompletedRun(
+  runtime: OrchestratorRuntime,
+  workflow: WorkflowContext,
+  summary: CompletionSummary,
+  message: string,
+  notification: string
+): Promise<void> {
   const state = runtime.requireState();
   state.status = "completed";
   state.completedAt = runtime.timestamp();
-  await transition(runtime, "completed", undefined, message, workflow.ctx);
-  publishSessionMessage(runtime, formatCompletedRun(summary, state.dashboardUrl, state.runDir, state.warning, EXTENSION_VERSION), { kind: "completed" });
-  await workflow.store.flush();
-  workflow.ctx.ui.notify("piOrchestrator workflow completed", "info");
+  const completionReport = formatCompletedRun(summary, state.runDir, state.warning, EXTENSION_VERSION)
+    + (state.dashboardUrl ? `\n\n**Dashboard:** \`${state.dashboardUrl}\`` : "");
+  const milestoneId = "workflow-completed";
+  const milestoneExisted = state.milestones?.some(entry => entry.id === milestoneId) === true;
+  const milestone = recordMarkdownMilestone(runtime, milestoneId, "completed", completionReport);
+  try {
+    await transition(runtime, "completed", undefined, message, workflow.ctx, { publish: false });
+    await workflow.store.flush();
+  } catch (error) {
+    if (!milestoneExisted) state.milestones = state.milestones?.filter(entry => entry.id !== milestoneId);
+    throw error;
+  }
+  publishPersistedState(runtime, workflow.ctx);
+  publishMilestone(runtime, milestone);
+  workflow.ctx.ui.notify(notification, "info");
 }
 
 function emptyMemorySummary(runtime: OrchestratorRuntime): CompletionSummary["memory"] {

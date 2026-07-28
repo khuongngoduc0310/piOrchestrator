@@ -157,7 +157,7 @@ export class UiController {
             screen === "inspector" ? { mode: "inspector" } : { mode: "dashboard" },
           );
         },
-        { overlay: true, overlayOptions: { width: "100%", maxHeight: "100%" } },
+        { overlay: true, overlayOptions: { width: "100%", maxHeight: "100%", anchor: "bottom-center" } },
       );
     } catch {
       // overlay rejected or cancelled

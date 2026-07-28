@@ -10,7 +10,7 @@ import { assertDocumenterComplete, assertTesterComplete } from "./mutation-compl
 import { allGreen } from "./orchestrator-helpers.js";
 import { deriveRoleMutationPaths, isDocumentationPath } from "../workspace/workspace-guard.js";
 import { CheckFailureError } from "./workflow-errors.js";
-import { runDurableHumanGate } from "./orchestrator-human-gates.js";
+import { decisionAction, runDurableHumanGate } from "./orchestrator-human-gates.js";
 import { filesOutsidePlan } from "./plan-revision.js";
 import { validateFinalPlanRevision } from "./plan-revision.js";
 import { reviseImplementationScope } from "./orchestrator-scope-revision.js";
@@ -19,6 +19,8 @@ import { consumeScopeRevision } from "./scope-revision-budget.js";
 import { resolveParticipationPolicy, requiresHumanDecision } from "./participation-policy.js";
 import { resolveAgentBlocker } from "./orchestrator-resolution.js";
 import { runAgentStepWithResolution } from "./orchestrator-resolution-coordinator.js";
+import { automatedCriteria } from "./acceptance-criteria.js";
+import { formatPlanForReview } from "./plan-review.js";
 
 export async function runSpecializedMutationRoute(
   runtime: OrchestratorRuntime,
@@ -39,12 +41,12 @@ export async function runSpecializedMutationRoute(
         action: "create_tests",
         request: workflow.request,
         plan: planning.plan,
-        acceptanceCriteria: planning.plan.acceptanceCriteria.map((text, index) => ({ index, text })),
+        acceptanceCriteria: automatedCriteria(planning.plan),
         baselineChecks: planning.baseline,
         diagnosis: planning.baselineDiagnosis
       },
       workflow.mutationCwd, workflow.ctx,
-      text => parseTesterOutput(text, planning.plan.acceptanceCriteria),
+      text => parseTesterOutput(text, automatedCriteria(planning.plan)),
       { mutationPlan: planning.plan }
     );
     const tester = coordResult.output as TesterOutput;
@@ -154,12 +156,12 @@ export async function runSpecializedMutationRoute(
           action: "repair_checks",
           request: workflow.request,
           plan: result!.plan,
-          acceptanceCriteria: result!.plan.acceptanceCriteria.map((text, index) => ({ index, text })),
+          acceptanceCriteria: automatedCriteria(result!.plan),
           checks: finalChecks,
           diagnosis,
           previous,
           attempt
-        }, workflow.mutationCwd, workflow.ctx, text => parseTesterOutput(text, result!.plan.acceptanceCriteria), { attempt, mutationPlan: result!.plan });
+        }, workflow.mutationCwd, workflow.ctx, text => parseTesterOutput(text, automatedCriteria(result!.plan)), { attempt, mutationPlan: result!.plan });
         if (tester.blocker) {
           const resolved = await resolveAgentBlocker(runtime, workflow, result!, tester.blocker);
           result = { ...resolved.planning, route: "tests_only", tester: { ...tester, changedFiles: [...new Set([...previous.changedFiles, ...tester.changedFiles])], testsAdded: [...new Set([...previous.testsAdded, ...tester.testsAdded])] } };
@@ -232,7 +234,16 @@ export async function runSpecializedMutationRoute(
         const feedback = await workflow.ctx.ui.input("Describe the required final changes:", "Be specific about behavior and files", { signal });
         return feedback === undefined ? undefined : { action: "request_changes" as const, feedback };
       },
-      answer => ({ action: answer.action === "finish" ? "finish" : "request_changes", feedback: answer.feedback })
+      answer => ({ action: answer.action === "finish" ? "finish" : "request_changes", feedback: answer.feedback }),
+      {
+        format: "markdown",
+        content: `## Final delivery approval\n\nAll ${finalChecks.length} final project check(s) are green. Review the approved delivery scope before finishing or requesting a final revision.\n\n${formatPlanForReview(result.plan)}`,
+        actions: [
+          decisionAction("finish", "Finish delivery"),
+          decisionAction("request_changes", "Request final changes", true),
+          decisionAction("cancel", "Cancel workflow"),
+        ]
+      }
     );
     if (decision.action === "request_changes") {
       await applySpecializedFinalChangeRequest(
@@ -315,7 +326,15 @@ export async function applySpecializedFinalChangeRequest(
         );
         return answer === undefined ? undefined : { action: answer === "Approve revised plan" ? "approve" as const : "cancel" as const };
       },
-      () => ({ approved: true })
+      () => ({ approved: true }),
+      {
+        format: "markdown",
+        content: formatPlanForReview(plan),
+        actions: [
+          decisionAction("approve", "Approve revised plan"),
+          decisionAction("cancel", "Cancel workflow"),
+        ]
+      }
     );
   }
   await runSpecializedMutationRoute(

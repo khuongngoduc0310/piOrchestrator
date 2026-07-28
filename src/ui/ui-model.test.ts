@@ -57,6 +57,7 @@ describe("UiModel", () => {
       expect(vm.config.status).toBe("valid");
       expect(vm.run).toBeUndefined();
       expect(vm.recentSteps).toEqual([]);
+      expect(vm.milestones).toEqual([]);
       expect(vm.commands).toContain("/orchestrate");
       expect(vm.commands.join(" ")).not.toContain("--route");
     });
@@ -333,6 +334,35 @@ describe("UiModel", () => {
       const vm = buildRunViewModel(state, validConfig, "/project", 0, 3);
       expect(vm.recentSteps.length).toBe(12);
       expect(vm.recentSteps[0].id).toBe("step-9");
+    });
+
+    it("exposes every milestone without affecting the recent step cap", () => {
+      const steps = Array.from({ length: 20 }, (_, index): StepRecord => ({
+        id: `step-${index + 1}`,
+        sequence: index + 1,
+        stage: "preflight",
+        label: `Step ${index + 1}`,
+        status: "succeeded",
+        startedAt: new Date().toISOString()
+      }));
+      const milestones = Array.from({ length: 15 }, (_, index) => ({
+        id: `milestone-${index + 1}`,
+        sequence: index + 1,
+        kind: "plan.approved",
+        title: `Milestone ${index + 1}`,
+        details: `Details ${index + 1}`,
+        occurredAt: "2026-07-28T10:00:00.000Z"
+      }));
+
+      const vm = buildRunViewModel(sampleState({ steps, milestones }), validConfig, "/project", 0, 3);
+
+      expect(vm.recentSteps).toHaveLength(12);
+      expect(vm.timelineSteps).toHaveLength(20);
+      expect(vm.milestones).toEqual(milestones);
+    });
+
+    it("uses an empty milestone list for legacy states", () => {
+      expect(buildRunViewModel(sampleState(), validConfig, "/project", 0, 3).milestones).toEqual([]);
     });
 
     it("copies all agent state fields", () => {

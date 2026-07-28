@@ -8,6 +8,7 @@ function plan(overrides: Partial<PlannerOutput> = {}): PlannerOutput {
     summary: "Add pause/resume to the simulation",
     assumptions: ["UI element is the only change needed"],
     acceptanceCriteria: ["Pause preserves state", "Resume continues from same state"],
+    automatedAcceptanceCriteria: overrides.automatedAcceptanceCriteria ?? [0, 1],
     tasks: [
       {
         id: "add-ui",
@@ -167,6 +168,7 @@ describe("formatPlanForReview", () => {
       summary: "Fix broken test assertion",
       assumptions: ["Only test file change needed"],
       acceptanceCriteria: ["Baseline checks pass"],
+      automatedAcceptanceCriteria: [0],
       tasks: [{
         id: "fix-test",
         description: "Update assertion in App.test.js",

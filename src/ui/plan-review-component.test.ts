@@ -9,6 +9,7 @@ function plan(overrides: Partial<PlannerOutput> = {}): PlannerOutput {
     summary: "Implement the requested change",
     assumptions: [],
     acceptanceCriteria: [],
+    automatedAcceptanceCriteria: [],
     tasks: [],
     risks: [],
     ...overrides,

@@ -219,9 +219,19 @@ export async function runAgentStep<A extends AgentName>(
       const rawArtifact = store.artifactName({ ...qualifier, sequence: step.sequence, stage, agent, kind: "invalid-output-attempt-1", extension: "txt" });
       step.rawArtifact = await store.saveRaw(rawArtifact, result.text);
       const hadWritablePaths = allowedWritePaths.length > 0;
-      if (!OUTPUT_CORRECTABLE_AGENTS.has(agent) && (hadWritablePaths || agent !== "documenter")) {
+      const mutatingSession = beforeWorkspace !== undefined && ROLE_MUTATION_KINDS[agent] !== "none";
+      if (!OUTPUT_CORRECTABLE_AGENTS.has(agent) && !mutatingSession && (hadWritablePaths || agent !== "documenter")) {
         throw new Error(`${agent} returned invalid structured output after a potentially mutating session: ${messageOf(validationError)}`);
       }
+      const auditedMutation = mutatingSession ? await (async () => {
+        const afterWorkspace = await createWorkspaceSnapshot(cwd, {
+          excludedRoots: workspaceExclusions(runtime, cwd),
+          requiredPaths: allowedWritePaths
+        });
+        const delta = compareWorkspaceSnapshots(beforeWorkspace!, afterWorkspace);
+        validateAgentMutationScope(agent, qualifier.mutationPlan, delta);
+        return { afterWorkspace, delta };
+      })() : undefined;
       const rawPath = validationError instanceof ValidationError ? validationError.path : undefined;
       const fieldPath = rawPath && /^[a-zA-Z0-9_.\[\]-]+$/.test(rawPath) ? rawPath : undefined;
       const correctionEnvelope: AgentTaskEnvelope<AgentTaskMap[A]> = {
@@ -229,7 +239,12 @@ export async function runAgentStep<A extends AgentName>(
         mode: "correct_output",
         task: payload,
         memoryContext: memoryEnvelope,
-        correction: { attempt: 1, reason: "schema_validation_failed", ...(fieldPath ? { fieldPath } : {}), ...(hadWritablePaths ? {} : { expectedChangedFiles: [] }) }
+        correction: {
+          attempt: 1,
+          reason: "schema_validation_failed",
+          ...(fieldPath ? { fieldPath } : {}),
+          ...(auditedMutation ? { expectedChangedFiles: [...auditedMutation.delta.changedFiles] } : hadWritablePaths ? {} : { expectedChangedFiles: [] })
+        }
       };
       const correctionConfig = { ...runBase.config, tools: runBase.config.tools.filter(tool => CORRECTION_TOOLS.has(tool)) };
       result = await executeInvocation("correct_output", correctionConfig, JSON.stringify(correctionEnvelope, null, 2));
@@ -241,8 +256,28 @@ export async function runAgentStep<A extends AgentName>(
         step.rawArtifact = await store.saveRaw(secondRawArtifact, result.text);
         throw correctionError;
       }
+      if (auditedMutation) {
+        const afterCorrectionWorkspace = await createWorkspaceSnapshot(cwd, {
+          excludedRoots: workspaceExclusions(runtime, cwd),
+          requiredPaths: allowedWritePaths
+        });
+        const correctionDelta = compareWorkspaceSnapshots(auditedMutation.afterWorkspace, afterCorrectionWorkspace);
+        if (correctionDelta.changedFiles.length > 0) {
+          const finalDelta = compareWorkspaceSnapshots(beforeWorkspace!, afterCorrectionWorkspace);
+          await validateAgentMutation(runtime, agent, qualifier.mutationPlan, output, finalDelta, afterCorrectionWorkspace, step, store, {
+            initialReported: [],
+            correctionAttempted: true,
+            additionalViolations: [`${agent} output correction changed project files: ${correctionDelta.changedFiles.join(", ")}`]
+          });
+        }
+        await validateAgentMutation(runtime, agent, qualifier.mutationPlan, output, auditedMutation.delta, auditedMutation.afterWorkspace, step, store, {
+          initialReported: [],
+          correctionAttempted: true
+        });
+        workspaceAudited = true;
+      }
     }
-    if (beforeWorkspace) {
+    if (beforeWorkspace && !workspaceAudited) {
       const afterExecuteWorkspace = await createWorkspaceSnapshot(cwd, {
         excludedRoots: workspaceExclusions(runtime, cwd),
         requiredPaths: allowedWritePaths

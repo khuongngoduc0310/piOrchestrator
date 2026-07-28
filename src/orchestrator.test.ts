@@ -2,6 +2,7 @@ import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promis
 import { execFileSync } from "node:child_process";
 import os from "node:os";
 import path from "node:path";
+import { createServer } from "node:http";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import {
@@ -17,7 +18,7 @@ import { MAX_EVIDENCE_DETAIL_BYTES } from "./memory/memory-types.js";
 import { RunStore } from "./persistence/store.js";
 import { CheckpointStore } from "./persistence/checkpoint-store.js";
 import type { CheckpointWrite } from "./persistence/checkpoint-types.js";
-import type { AgentResult, CheckResult, OrchestratorConfig, WorkflowRoute } from "./types.js";
+import type { AgentResult, CheckResult, OrchestratorConfig, WorkflowRoute, WorkflowState } from "./types.js";
 
 const directories: string[] = [];
 afterEach(async () => {
@@ -51,6 +52,7 @@ const plan = json({
   summary: "implement",
   assumptions: [],
   acceptanceCriteria: ["check passes"],
+  automatedAcceptanceCriteria: [0],
   tasks: [{ id: "one", description: "change", files: ["src/index.ts"], dependencies: [], verification: ["check"] }],
   risks: []
 });
@@ -59,15 +61,18 @@ const reviewOnlyPlan = json({
   summary: "review existing changes",
   assumptions: [],
   acceptanceCriteria: ["findings cite repository evidence"],
+  automatedAcceptanceCriteria: [],
   tasks: [{ id: "review", description: "review changes", files: ["src/index.ts"], dependencies: [], verification: ["report findings"] }],
   risks: []
 });
 function routePlan(route: WorkflowRoute, files = ["src/index.ts"]): string {
+  const automatedIndices = route === "documentation_only" || route === "review_only" || route === "investigation_only" || route === "planning_only" ? [] : [0];
   return json({
     route,
     summary: `${route} plan`,
     assumptions: [],
     acceptanceCriteria: ["check passes"],
+    automatedAcceptanceCriteria: automatedIndices,
     tasks: [{ id: "one", description: "bounded work", files, dependencies: [], verification: ["check"] }],
     risks: []
   });
@@ -435,6 +440,63 @@ describe("Orchestrator", () => {
     ]);
   });
 
+  it("resumes a canonical dashboard approval at an exhausted final-change limit", async () => {
+    const initial = await scenario(
+      [explorer, routePlan("tests_only", ["test.ts"]), approved, tester],
+      [true, true],
+      config => {
+        config.limits.planRevisions = 0;
+        config.humanInTheLoop.importantDecisions = true;
+        config.humanInTheLoop.finalDeliveryApproval = true;
+      },
+      {},
+      "tests_only"
+    );
+    const paused = initial.engine.getState()!;
+    const checkpointStore = new CheckpointStore(paused.runDir, paused.runId);
+    const checkpoint = (await checkpointStore.loadLatest())!;
+    expect(checkpoint.cursor.kind).toBe("human_decision_pending");
+    if (checkpoint.cursor.kind !== "human_decision_pending") throw new Error("Expected a pending final-delivery decision");
+    const request = checkpoint.cursor.continuation.request;
+    const { schemaVersion: _schemaVersion, checkpointNumber: _checkpointNumber, ...checkpointWrite } = checkpoint;
+    await checkpointStore.save({
+      ...checkpointWrite,
+      cursor: {
+        kind: "human_decision_recorded",
+        continuation: {
+          request,
+          recorded: {
+            schemaVersion: 1,
+            requestId: request.id,
+            decidedAt: new Date().toISOString(),
+            source: "dashboard",
+            action: "finish"
+          }
+        }
+      }
+    });
+
+    const resumedAgent = new QueueAgent([]);
+    const resumedChecks = vi.fn(async () => [check(true)]) as unknown as CheckRunner;
+    const pi = { appendEntry: vi.fn(), exec: vi.fn(), sendMessage: vi.fn() } as unknown as ExtensionAPI;
+    const ctx = {
+      cwd: initial.cwd,
+      hasUI: false,
+      ui: { notify: vi.fn(), setStatus: vi.fn(), setWidget: vi.fn() }
+    } as unknown as ExtensionCommandContext;
+    const resumed = new Orchestrator(pi, path.resolve("."), {
+      agentExecutor: resumedAgent,
+      checkRunner: resumedChecks,
+      enforceWorkspacePolicy: false
+    });
+
+    await resumed.resume(paused.runId, ctx);
+
+    expect(resumed.getState()?.status).toBe("completed");
+    expect(resumedAgent.calls).toHaveLength(0);
+    expect(resumedChecks).not.toHaveBeenCalled();
+  });
+
   it("runs documentation-only without Tester or Builder", async () => {
     const { engine, agent } = await scenario(
       [explorer, routePlan("documentation_only", ["README.md"]), approved, documentationOnlyOutput],
@@ -546,6 +608,102 @@ describe("Orchestrator", () => {
     expect(select).toHaveBeenCalledTimes(3);
   });
 
+  it("handles a tests-only final change request through the dashboard", async () => {
+    const cwd = await mkdtemp(path.join(os.tmpdir(), "pi-orchestrator-dashboard-final-changes-"));
+    directories.push(cwd);
+    const config = defaultTestConfig();
+    config.checks = ["check"];
+    config.dashboard.enabled = true;
+    config.humanInTheLoop.finalDeliveryApproval = true;
+    await saveConfig(cwd, config);
+    const revisedPlan = json({
+      ...JSON.parse(routePlan("tests_only", ["test.ts"])),
+      summary: "tighten the requested tests"
+    });
+    const agent = new QueueAgent([
+      explorer,
+      routePlan("tests_only", ["test.ts"]),
+      approved,
+      tester,
+      revisedPlan,
+      tester
+    ]);
+    const checkQueue = [[check(true)], [check(true)], [check(true)], [check(true)]];
+    const checkRunner = vi.fn(async () => checkQueue.shift() ?? [check(true)]) as unknown as CheckRunner;
+    const pi = { appendEntry: vi.fn(), exec: vi.fn(), sendMessage: vi.fn() } as unknown as ExtensionAPI;
+    const piPromptSignals: AbortSignal[] = [];
+    const select = vi.fn((_title: string, _options: string[], interactionOptions?: { signal?: AbortSignal }) => new Promise<string | undefined>((_resolve, reject) => {
+      const signal = interactionOptions?.signal;
+      if (!signal) return;
+      piPromptSignals.push(signal);
+      signal.addEventListener("abort", () => reject(signal.reason), { once: true });
+    }));
+    const ctx = {
+      cwd,
+      hasUI: true,
+      ui: { select, input: vi.fn(), notify: vi.fn(), setStatus: vi.fn(), setWidget: vi.fn() }
+    } as unknown as ExtensionCommandContext;
+    const engine = new Orchestrator(pi, path.resolve("."), {
+      agentExecutor: agent,
+      checkRunner,
+      openBrowser: vi.fn(),
+      enforceWorkspacePolicy: false
+    });
+    const dashboardUrl = await engine.startDashboard(cwd);
+    const events = await fetch(`${dashboardUrl}/events`);
+    const reader = events.body!.getReader();
+    await reader.read();
+
+    const submit = async (action: "approve" | "request_changes" | "finish", feedback?: string): Promise<void> => {
+      await vi.waitFor(() => expect(engine.getState()?.pendingDecision?.id).toBeTruthy(), { timeout: 10_000 });
+      const id = engine.getState()!.pendingDecision!.id;
+      await vi.waitFor(async () => {
+        expect((await fetch(`${dashboardUrl}/api/decisions/${encodeURIComponent(id)}/preview`)).status).toBe(200);
+      }, { timeout: 10_000 });
+      const response = await fetch(`${dashboardUrl}/api/decision`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ id, action, feedback })
+      });
+      expect(response.status).toBe(200);
+      await vi.waitFor(() => expect(engine.getState()?.pendingDecision?.id).not.toBe(id), { timeout: 10_000 });
+    };
+
+    try {
+      const running = engine.start({ route: "tests_only", request: "request" }, ctx);
+      await submit("request_changes", "Add the missing edge-case assertion");
+      await vi.waitFor(() => expect(engine.getState()?.pendingDecision?.kind).toBe("final_revision_approval"), { timeout: 10_000 });
+      await submit("approve");
+      await vi.waitFor(() => expect(engine.getState()?.pendingDecision?.kind).toBe("final_delivery"), { timeout: 10_000 });
+      await submit("finish");
+      await running;
+
+      expect(engine.getState()?.status).toBe("completed");
+      expect(agent.calls.map(call => call.name)).toEqual(["explorer", "planner", "reviewer", "tester", "planner", "tester"]);
+      expect(JSON.parse(agent.calls.filter(call => call.name === "planner")[1].task).task).toMatchObject({
+        action: "revise_plan",
+        feedback: { source: "human", text: "Add the missing edge-case assertion" }
+      });
+      const checkpointFiles = (await readdir(engine.getState()!.runDir)).filter(file => /^checkpoint-\d+\.json$/.test(file));
+      const recordedActions: string[] = [];
+      for (const file of checkpointFiles) {
+        const checkpoint = JSON.parse(await readFile(path.join(engine.getState()!.runDir, file), "utf8")) as {
+          cursor?: { kind?: string; continuation?: { recorded?: { action?: string; source?: string } } };
+        };
+        if (checkpoint.cursor?.kind === "human_decision_recorded" && checkpoint.cursor.continuation?.recorded?.source === "dashboard") {
+          recordedActions.push(checkpoint.cursor.continuation.recorded.action ?? "");
+        }
+      }
+      expect(recordedActions).toEqual(expect.arrayContaining(["request_changes", "approve", "finish"]));
+      expect(recordedActions).not.toContain("revise");
+      expect(piPromptSignals).toHaveLength(3);
+      expect(piPromptSignals.every(signal => signal.aborted)).toBe(true);
+    } finally {
+      await reader.cancel();
+      await engine.shutdown(ctx);
+    }
+  });
+
   it("skips test-first generation for quick implementation", async () => {
     const { engine, agent } = await scenario(
       [explorer, routePlan("quick_implementation"), approved, builder, approved, documenter, approved],
@@ -570,6 +728,83 @@ describe("Orchestrator", () => {
     expect(agent.calls.map(call => call.name)).toEqual([
       "explorer", "planner", "reviewer", "debugger", "tester", "builder", "reviewer", "documenter", "reviewer"
     ]);
+  });
+
+  it("finishes bug-fix delivery when the dashboard approves", async () => {
+    const cwd = await mkdtemp(path.join(os.tmpdir(), "pi-orchestrator-dashboard-final-delivery-"));
+    directories.push(cwd);
+    const config = defaultTestConfig();
+    config.checks = ["check"];
+    config.dashboard.enabled = true;
+    config.humanInTheLoop.finalDeliveryApproval = true;
+    await saveConfig(cwd, config);
+    const agent = new QueueAgent([
+      explorer,
+      routePlan("bug_fix"),
+      approved,
+      debuggerOutput,
+      tester,
+      builder,
+      approved,
+      documenter,
+      approved
+    ]);
+    const checkQueue = [[check(true)], [check(false)], [check(true)], [check(true)]];
+    const checkRunner = vi.fn(async () => checkQueue.shift() ?? [check(true)]) as unknown as CheckRunner;
+    const pi = { appendEntry: vi.fn(), exec: vi.fn(), sendMessage: vi.fn() } as unknown as ExtensionAPI;
+    const ctx = {
+      cwd,
+      hasUI: false,
+      ui: { notify: vi.fn(), setStatus: vi.fn(), setWidget: vi.fn() }
+    } as unknown as ExtensionCommandContext;
+    const engine = new Orchestrator(pi, path.resolve("."), {
+      agentExecutor: agent,
+      checkRunner,
+      openBrowser: vi.fn(),
+      enforceWorkspacePolicy: false
+    });
+    const dashboardUrl = await engine.startDashboard(cwd);
+    const events = await fetch(`${dashboardUrl}/events`);
+    const reader = events.body!.getReader();
+    await reader.read();
+
+    try {
+      const running = engine.start({ route: "bug_fix", request: "request" }, ctx);
+      await vi.waitFor(() => {
+        expect(engine.getState()?.pendingDecision?.kind).toBe("final_delivery");
+        expect(engine.getState()?.pendingDecision?.id).toBeTruthy();
+      }, { timeout: 10_000 });
+      const decisionId = engine.getState()!.pendingDecision!.id;
+      await vi.waitFor(async () => {
+        expect((await fetch(`${dashboardUrl}/api/decisions/${encodeURIComponent(decisionId)}/preview`)).status).toBe(200);
+      }, { timeout: 10_000 });
+      const response = await fetch(`${dashboardUrl}/api/decision`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ id: decisionId, action: "finish" })
+      });
+      expect(response.status).toBe(200);
+      await running;
+
+      expect(engine.getState()?.status).toBe("completed");
+      expect(agent.calls.filter(call => call.name === "planner")).toHaveLength(1);
+      expect(engine.getState()?.steps.some(step => step.label === "Plan requested final changes")).toBe(false);
+      const checkpointFiles = (await readdir(engine.getState()!.runDir)).filter(file => /^checkpoint-\d+\.json$/.test(file));
+      const recordedActions: string[] = [];
+      for (const file of checkpointFiles) {
+        const checkpoint = JSON.parse(await readFile(path.join(engine.getState()!.runDir, file), "utf8")) as {
+          cursor?: { kind?: string; continuation?: { recorded?: { action?: string; source?: string } } };
+        };
+        if (checkpoint.cursor?.kind === "human_decision_recorded" && checkpoint.cursor.continuation?.recorded?.source === "dashboard") {
+          recordedActions.push(checkpoint.cursor.continuation.recorded.action ?? "");
+        }
+      }
+      expect(recordedActions).toContain("finish");
+      expect(recordedActions).not.toContain("approve");
+    } finally {
+      await reader.cancel();
+      await engine.shutdown(ctx);
+    }
   });
 
   it("pauses for required bug diagnosis approval before mutation", async () => {
@@ -618,7 +853,7 @@ describe("Orchestrator", () => {
     expect(checkRunner).toHaveBeenCalledTimes(3);
     const testerTask = JSON.parse(resumedAgent.calls.find(call => call.name === "tester")!.task).task;
     expect(testerTask.diagnosis).toEqual(JSON.parse(debuggerOutput));
-    expect(editor).toHaveBeenCalledOnce();
+    expect(editor).not.toHaveBeenCalled();
     expect(select).toHaveBeenCalledOnce();
     expect(resumedAgent.preflight).toHaveBeenCalledOnce();
   });
@@ -800,16 +1035,18 @@ describe("Orchestrator", () => {
     );
     const paused = initial.engine.getState()!;
     const resumedAgent = new QueueAgent([]);
-    const confirm = vi.fn(async () => false);
+    const select = vi.fn()
+      .mockResolvedValueOnce("Approve diagnosis")
+      .mockResolvedValueOnce("Cancel workflow");
     const pi = { appendEntry: vi.fn(), exec: vi.fn(), sendMessage: vi.fn() } as unknown as ExtensionAPI;
     const ctx = {
       cwd: initial.cwd,
       hasUI: true,
       ui: {
-        select: vi.fn(async () => "Approve diagnosis"),
+        select,
         editor: vi.fn(async () => "reviewed"),
         input: vi.fn(),
-        confirm,
+        confirm: vi.fn(),
         notify: vi.fn(),
         setStatus: vi.fn(),
         setWidget: vi.fn()
@@ -824,7 +1061,7 @@ describe("Orchestrator", () => {
     await resumed.resume(paused.runId, ctx);
 
     expect(resumed.getState()?.status).toBe("cancelled");
-    expect(confirm).toHaveBeenCalledOnce();
+    expect(select).toHaveBeenCalledTimes(2);
     expect(resumedAgent.calls).toHaveLength(0);
   });
 
@@ -987,6 +1224,7 @@ describe("Orchestrator", () => {
       summary: "implement",
       assumptions: [],
       acceptanceCriteria: ["check passes"],
+      automatedAcceptanceCriteria: [0],
       tasks: [{ id: "one", description: "change", files: ["src/index.ts", "tests/index.test.ts", "README.md"], dependencies: [], verification: ["check"] }],
       risks: []
     });
@@ -1053,6 +1291,7 @@ describe("Orchestrator", () => {
       summary: "implement",
       assumptions: [],
       acceptanceCriteria: ["check passes"],
+      automatedAcceptanceCriteria: [0],
       tasks: [{ id: "one", description: "change", files: ["src/index.ts", "README.md"], dependencies: [], verification: ["check"] }],
       risks: []
     });
@@ -1124,13 +1363,13 @@ describe("Orchestrator", () => {
     expect(await readFile(path.join(cwd, "src", "index.ts"), "utf8")).toContain("value = 2");
   }, 20_000);
 
-  it("sends every role a stable version-3 task envelope", async () => {
+  it("sends every role a stable version-4 task envelope", async () => {
     const { agent } = await scenario(
       [explorer, plan, approved, tester, builder, approved, documenter, approved],
       [true, false, true, true]
     );
     const envelopes = agent.calls.map(call => ({ name: call.name, envelope: JSON.parse(call.task) }));
-    expect(envelopes.every(({ envelope }) => envelope.taskSchemaVersion === 3 && envelope.mode === "execute")).toBe(true);
+    expect(envelopes.every(({ envelope }) => envelope.taskSchemaVersion === 4 && envelope.mode === "execute")).toBe(true);
     expect(envelopes.every(({ envelope }) => Object.hasOwn(envelope, "memoryContext"))).toBe(true);
     expect(envelopes.every(({ envelope }) => Object.hasOwn(envelope, "task"))).toBe(true);
 
@@ -1196,7 +1435,7 @@ describe("Orchestrator", () => {
     expect(engine.getState()?.status).toBe("completed");
     expect(agent.calls.filter(c => c.name === "builder")).toHaveLength(2); // repair + feature
     expect(agent.calls.filter(c => c.name === "debugger")).toHaveLength(1);
-    expect(editor).toHaveBeenCalledOnce();
+    expect(editor).not.toHaveBeenCalled();
     expect(select).toHaveBeenCalledTimes(2); // baseline repair + memory approval
   });
 
@@ -1237,7 +1476,7 @@ describe("Orchestrator", () => {
     await resumed.resume(paused.runId, ctx);
 
     expect(resumed.getState()?.status).toBe("completed");
-    expect(editor).toHaveBeenCalledOnce();
+    expect(editor).not.toHaveBeenCalled();
     expect(resumedAgent.calls.map(call => call.name)).toEqual(["builder", "tester", "builder", "reviewer", "documenter", "reviewer"]);
   });
 
@@ -1293,7 +1532,15 @@ describe("Orchestrator", () => {
     directories.push(cwd);
     const config = defaultTestConfig();
     config.checks = ["check"];
+    const occupiedPort = createServer();
+    await new Promise<void>((resolve, reject) => {
+      occupiedPort.once("error", reject);
+      occupiedPort.listen(0, "127.0.0.1", resolve);
+    });
+    const occupiedAddress = occupiedPort.address();
+    if (!occupiedAddress || typeof occupiedAddress === "string") throw new Error("Expected occupied TCP port");
     config.dashboard.enabled = true;
+    config.dashboard.port = occupiedAddress.port;
     config.humanInTheLoop.importantDecisions = true;
     config.humanInTheLoop.finalDeliveryApproval = true;
     await saveConfig(cwd, config);
@@ -1309,21 +1556,25 @@ describe("Orchestrator", () => {
     const paused = engine1.getState()!;
     expect(paused.status).toBe("paused");
     expect(paused.pendingDecision?.kind).toBe("final_delivery");
-    const originalUrl = paused.dashboardUrl!;
-    expect(originalUrl).toMatch(/^http:\/\/127\.0\.0\.1:\d+$/);
-    expect(openBrowser1).toHaveBeenCalledOnce();
-    expect(openBrowser1).toHaveBeenCalledWith(originalUrl);
+    expect(paused.dashboardUrl).toBeUndefined();
+    expect(openBrowser1).not.toHaveBeenCalled();
 
     await engine1.shutdown();
+    await new Promise<void>(resolve => occupiedPort.close(() => resolve()));
 
     const resumedAgent = new QueueAgent([]);
     const openBrowser2 = vi.fn();
     const pi2 = { appendEntry: vi.fn(), exec: vi.fn(), sendMessage: vi.fn() } as unknown as ExtensionAPI;
+    let resumedDecisionId: string | undefined;
+    let engine2: Orchestrator;
     const ctx2 = {
       cwd,
       hasUI: true,
       ui: {
-        select: vi.fn(async () => "Finish delivery"),
+        select: vi.fn(async () => {
+          resumedDecisionId = engine2.getState()?.pendingDecision?.id;
+          return "Finish delivery";
+        }),
         input: vi.fn(),
         editor: vi.fn(),
         confirm: vi.fn(),
@@ -1332,7 +1583,7 @@ describe("Orchestrator", () => {
         setWidget: vi.fn()
       }
     } as unknown as ExtensionCommandContext;
-    const engine2 = new Orchestrator(pi2, path.resolve("."), { agentExecutor: resumedAgent, checkRunner, openBrowser: openBrowser2, enforceWorkspacePolicy: false });
+    engine2 = new Orchestrator(pi2, path.resolve("."), { agentExecutor: resumedAgent, checkRunner, openBrowser: openBrowser2, enforceWorkspacePolicy: false });
     await engine2.resume(paused.runId, ctx2);
 
     expect(engine2.getState()?.status).toBe("completed");
@@ -1340,9 +1591,15 @@ describe("Orchestrator", () => {
 
     const resumedUrl = engine2.getState()?.dashboardUrl;
     expect(resumedUrl).toMatch(/^http:\/\/127\.0\.0\.1:\d+$/);
-    expect(resumedUrl).not.toBe(originalUrl);
     expect(openBrowser2).toHaveBeenCalledOnce();
     expect(openBrowser2).toHaveBeenCalledWith(resumedUrl);
+    expect(resumedDecisionId).toBeTruthy();
+    const staleResponse = await fetch(`${resumedUrl}/api/decision`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ id: resumedDecisionId, action: "finish" }),
+    });
+    expect(staleResponse.status).toBe(409);
   });
 
   it("clears stale dashboardUrl and does not open browser when dashboard is disabled on resume", async () => {
@@ -1413,6 +1670,12 @@ describe("Orchestrator", () => {
     expect(kinds).toContain("review_approved");
     expect(kinds).toContain("documentation_updated");
     expect(kinds).toContain("completed");
+    expect(engine.getState()?.milestones?.map(milestone => milestone.title)).toEqual(expect.arrayContaining([
+      "Plan approved",
+      "Code review complete",
+      "Documentation updated",
+      "Workflow completed"
+    ]));
   });
 
   it("publishes session failure message on failed run", async () => {
@@ -1636,7 +1899,7 @@ describe("Orchestrator", () => {
     await resumed.resume(paused.runId, ctx);
 
     expect(resumed.getState()?.status).toBe("completed");
-    expect(editor).toHaveBeenCalledOnce();
+    expect(editor).not.toHaveBeenCalled();
     expect(resumedAgent.calls.map(call => call.name)).toEqual(["builder", "reviewer", "documenter", "reviewer"]);
     expect(JSON.parse(resumedAgent.calls[0].task).task.attempt).toBe(1);
   });
@@ -1905,7 +2168,7 @@ describe("Orchestrator", () => {
     const correctionCall = agent.calls.filter(c => c.name === "planner")[1];
     const correctionEnvelope = JSON.parse(correctionCall.task);
     expect(correctionEnvelope).toMatchObject({
-      taskSchemaVersion: 3,
+      taskSchemaVersion: 4,
       mode: "correct_output",
       correction: { attempt: 1, reason: "schema_validation_failed" }
     });
@@ -1950,7 +2213,7 @@ describe("Orchestrator", () => {
     const explorerCalls = agent.calls.filter(call => call.name === "explorer");
     expect(explorerCalls).toHaveLength(2);
     expect(JSON.parse(explorerCalls[1].task)).toMatchObject({
-      taskSchemaVersion: 3,
+      taskSchemaVersion: 4,
       mode: "correct_output",
       correction: {
         attempt: 1,
@@ -1977,6 +2240,150 @@ describe("Orchestrator", () => {
     const { engine, agent } = await scenario([explorer, plan, approved, "not json"], [true]);
     expect(engine.getState()?.status).toBe("failed");
     expect(agent.calls.filter(call => call.name === "tester")).toHaveLength(1);
+  });
+
+  it("corrects invalid Tester metadata after auditing authorized test edits", async () => {
+    const cwd = await mkdtemp(path.join(os.tmpdir(), "pi-orchestrator-tester-output-correction-"));
+    directories.push(cwd);
+    await mkdir(path.join(cwd, "src"), { recursive: true });
+    await mkdir(path.join(cwd, "tests"), { recursive: true });
+    await writeFile(path.join(cwd, "src", "index.ts"), "export const value = 1;\n");
+    await writeFile(path.join(cwd, "tests", "index.test.ts"), "test('old', () => {});\n");
+    await writeFile(path.join(cwd, "README.md"), "# Project\n");
+    execFileSync("git", ["init"], { cwd, stdio: "ignore" });
+    execFileSync("git", ["config", "user.email", "test@example.com"], { cwd });
+    execFileSync("git", ["config", "user.name", "Test"], { cwd });
+    execFileSync("git", ["add", "."], { cwd });
+    execFileSync("git", ["commit", "-m", "initial"], { cwd, stdio: "ignore" });
+
+    const config = defaultTestConfig();
+    config.checks = ["check"];
+    config.dashboard.enabled = false;
+    config.limits.worktreeIsolation = false;
+    await saveConfig(cwd, config);
+    const correctionPlan = json({
+      route: "implementation",
+      summary: "implement",
+      assumptions: [],
+      acceptanceCriteria: ["check passes"],
+      automatedAcceptanceCriteria: [0],
+      tasks: [{
+        id: "one",
+        description: "change source, tests, and documentation",
+        files: ["src/index.ts", "tests/index.test.ts", "README.md"],
+        dependencies: [],
+        verification: ["check"]
+      }],
+      risks: []
+    });
+    const invalidTester = json({
+      ...JSON.parse(tester),
+      changedFiles: ["tests/index.test.ts"],
+      blocker: {
+        kind: "role_handoff",
+        reason: "Builder still needs to change source",
+        requestedRole: "implementer",
+        requestedCapability: "edit source",
+        question: "Implement the production fix",
+        evidence: [{ path: "src/index.ts", detail: "Current behavior is missing" }]
+      }
+    });
+    const correctedTester = json({
+      ...JSON.parse(tester),
+      changedFiles: ["tests/index.test.ts"],
+      blocker: null
+    });
+    const correctedDocumenter = json({ ...JSON.parse(documenter), changedFiles: ["README.md"] });
+
+    class CorrectingMutatingAgent extends QueueAgent {
+      override async run(options: AgentRunOptions): Promise<AgentResult> {
+        const envelope = JSON.parse(options.task);
+        if (options.name === "tester" && envelope.mode === "execute") {
+          await writeFile(path.join(options.cwd, "tests", "index.test.ts"), "test('value', () => {});\n");
+        } else if (options.name === "builder" && envelope.mode === "execute") {
+          await writeFile(path.join(options.cwd, "src", "index.ts"), "export const value = 2;\n");
+        } else if (options.name === "documenter" && envelope.mode === "execute") {
+          await writeFile(path.join(options.cwd, "README.md"), "# Project\n\nUpdated.\n");
+        }
+        return super.run(options);
+      }
+    }
+
+    const agent = new CorrectingMutatingAgent([
+      explorer, correctionPlan, approved, invalidTester, correctedTester,
+      builder, approved, correctedDocumenter, approved
+    ]);
+    const checkRunner = vi.fn(async () => [check(true)]) as unknown as CheckRunner;
+    const pi = { appendEntry: vi.fn(), exec: vi.fn(), sendMessage: vi.fn() } as unknown as ExtensionAPI;
+    const ctx = {
+      cwd,
+      hasUI: false,
+      isProjectTrusted: () => true,
+      ui: { notify: vi.fn(), setStatus: vi.fn(), setWidget: vi.fn() }
+    } as unknown as ExtensionCommandContext;
+    const engine = new Orchestrator(pi, path.resolve("."), { agentExecutor: agent, checkRunner });
+
+    await engine.start({ route: "implementation", request: "request" }, ctx);
+
+    expect(engine.getState()?.status).toBe("completed");
+    const testerCalls = agent.calls.filter(call => call.name === "tester");
+    expect(testerCalls).toHaveLength(2);
+    expect(JSON.parse(testerCalls[1].task)).toMatchObject({
+      mode: "correct_output",
+      correction: {
+        reason: "schema_validation_failed",
+        fieldPath: "tester.blocker.requestedRole",
+        expectedChangedFiles: ["tests/index.test.ts"]
+      }
+    });
+    expect(testerCalls[1].config.tools).not.toContain("write");
+    expect(testerCalls[1].config.tools).not.toContain("edit");
+    expect(await readFile(path.join(cwd, "tests", "index.test.ts"), "utf8")).toContain("value");
+  }, 20_000);
+
+  it("resolves a Tester Planner handoff once and reruns the automated subset", async () => {
+    const initialPlan = json({
+      ...JSON.parse(plan),
+      acceptanceCriteria: ["check passes", "README is updated"],
+      automatedAcceptanceCriteria: [0, 1]
+    });
+    const revisedPlan = json({
+      ...JSON.parse(initialPlan),
+      automatedAcceptanceCriteria: [0]
+    });
+    const blockedTester = json({
+      ...JSON.parse(tester),
+      acceptanceCoverage: [
+        ...JSON.parse(tester).acceptanceCoverage,
+        {
+          criterionIndex: 1,
+          criterion: "README is updated",
+          status: "not_covered",
+          tests: [],
+          preImplementationResult: "not_run",
+          evidence: "Documentation-only outcome"
+        }
+      ],
+      unresolvedIssues: ["Criterion 2 is not automated"],
+      blocker: {
+        kind: "role_handoff",
+        reason: "Criterion 2 is documentation-only",
+        requestedRole: "planner",
+        requestedCapability: "Reclassify criterion 2 as non-automated",
+        question: "Remove criterion 2 from automatedAcceptanceCriteria",
+        evidence: [{ path: "README.md", detail: "The criterion only requires documentation content" }]
+      }
+    });
+    const { engine, agent } = await scenario(
+      [explorer, initialPlan, approved, blockedTester, revisedPlan, approved, tester, builder, approved, documenter, approved],
+      [true, false, true, true]
+    );
+
+    expect(engine.getState()?.status, engine.getState()?.message).toBe("completed");
+    expect(agent.calls.filter(call => call.name === "planner")).toHaveLength(2);
+    const testerCalls = agent.calls.filter(call => call.name === "tester");
+    expect(testerCalls).toHaveLength(2);
+    expect(JSON.parse(testerCalls[1].task).task.acceptanceCriteria).toEqual([{ index: 0, text: "check passes" }]);
   });
 
   it("does not rerun Builder after malformed output", async () => {
@@ -2183,9 +2590,20 @@ describe("Orchestrator", () => {
 
   it("does not report completion when the authoritative store cannot flush", async () => {
     class FailingFlushStore extends RunStore {
-      override async flush(): Promise<void> { throw new Error("disk flush failed"); }
+      private failCompletedFlush = false;
+      override saveState(state: WorkflowState): Promise<void> {
+        if (state.status === "completed") this.failCompletedFlush = true;
+        return super.saveState(state);
+      }
+      override async flush(): Promise<void> {
+        await super.flush();
+        if (this.failCompletedFlush) {
+          this.failCompletedFlush = false;
+          throw new Error("disk flush failed");
+        }
+      }
     }
-    const { engine, notifications } = await scenario(
+    const { engine, notifications, sendMessage } = await scenario(
       [explorer, plan, approved, tester, builder, approved, documenter, approved],
       [true, false, true, true],
       undefined,
@@ -2193,6 +2611,7 @@ describe("Orchestrator", () => {
     );
     expect(engine.getState()?.status).toBe("failed");
     expect(notifications.mock.calls.some(call => String(call[0]).includes("workflow completed"))).toBe(false);
+    expect(sendMessage.mock.calls.some(call => String(call[0]?.content).startsWith("## Workflow completed"))).toBe(false);
   });
 
   it("human approves plan when planApproval is enabled", async () => {
@@ -2220,7 +2639,7 @@ describe("Orchestrator", () => {
     await engine.start({ route: "implementation", request: "request" }, ctx);
     expect(engine.getState()?.status).toBe("completed");
     expect(agent.calls.filter(c => c.name === "reviewer")).toHaveLength(2); // code + lessons review only, not plan
-    expect(editor).toHaveBeenCalledOnce();
+    expect(editor).not.toHaveBeenCalled();
     expect(select).toHaveBeenCalledTimes(2); // plan approval + memory approval
   });
 
@@ -2494,16 +2913,18 @@ describe("Orchestrator", () => {
     const agent = new QueueAgent([explorer, plan, approved, tester, builder, approved, documenter, approved]);
     const checkRunner = vi.fn(async () => [check(true)]) as unknown as CheckRunner;
     const pi = { appendEntry: vi.fn(), exec: vi.fn() } as unknown as ExtensionAPI;
-    const confirm = vi.fn(async () => true);
+    const select = vi.fn()
+      .mockResolvedValueOnce("Enter mutation phase")
+      .mockResolvedValueOnce("Defer all");
     const ctx = {
       cwd,
       hasUI: true,
-      ui: { select: vi.fn(async () => "Approve suggested checks"), editor: vi.fn(), input: vi.fn(), confirm, notify: vi.fn(), setStatus: vi.fn(), setWidget: vi.fn() }
+      ui: { select, editor: vi.fn(), input: vi.fn(), confirm: vi.fn(), notify: vi.fn(), setStatus: vi.fn(), setWidget: vi.fn() }
     } as unknown as ExtensionCommandContext;
     const engine = new Orchestrator(pi, path.resolve("."), { agentExecutor: agent, checkRunner, enforceWorkspacePolicy: false });
     await engine.start({ route: "implementation", request: "request" }, ctx);
     expect(engine.getState()?.status).toBe("completed");
-    expect(confirm).toHaveBeenCalled(); // at least the builder confirmation
+    expect(select).toHaveBeenCalled();
     expect(agent.calls.filter(c => c.name === "builder")).toHaveLength(1);
   });
 
@@ -2518,16 +2939,18 @@ describe("Orchestrator", () => {
 
     const resumedAgent = new QueueAgent([tester, builder, approved, documenter, approved]);
     const checkQueue = [[check(false)], [check(true)], [check(true)]];
-    const confirm = vi.fn(async () => true);
+    const select = vi.fn()
+      .mockResolvedValueOnce("Enter mutation phase")
+      .mockResolvedValueOnce("Defer all");
     const pi = { appendEntry: vi.fn(), exec: vi.fn(), sendMessage: vi.fn() } as unknown as ExtensionAPI;
     const ctx = {
       cwd: initial.cwd,
       hasUI: true,
       ui: {
-        select: vi.fn(),
+        select,
         editor: vi.fn(),
         input: vi.fn(),
-        confirm,
+        confirm: vi.fn(),
         notify: vi.fn(),
         setStatus: vi.fn(),
         setWidget: vi.fn()
@@ -2542,7 +2965,7 @@ describe("Orchestrator", () => {
     await resumed.resume(paused.runId, ctx);
 
     expect(resumed.getState()?.status).toBe("completed");
-    expect(confirm).toHaveBeenCalledOnce();
+    expect(select).toHaveBeenCalled();
     expect(resumedAgent.calls.map(call => call.name)).toEqual(["tester", "builder", "reviewer", "documenter", "reviewer"]);
   });
 
@@ -2561,11 +2984,11 @@ describe("Orchestrator", () => {
     const agent = new QueueAgent([explorer, plan, approved]);
     const checkRunner = vi.fn(async () => [check(true)]) as unknown as CheckRunner;
     const pi = { appendEntry: vi.fn(), exec: vi.fn() } as unknown as ExtensionAPI;
-    const confirm = vi.fn(async () => false);
+    const select = vi.fn(async () => "Cancel workflow");
     const ctx = {
       cwd,
       hasUI: true,
-      ui: { select: vi.fn(async () => "Approve suggested checks"), editor: vi.fn(), input: vi.fn(), confirm, notify: vi.fn(), setStatus: vi.fn(), setWidget: vi.fn() }
+      ui: { select, editor: vi.fn(), input: vi.fn(), confirm: vi.fn(), notify: vi.fn(), setStatus: vi.fn(), setWidget: vi.fn() }
     } as unknown as ExtensionCommandContext;
     const engine = new Orchestrator(pi, path.resolve("."), { agentExecutor: agent, checkRunner, enforceWorkspacePolicy: false });
     await engine.start({ route: "implementation", request: "request" }, ctx);

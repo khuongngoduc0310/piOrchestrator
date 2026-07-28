@@ -1,0 +1,12 @@
+{
+  "name": "pocket-ledger",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "node --test test/ledger.js"
+  },
+  "engines": {
+    "node": ">=22.19.0"
+  }
+}

@@ -7,6 +7,7 @@ const plan: PlannerOutput = {
   summary: "change component",
   assumptions: [],
   acceptanceCriteria: ["A sixth card is displayed"],
+  automatedAcceptanceCriteria: [0],
   tasks: [{
     id: "change",
     description: "change component and unit test",

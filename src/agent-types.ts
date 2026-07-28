@@ -9,6 +9,9 @@ export const AGENT_NAMES = [
 ] as const;
 export type AgentName = (typeof AGENT_NAMES)[number];
 
+export const SUPPORTED_HANDOFF_ROLES = ["debugger", "explorer", "planner"] as const;
+export type SupportedHandoffRole = (typeof SUPPORTED_HANDOFF_ROLES)[number];
+
 export const THINKING_LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh", "max"] as const;
 export type ThinkingLevel = (typeof THINKING_LEVELS)[number];
 

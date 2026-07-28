@@ -93,7 +93,12 @@ export class OrchestratorRuntime {
     const elapsedMs = Date.now() - new Date(this.state.startedAt).getTime();
     const maxAttempts = Math.max(1, (this.config?.limits.implementationRetries ?? 0) + 1);
     const model = buildRunViewModel(this.state, this.getConfigSummary(), this.state.cwd, elapsedMs, maxAttempts);
-    if (model.run) model.run.transcriptRevision = this.transcriptRevision;
+    if (model.run) {
+      model.run.transcriptRevision = this.transcriptRevision;
+      if (model.run.pendingDecision) {
+        model.run.pendingDecision.dashboardAvailable = this.dashboard.hasDecision(model.run.pendingDecision.id);
+      }
+    }
     return model;
   }
 

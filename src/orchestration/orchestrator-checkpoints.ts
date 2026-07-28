@@ -6,6 +6,13 @@ import { persist } from "./orchestrator-state.js";
 import { createWorkspaceSnapshot, canonicalSha256, workspaceSnapshotDigest, type WorkspaceSnapshot } from "../workspace/workspace-guard.js";
 import { workspaceExclusions } from "./orchestrator-workspace.js";
 
+export class CheckpointPostCommitError extends Error {
+  constructor(readonly checkpoint: WorkflowCheckpoint, cause: unknown) {
+    super("Checkpoint was committed but its state publication failed", { cause });
+    this.name = "CheckpointPostCommitError";
+  }
+}
+
 export async function saveWorkflowCheckpoint(
   runtime: OrchestratorRuntime,
   workflow: WorkflowContext,
@@ -42,14 +49,18 @@ export async function saveWorkflowCheckpoint(
     cursor: { kind, continuation } as WorkflowCheckpoint["cursor"],
     bindings
   });
-  const state = runtime.requireState();
-  state.latestCheckpoint = {
-    number: checkpoint.checkpointNumber,
-    cursor: kind,
-    createdAt: checkpoint.createdAt
-  };
-  await workflow.store.event("checkpoint", state.latestCheckpoint);
-  await persist(runtime, workflow.ctx);
+  try {
+    const state = runtime.requireState();
+    state.latestCheckpoint = {
+      number: checkpoint.checkpointNumber,
+      cursor: kind,
+      createdAt: checkpoint.createdAt
+    };
+    await workflow.store.event("checkpoint", state.latestCheckpoint);
+    await persist(runtime, workflow.ctx);
+  } catch (error) {
+    throw new CheckpointPostCommitError(checkpoint, error);
+  }
   return checkpoint;
 }
 

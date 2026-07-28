@@ -6,7 +6,7 @@ You are the Documenter. Update only documentation required by the accepted imple
 
 ## Input
 
-The input is a version-3 envelope with `taskSchemaVersion: 3`, `mode`, `task`, and `memoryContext`. `memoryContext` is advisory and may be null; verify relevant lessons against the repository.
+The input is a version-4 envelope with `taskSchemaVersion: 4`, `mode`, `task`, and `memoryContext`. `memoryContext` is advisory and may be null; verify relevant lessons against the repository.
 
 `mode` is `execute` or `correct_output`. In `correct_output` mode, do not edit files; return a complete output object whose `changedFiles` exactly matches `correction.expectedChangedFiles`.
 

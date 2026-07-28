@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useRef, useState } from "react";
 import { getArtifact } from "../api.js";
 import type { OrchestratorViewModel } from "../../dashboard-types.js";
+import { MarkdownPreview } from "./MarkdownPreview.js";
 
 interface ArtifactViewerProps {
   snapshot: OrchestratorViewModel | null;
@@ -63,6 +64,10 @@ export function ArtifactViewer({
       )}
     </>
   );
+}
+
+function isMarkdownName(name: string): boolean {
+  return name.endsWith(".md") || name.endsWith(".markdown");
 }
 
 function addUnique(
@@ -157,16 +162,24 @@ function ArtifactContent({
           ? `Size: ${data.size} bytes${data.truncated ? " (truncated)" : ""}`
           : ""}
       </div>
-      <pre
-        id="artifact-content"
-        style={{ whiteSpace: wrapped ? "pre-wrap" : "pre" }}
-      >
-        {error
-          ? "(error loading artifact)"
-          : data
-            ? data.text
-            : "Loading…"}
-      </pre>
+      {isMarkdownName(name) && data
+        ? (
+          <div id="artifact-content" className="decision-plan">
+            <MarkdownPreview markdown={data.text} />
+          </div>
+        )
+        : (
+          <pre
+            id="artifact-content"
+            style={{ whiteSpace: wrapped ? "pre-wrap" : "pre" }}
+          >
+            {error
+              ? "(error loading artifact)"
+              : data
+                ? data.text
+                : "Loading…"}
+          </pre>
+        )}
     </div>
   );
 }

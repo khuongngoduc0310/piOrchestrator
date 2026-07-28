@@ -1,7 +1,8 @@
 import type { AgentInvocationMode, AgentName, AgentUsage } from "./agent-types.js";
 import type { WorkflowRoute } from "./agent-task-types.js";
-import type { Stage, StepRecord, WorkflowState } from "./workflow-types.js";
+import type { Stage, StepRecord, WorkflowMilestone, WorkflowState } from "./workflow-types.js";
 import type { InvocationFileDiff } from "./workspace/git-tree-diff.js";
+import type { HumanDecisionAction } from "./orchestration/human-decision-types.js";
 
 export const UI_PHASE_LABELS = [
   "Setup / preflight",
@@ -15,11 +16,31 @@ export const UI_PHASE_LABELS = [
 ] as const;
 export type UiPhase = (typeof UI_PHASE_LABELS)[number];
 
+export interface DashboardDecisionAction {
+  value: HumanDecisionAction;
+  label: string;
+  requiresFeedback: boolean;
+}
+
+export interface DashboardDecisionPresentation {
+  format: "markdown";
+  content: string;
+  actions: readonly DashboardDecisionAction[];
+}
+
 export interface ConfigSummary {
   status: "missing" | "valid" | "invalid";
   agentCount: number;
   checkCount: number;
   message?: string;
+}
+
+export interface PendingDecisionInfo {
+  id: string;
+  kind: string;
+  label: string;
+  requestedAt: string;
+  dashboardAvailable: boolean;
 }
 
 export interface RunSummary {
@@ -47,6 +68,7 @@ export interface RunSummary {
   dashboardUrl?: string;
   extensionVersion?: string;
   transcriptRevision?: number;
+  pendingDecision?: PendingDecisionInfo;
   checkpoint?: { number: number; cursor: string; createdAt: string };
   resumeCommand?: string;
   resumeCount?: number;
@@ -62,6 +84,8 @@ export interface AgentSummary {
   invocationCount?: number;
 }
 
+export type TimelineStepSummary = Omit<StepRecord, "invocations">;
+
 export interface OrchestratorViewModel {
   mode: "idle" | "running" | "paused" | "completed" | "failed" | "cancelled" | "config_error" | "waiting";
   cwd: string;
@@ -69,6 +93,8 @@ export interface OrchestratorViewModel {
   run?: RunSummary;
   agents: AgentSummary[];
   recentSteps: StepRecord[];
+  timelineSteps?: TimelineStepSummary[];
+  milestones?: WorkflowMilestone[];
   commands: string[];
 }
 

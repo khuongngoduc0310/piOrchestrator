@@ -1,5 +1,6 @@
 import { ensureChecksConfigured } from "../checks/check-setup.js";
 import { formatApprovedPlan, formatBaselineReport } from "../ui/session-messages.js";
+import { formatPlanForReview } from "./plan-review.js";
 import { parseBuilderOutput, parseDebuggerOutput, parseExplorerOutput, parsePlannerOutput, parseReviewOutput } from "../validation.js";
 import type { CheckResult, DebuggerOutput, HumanPlanReviewResult, OrchestratorConfig, PlannerOutput } from "../types.js";
 import type { ImplementationPlanningResult, PlanningResult, WorkflowContext } from "./orchestrator-context.js";
@@ -7,12 +8,12 @@ import type { OrchestratorRuntime } from "./orchestrator-runtime.js";
 import { allGreen } from "./orchestrator-helpers.js";
 import { runAgentStep } from "./orchestrator-agent-step.js";
 import { runCheckStep } from "./orchestrator-workspace.js";
-import { promptHumanPlanReview, runDurableHumanGate } from "./orchestrator-human-gates.js";
-import { persist, publishSessionMessage, transition } from "./orchestrator-state.js";
+import { decisionAction, promptHumanPlanReview, runDurableHumanGate } from "./orchestrator-human-gates.js";
+import { persist, publishMilestone, publishSessionMessage, recordMarkdownMilestone, transition } from "./orchestrator-state.js";
 import { WorkflowCancelledError } from "./workflow-errors.js";
 import { createWorktree } from "../workspace/worktree.js";
-import { saveWorkflowCheckpoint } from "./orchestrator-checkpoints.js";
-import { deriveMutationPathScope } from "../workspace/workspace-guard.js";
+import { CheckpointPostCommitError, saveWorkflowCheckpoint } from "./orchestrator-checkpoints.js";
+import { canonicalSha256, deriveMutationPathScope } from "../workspace/workspace-guard.js";
 import { assertBuilderComplete } from "./mutation-completion.js";
 import { requiredAgentsForRoute } from "./route-preflight.js";
 import { resolveParticipationPolicy, requiresHumanDecision } from "./participation-policy.js";
@@ -61,15 +62,25 @@ export async function continuePlanningDecision(
         { point: "plan_decision", reviewIndex },
         { exploration, plan },
         async (signal) => {
-          const decision = await promptHumanPlanReview(runtime, plan, label, ctx);
+          const decision = await promptHumanPlanReview(runtime, plan, label, ctx, signal);
           if (!decision) return undefined;
+          if (decision.cancelled) return { action: "cancel" as const };
           if (decision.approved) return { action: "approve" as const };
           return { action: "revise" as const, feedback: decision.feedback };
         },
         (result) => ({
           approved: result.action === "approve",
           feedback: result.feedback
-        })
+        }),
+        {
+          format: "markdown",
+          content: formatPlanForReview(plan),
+          actions: [
+            decisionAction("approve", "Approve plan"),
+            decisionAction("revise", "Request changes", true),
+            decisionAction("cancel", "Cancel workflow"),
+          ],
+        }
       );
       recordedDecision = undefined;
       if (humanDecision.approved) {
@@ -121,9 +132,19 @@ export async function continuePlanningDecision(
   if (!planApproved) throw new Error("Plan was not approved within the revision limit");
   if (plan.route === "tests_only" || plan.route === "documentation_only") deriveMutationPathScope(plan);
   await store.saveJson("plan.json", plan);
-  publishSessionMessage(runtime, formatApprovedPlan(plan), { kind: "plan_approved" });
+  const planMilestoneId = `plan-approved:${canonicalSha256(plan)}`;
+  const planMilestoneExisted = runtime.requireState().milestones?.some(entry => entry.id === planMilestoneId) === true;
+  const planMilestone = recordMarkdownMilestone(runtime, planMilestoneId, "plan_approved", formatApprovedPlan(plan));
   const result = { exploration, plan };
-  await saveWorkflowCheckpoint(runtime, workflow, "plan_approved", result, { exploration, plan });
+  try {
+    await saveWorkflowCheckpoint(runtime, workflow, "plan_approved", result, { exploration, plan });
+  } catch (error) {
+    if (!(error instanceof CheckpointPostCommitError) && !planMilestoneExisted) {
+      runtime.requireState().milestones = runtime.requireState().milestones?.filter(entry => entry.id !== planMilestoneId);
+    }
+    throw error;
+  }
+  if (!planMilestoneExisted) publishMilestone(runtime, planMilestone);
   return result;
 }
 
@@ -235,14 +256,24 @@ export async function continueBaselineRepair(
       baselineChecks: failedBaseline,
       diagnosis: baselineDiagnosis
     },
-    async () => {
-      const decision = await promptHumanPlanReview(runtime, baselineFixPlan, "Review baseline repair plan", ctx);
+    async signal => {
+      const decision = await promptHumanPlanReview(runtime, baselineFixPlan, "Review baseline repair plan", ctx, signal);
       if (!decision) return undefined;
+      if (decision.cancelled) return { action: "cancel" as const };
       return decision.approved
         ? { action: "approve" as const }
         : { action: "revise" as const, feedback: decision.feedback };
     },
-    result => ({ approved: result.action === "approve", feedback: result.feedback })
+    result => ({ approved: result.action === "approve", feedback: result.feedback }),
+    {
+      format: "markdown",
+      content: formatPlanForReview(baselineFixPlan),
+      actions: [
+        decisionAction("approve", "Approve repair plan"),
+        decisionAction("revise", "Request changes", true),
+        decisionAction("cancel", "Cancel workflow"),
+      ],
+    }
   );
   if (!fixDecision.approved) throw new WorkflowCancelledError("Baseline repair was not approved", "human_gate");
   await enterMutationPhase(runtime, workflow, {
@@ -313,12 +344,24 @@ export async function enterMutationPhase(
       "Mutation phase confirmation",
       decisionContext.resume,
       decisionContext.bindings,
-      async signal => await ctx.ui.confirm(
-        "Enter the mutation phase?",
-        "Tester, Builder, Documenter, and project checks may modify files. Continue?",
-        { signal }
-      ) ? { action: "proceed" as const } : { action: "cancel" as const },
-      () => true
+      async signal => {
+        const answer = await ctx.ui.select(
+          "Enter the mutation phase? Tester, Builder, Documenter, and project checks may modify authorized files.",
+          ["Enter mutation phase", "Cancel workflow"],
+          { signal },
+        );
+        if (!answer) return undefined;
+        return { action: answer === "Enter mutation phase" ? "proceed" as const : "cancel" as const };
+      },
+      () => true,
+      {
+        format: "markdown",
+        content: `## Mutation phase confirmation\n\nThe approved plan is ready to enter the mutation phase. Tester, Builder, Documenter, and project checks may modify authorized files.\n\n### Approved plan\n\n${decisionContext.bindings.plan ? formatPlanForReview(decisionContext.bindings.plan) : "The approved plan is stored in the run artifacts."}`,
+        actions: [
+          decisionAction("proceed", "Enter mutation phase"),
+          decisionAction("cancel", "Cancel workflow"),
+        ],
+      }
     );
     if (!proceed) throw new WorkflowCancelledError("Workflow cancelled before mutation", "human_gate");
   }

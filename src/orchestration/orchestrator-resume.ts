@@ -41,6 +41,7 @@ import type { HumanDecisionAction, PendingHumanDecision, RecordedHumanDecision }
 import { continueScopeRevisionDecision, type ScopeRevisionDecisionContext } from "./orchestrator-scope-revision.js";
 import { validateFailureScopeRevision } from "./plan-revision.js";
 import { requiredAgentsForResume, requiredAgentsForRoute } from "./route-preflight.js";
+import { automatedCriteria } from "./acceptance-criteria.js";
 import { resolveParticipationPolicy, requiresHumanDecision } from "./participation-policy.js";
 
 const MAX_STATE_BYTES = 16 * 1024 * 1024;
@@ -271,7 +272,7 @@ function validateContinuation(checkpoint: WorkflowCheckpoint): void {
     case "tester_completed": {
       const item = objectValue(value, "tester checkpoint");
       const planning = implementationPlanningResult(item.planning);
-      assertTesterComplete(validateTesterOutput(item.tester, planning.plan.acceptanceCriteria), planning.plan.route);
+      assertTesterComplete(validateTesterOutput(item.tester, automatedCriteria(planning.plan)), planning.plan.route);
       if (item.diagnosis !== undefined) validateDebuggerOutput(item.diagnosis);
       return;
     }
@@ -289,7 +290,7 @@ function validateContinuation(checkpoint: WorkflowCheckpoint): void {
       if (item.tester === undefined) {
         if (planning.plan.route !== "quick_implementation") throw new Error("Builder checkpoint is missing Tester output");
       } else {
-        validateTesterOutput(item.tester, planning.plan.acceptanceCriteria);
+        validateTesterOutput(item.tester, automatedCriteria(planning.plan));
       }
       validateCheckResults(item.checksAfterTests);
       if (item.previousChecks !== undefined) validateCheckResults(item.previousChecks);
@@ -305,7 +306,7 @@ function validateContinuation(checkpoint: WorkflowCheckpoint): void {
         if (item.tester === undefined) {
           if (planning.plan.route !== "quick_implementation") throw new Error("Scope revision checkpoint is missing Tester output");
         } else {
-          validateTesterOutput(item.tester, planning.plan.acceptanceCriteria);
+          validateTesterOutput(item.tester, automatedCriteria(planning.plan));
         }
         validateCheckResults(item.checksAfterTests);
         if (item.previousChecks !== undefined) validateCheckResults(item.previousChecks);
@@ -413,7 +414,7 @@ function validateBindings(checkpoint: WorkflowCheckpoint): void {
   if (bindings.baselineChecks) validateCheckResults(bindings.baselineChecks, "checkpoint.bindings.baselineChecks");
   if (bindings.tester) {
     if (!bindings.plan) throw new Error("Checkpoint Tester output has no plan");
-    validateTesterOutput(bindings.tester, bindings.plan.acceptanceCriteria, "checkpoint.bindings.tester");
+    validateTesterOutput(bindings.tester, automatedCriteria(bindings.plan), "checkpoint.bindings.tester");
   }
   bindings.builderOutputs?.forEach((value, index) => validateBuilderOutput(value, `checkpoint.bindings.builderOutputs[${index}]`));
   if (bindings.implementationChecks) validateCheckResults(bindings.implementationChecks, "checkpoint.bindings.implementationChecks");
@@ -467,7 +468,7 @@ async function continueFromCheckpoint(runtime: OrchestratorRuntime, workflow: Wo
     case "tester_completed": {
       const value = objectValue(continuation, "tester checkpoint");
       const planning = implementationPlanningResult(value.planning);
-      const tester = validateTesterOutput(value.tester, planning.plan.acceptanceCriteria);
+      const tester = validateTesterOutput(value.tester, automatedCriteria(planning.plan));
       const diagnosis = value.diagnosis === undefined ? undefined : validateDebuggerOutput(value.diagnosis);
       const implementation = await runImplementationPhase(runtime, workflow, planning, { point: "tester_completed", tester, diagnosis }, {
         initialDiagnosis: diagnosis
@@ -490,7 +491,7 @@ async function continueFromCheckpoint(runtime: OrchestratorRuntime, workflow: Wo
         return;
       }
       const planning = implementationPlanningResult(value.planning);
-      const tester = value.tester === undefined ? undefined : validateTesterOutput(value.tester, planning.plan.acceptanceCriteria);
+      const tester = value.tester === undefined ? undefined : validateTesterOutput(value.tester, automatedCriteria(planning.plan));
       const implementationContinuation: ImplementationContinuation = {
         point: "builder_completed",
         tester,
@@ -512,7 +513,7 @@ async function continueFromCheckpoint(runtime: OrchestratorRuntime, workflow: Wo
       let review;
       if (value.mode === "implementation") {
         const planning = implementationPlanningResult(value.planning);
-        const tester = value.tester === undefined ? undefined : validateTesterOutput(value.tester, planning.plan.acceptanceCriteria);
+        const tester = value.tester === undefined ? undefined : validateTesterOutput(value.tester, automatedCriteria(planning.plan));
         const implementation = await runImplementationPhase(runtime, workflow, planning, {
           point: "scope_revision_approved",
           tester,
@@ -955,7 +956,7 @@ async function continueHumanDecision(
       }
       const context = objectValue(decisionContext, "repair budget decision context");
       const checksAfterTests = validateCheckResults(context.checksAfterTests);
-      const validatedTester = tester === undefined ? undefined : validateTesterOutput(tester, plan.acceptanceCriteria);
+      const validatedTester = tester === undefined ? undefined : validateTesterOutput(tester, automatedCriteria(plan));
       const failedChecks = validateCheckResults(implementationChecks);
       const validatedDiagnosis = validateDebuggerOutput(diagnosis);
       const planning: ImplementationPlanningResult = {
@@ -1103,7 +1104,7 @@ function implementationResultFromDecisionBindings(checkpoint: WorkflowCheckpoint
     plan: validatePlannerOutput(plan),
     baseline: validateCheckResults(baselineChecks),
     scopeRevisionCount,
-    tester: tester ? validateTesterOutput(tester, plan.acceptanceCriteria) : undefined,
+    tester: tester ? validateTesterOutput(tester, automatedCriteria(plan)) : undefined,
     finalImplChecks: validateCheckResults(implementationChecks),
     diagnosis: diagnosis ? validateDebuggerOutput(diagnosis) : undefined
   };
@@ -1131,7 +1132,7 @@ function scopeRevisionDecisionContext(
   };
   let after: ScopeRevisionDecisionContext["after"];
   if (mode === "implementation") {
-    const tester = afterValue.tester === undefined ? undefined : validateTesterOutput(afterValue.tester, planning.plan.acceptanceCriteria);
+    const tester = afterValue.tester === undefined ? undefined : validateTesterOutput(afterValue.tester, automatedCriteria(planning.plan));
     after = {
       mode,
       tester,
@@ -1345,7 +1346,7 @@ function recordedHumanDecision(value: unknown, requestId: string): RecordedHuman
   const decidedAt = stringValue(item.decidedAt, "recorded human decision decidedAt");
   if (!Number.isFinite(Date.parse(decidedAt))) throw new Error("Recorded human decision decidedAt is invalid");
   const source = item.source;
-  if (source !== "tui" && source !== "rpc") throw new Error("Recorded human decision source is invalid");
+  if (source !== "tui" && source !== "rpc" && source !== "dashboard") throw new Error("Recorded human decision source is invalid");
   return {
     schemaVersion: 1,
     requestId,
@@ -1379,7 +1380,7 @@ function implementationResult(value: unknown): ImplementationResult {
   if (item.tester === undefined) {
     if (planning.plan.route !== "quick_implementation") throw new Error("Implementation checkpoint is missing Tester output");
   } else {
-    tester = validateTesterOutput(item.tester, planning.plan.acceptanceCriteria);
+    tester = validateTesterOutput(item.tester, automatedCriteria(planning.plan));
   }
   return {
     ...planning,
@@ -1418,7 +1419,7 @@ function specializedMutationResult(value: unknown): SpecializedMutationResult {
   const item = objectValue(value, "specialized mutation continuation");
   const planning = implementationPlanningResult(item);
   if (planning.plan.route === "tests_only") {
-    const tester = validateTesterOutput(item.tester, planning.plan.acceptanceCriteria);
+    const tester = validateTesterOutput(item.tester, automatedCriteria(planning.plan));
     assertTesterComplete(tester, "tests_only");
     return { ...planning, route: "tests_only", tester };
   }

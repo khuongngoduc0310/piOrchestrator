@@ -41,6 +41,7 @@ export interface HumanGateState {
 export interface HumanPlanReviewResult {
   approved: boolean;
   feedback?: string;
+  cancelled?: boolean;
 }
 
 export interface StepRecord {
@@ -59,6 +60,16 @@ export interface StepRecord {
   mutationArtifact?: string;
   message?: string;
   invocations?: AgentInvocationRecord[];
+}
+
+export interface WorkflowMilestone {
+  id: string;
+  sequence: number;
+  kind: string;
+  title: string;
+  details: string;
+  occurredAt: string;
+  decisionId?: string;
 }
 
 export interface WorkflowState {
@@ -102,6 +113,7 @@ export interface WorkflowState {
   toolStatus?: "ok" | "error" | "retrying";
   agents: Record<AgentName, AgentStatus>;
   steps: StepRecord[];
+  milestones?: WorkflowMilestone[];
 }
 
 export interface CheckResult {

@@ -29,6 +29,7 @@ const samplePlan: PlannerOutput = {
   summary: "Add pause/resume to the simulation",
   assumptions: ["UI element is the only change needed"],
   acceptanceCriteria: ["Pause preserves state"],
+  automatedAcceptanceCriteria: [0],
   tasks: [
     {
       id: "add-ui",
@@ -319,7 +320,7 @@ describe("session-messages", () => {
   });
 
   it("formatCompletedRun includes full summary", () => {
-    const msg = formatCompletedRun(sampleCompletionSummary(), "http://dashboard", "/artifacts", undefined, "1.0.0");
+    const msg = formatCompletedRun(sampleCompletionSummary(), "/artifacts", undefined, "1.0.0");
     expect(msg).toContain("Workflow completed");
     expect(msg).toContain("add feature");
     expect(msg).toContain("src/index.ts");
@@ -327,7 +328,6 @@ describe("session-messages", () => {
     expect(msg).toContain("1/1 checks passed");
     expect(msg).toContain("reviewer_approved");
     expect(msg).toContain("updated");
-    expect(msg).toContain("http://dashboard");
     expect(msg).toContain("Extension version: 1.0.0");
   });
 
@@ -378,7 +378,7 @@ describe("session-messages", () => {
   });
 
   it("formatCompletedRun includes warning", () => {
-    const msg = formatCompletedRun(sampleCompletionSummary(), undefined, undefined, "Something went wrong");
+    const msg = formatCompletedRun(sampleCompletionSummary(), undefined, "Something went wrong");
     expect(msg).toContain("Something went wrong");
     expect(msg).toContain("Warning");
   });

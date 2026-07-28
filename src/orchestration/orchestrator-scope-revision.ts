@@ -3,11 +3,12 @@ import type { ImplementationPlanningResult, ImplementationResult, WorkflowContex
 import type { SerializedLessonPreparation } from "./orchestrator-lessons.js";
 import type { OrchestratorRuntime } from "./orchestrator-runtime.js";
 import { runAgentStep } from "./orchestrator-agent-step.js";
-import { promptHumanPlanReview, runDurableHumanGate } from "./orchestrator-human-gates.js";
+import { decisionAction, promptHumanPlanReview, runDurableHumanGate } from "./orchestrator-human-gates.js";
 import { parsePlannerOutput, parseReviewOutput } from "../validation.js";
 import { filesOutsidePlan, validateFailureScopeRevision } from "./plan-revision.js";
 import { publishSessionMessage } from "./orchestrator-state.js";
 import { formatScopeRevision } from "../ui/session-messages.js";
+import { formatPlanForReview } from "./plan-review.js";
 import { resolveParticipationPolicy, requiresHumanDecision } from "./participation-policy.js";
 
 export type DocumentationScopePhase =
@@ -116,15 +117,25 @@ export async function continueScopeRevisionDecision<T extends ImplementationPlan
           diagnosis: evidence.diagnosis,
           decisionContext: { planning, revised, additions, evidence, scopeRevision, reviewIndex, after } satisfies ScopeRevisionDecisionContext
         },
-        async () => {
+        async signal => {
           const label = after.mode === "finalization" ? "Review documentation scope expansion" : "Review failure scope expansion";
-          const result = await promptHumanPlanReview(runtime, revised, label, workflow.ctx);
+          const result = await promptHumanPlanReview(runtime, revised, label, workflow.ctx, signal);
           if (!result) return undefined;
+          if (result.cancelled) return { action: "cancel" as const };
           return result.approved
             ? { action: "approve" as const }
             : { action: "revise" as const, feedback: result.feedback };
         },
-        result => ({ approved: result.action === "approve", feedback: result.feedback })
+        result => ({ approved: result.action === "approve", feedback: result.feedback }),
+        {
+          format: "markdown",
+          content: formatPlanForReview(revised),
+          actions: [
+            decisionAction("approve", "Approve expanded scope"),
+            decisionAction("revise", "Request changes", true),
+            decisionAction("cancel", "Cancel workflow"),
+          ],
+        }
       );
       recordedDecision = undefined;
       if (decision.approved) {

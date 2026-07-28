@@ -5,6 +5,7 @@ import {
   DEBUGGER_CATEGORIES,
   LESSON_CATEGORIES,
   PRE_IMPLEMENTATION_RESULTS,
+  SUPPORTED_HANDOFF_ROLES,
   WORKFLOW_ROUTES,
   type AcceptanceCoverage,
   type BuilderOutput,
@@ -12,6 +13,7 @@ import {
   type DebuggerOutput,
   type DocumenterOutput,
   type ExplorerOutput,
+  type IndexedAcceptanceCriterion,
   type PlanTask,
   type PlannerOutput,
   type ProposedLesson,
@@ -19,6 +21,7 @@ import {
   type ReviewOutput,
   type TesterOutput
 } from "../types.js";
+import { validateAutomatedCriterionIndexes } from "../orchestration/acceptance-criteria.js";
 import {
   MAX_CANDIDATES_PER_RUN,
   MAX_CANDIDATE_GUIDANCE_BYTES,
@@ -125,10 +128,17 @@ function validateTaskGraph(tasks: PlanTask[], path: string): void {
 
 export function validatePlannerOutput(value: unknown, path = "plan"): PlannerOutput {
   const item = record(value, path);
+  const route = enumValue(item.route, `${path}.route`, WORKFLOW_ROUTES);
   const tasks = array(item.tasks, `${path}.tasks`, planTask);
   validateTaskGraph(tasks, `${path}.tasks`);
   const acceptanceCriteria = strings(item.acceptanceCriteria, `${path}.acceptanceCriteria`);
   if (acceptanceCriteria.length === 0) throw new ValidationError(`${path}.acceptanceCriteria`, "must not be empty");
+  const automatedIndexes = array(
+    item.automatedAcceptanceCriteria,
+    `${path}.automatedAcceptanceCriteria`,
+    (v: unknown, p: string) => integer(v, p)
+  );
+  validateAutomatedCriterionIndexes(route, acceptanceCriteria, automatedIndexes, path);
   for (let index = 0; index < tasks.length; index++) {
     if (tasks[index].files.length === 0 && (tasks[index].testSupportFiles?.length ?? 0) === 0) {
       throw new ValidationError(`${path}.tasks[${index}].files`, "must not be empty unless testSupportFiles is non-empty");
@@ -139,10 +149,11 @@ export function validatePlannerOutput(value: unknown, path = "plan"): PlannerOut
     if (tasks[index].verification.length === 0) throw new ValidationError(`${path}.tasks[${index}].verification`, "must not be empty");
   }
   return {
-    route: enumValue(item.route, `${path}.route`, WORKFLOW_ROUTES),
+    route,
     summary: string(item.summary, `${path}.summary`),
     assumptions: strings(item.assumptions, `${path}.assumptions`),
     acceptanceCriteria,
+    automatedAcceptanceCriteria: automatedIndexes,
     tasks,
     risks: strings(item.risks, `${path}.risks`)
   };
@@ -177,7 +188,7 @@ function mutationBlocker(item: Record<string, unknown>, path: string): BuilderOu
     return { kind: "scope", reason, requiredFiles };
   }
   if (kind === "role_handoff") {
-    const requestedRole = enumValue(blocked.requestedRole, `${path}.blocker.requestedRole`, ["explorer", "planner", "reviewer", "tester", "builder", "debugger", "documenter"] as const);
+    const requestedRole = enumValue(blocked.requestedRole, `${path}.blocker.requestedRole`, SUPPORTED_HANDOFF_ROLES);
     return { kind: "role_handoff", reason, requestedRole, requestedCapability: string(blocked.requestedCapability, `${path}.blocker.requestedCapability`), question: string(blocked.question, `${path}.blocker.question`), evidence: evidenceList(blocked.evidence, `${path}.blocker.evidence`) };
   }
   if (kind === "baseline_repair") {
@@ -230,22 +241,24 @@ function acceptanceCoverage(value: unknown, path: string): AcceptanceCoverage {
   };
 }
 
-export function validateTesterOutput(value: unknown, acceptanceCriteria: readonly string[], path = "tester"): TesterOutput {
+export function validateTesterOutput(value: unknown, expectedCriteria: readonly IndexedAcceptanceCriterion[], path = "tester"): TesterOutput {
   const item = record(value, path);
   const base = mutationBase(item, path);
   const coverage = array(item.acceptanceCoverage, `${path}.acceptanceCoverage`, acceptanceCoverage);
-  if (coverage.length !== acceptanceCriteria.length) {
-    throw new ValidationError(`${path}.acceptanceCoverage`, `must contain exactly ${acceptanceCriteria.length} items`);
+  if (coverage.length !== expectedCriteria.length) {
+    throw new ValidationError(`${path}.acceptanceCoverage`, `must contain exactly ${expectedCriteria.length} items for automated criteria`);
   }
+  const expectedByIndex = new Map(expectedCriteria.map(c => [c.index, c.text]));
   const seen = new Set<number>();
   for (let index = 0; index < coverage.length; index++) {
     const entry = coverage[index];
-    if (entry.criterionIndex >= acceptanceCriteria.length) {
-      throw new ValidationError(`${path}.acceptanceCoverage[${index}].criterionIndex`, "is outside the acceptance criteria range");
+    if (!expectedByIndex.has(entry.criterionIndex)) {
+      throw new ValidationError(`${path}.acceptanceCoverage[${index}].criterionIndex`, "is not in the automated acceptance criteria set");
     }
     if (seen.has(entry.criterionIndex)) throw new ValidationError(`${path}.acceptanceCoverage[${index}].criterionIndex`, "must be unique");
     seen.add(entry.criterionIndex);
-    if (entry.criterion !== acceptanceCriteria[entry.criterionIndex]) {
+    const expectedText = expectedByIndex.get(entry.criterionIndex)!;
+    if (entry.criterion !== expectedText) {
       throw new ValidationError(`${path}.acceptanceCoverage[${index}].criterion`, "must exactly match the indexed acceptance criterion");
     }
   }
@@ -254,6 +267,10 @@ export function validateTesterOutput(value: unknown, acceptanceCriteria: readonl
     testsAdded: strings(item.testsAdded, `${path}.testsAdded`),
     acceptanceCoverage: coverage
   };
+}
+
+export function parseTesterOutput(text: string, expectedCriteria: readonly IndexedAcceptanceCriterion[]): TesterOutput {
+  return validateTesterOutput(parseStructuredJson(text, "tester output"), expectedCriteria);
 }
 
 export function validateDebuggerOutput(value: unknown, path = "debugger"): DebuggerOutput {
@@ -318,9 +335,6 @@ export function validateDocumenterOutput(value: unknown, path = "documenter"): D
 export function parseExplorerOutput(text: string): ExplorerOutput { return validateExplorerOutput(parseStructuredJson(text, "explorer output")); }
 export function parsePlannerOutput(text: string): PlannerOutput { return validatePlannerOutput(parseStructuredJson(text, "planner output")); }
 export function parseReviewOutput(text: string): ReviewOutput { return validateReviewOutput(parseStructuredJson(text, "reviewer output")); }
-export function parseTesterOutput(text: string, acceptanceCriteria: readonly string[]): TesterOutput {
-  return validateTesterOutput(parseStructuredJson(text, "tester output"), acceptanceCriteria);
-}
 export function parseBuilderOutput(text: string): BuilderOutput { return validateBuilderOutput(parseStructuredJson(text, "builder output")); }
 export function parseDebuggerOutput(text: string): DebuggerOutput { return validateDebuggerOutput(parseStructuredJson(text, "debugger output")); }
 export function parseDocumenterOutput(text: string): DocumenterOutput { return validateDocumenterOutput(parseStructuredJson(text, "documenter output")); }

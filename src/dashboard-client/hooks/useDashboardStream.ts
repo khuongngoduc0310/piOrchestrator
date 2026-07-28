@@ -7,6 +7,12 @@ export function useDashboardStream(dispatch: React.Dispatch<DashboardAction>): v
   const reconnectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const lastRunStatusRef = useRef("");
 
+  function handleSnapshot(data: OrchestratorViewModel) {
+    dispatch({ type: "liveSnapshotReceived", snapshot: data });
+    const decision = data.run?.pendingDecision ?? null;
+    dispatch({ type: "pendingDecisionUpdated", decision });
+  }
+
   useEffect(() => {
     let cancelled = false;
 
@@ -14,7 +20,7 @@ export function useDashboardStream(dispatch: React.Dispatch<DashboardAction>): v
       .then((data) => {
         if (cancelled) return;
         if (data) {
-          dispatch({ type: "liveSnapshotReceived", snapshot: data });
+          handleSnapshot(data);
           if (data.run?.id) {
             dispatch({ type: "runSelected", runId: data.run.id });
           }
@@ -40,7 +46,7 @@ export function useDashboardStream(dispatch: React.Dispatch<DashboardAction>): v
         const data = JSON.parse(e.data) as OrchestratorViewModel;
         if (!data) return;
         const key = data.run ? `${data.run.id}:${data.run.runStatus}` : "";
-        dispatch({ type: "liveSnapshotReceived", snapshot: data });
+        handleSnapshot(data);
         if (key && key !== lastRunStatusRef.current) {
           lastRunStatusRef.current = key;
           listRuns().then((runs) => {

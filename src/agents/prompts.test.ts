@@ -15,10 +15,10 @@ async function prompt(name: string): Promise<string> {
 }
 
 describe("role prompt contracts", () => {
-  it("documents the common version-3 envelope in every prompt", async () => {
+  it("documents the common version-4 envelope in every prompt", async () => {
     for (const name of AGENT_NAMES) {
       const text = await prompt(name);
-      expect(text).toContain("taskSchemaVersion: 3");
+      expect(text).toContain("taskSchemaVersion: 4");
       expect(text).toContain("memoryContext");
       expect(text).toContain("repository-relative");
       expect(text).toContain("raw JSON object");
@@ -71,6 +71,16 @@ describe("role prompt contracts", () => {
       expect(text).toContain("return `commands: []`");
       expect(text).not.toMatch(/Run (?:only )?(?:the )?(?:narrowest|relevant).*(?:test command|verification)/i);
     }
+  });
+
+  it("forbids Tester from listing tooling limitations as unresolved issues", async () => {
+    const text = await prompt("tester");
+    expect(text).toContain("Missing production implementation and tests expected to fail against current source are normal test-first results, not blockers");
+    expect(text).toContain("Do not use a blocker because production source still needs Builder implementation");
+    expect(text).toContain("requestedRole` must be exactly `debugger`, `explorer`, or `planner`");
+    expect(text).toContain("Never return `implementer`, `builder`, `tester`, `reviewer`, or `documenter`");
+    expect(text).toContain("never claim a command, exit code, pass count, or command output");
+    expect(text).toContain("return every status as `covered`, `unresolvedIssues: []`, and `blocker: null`");
   });
 
   it("keeps executable code-review verification with the orchestrator", async () => {

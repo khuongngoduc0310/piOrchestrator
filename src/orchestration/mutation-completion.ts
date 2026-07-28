@@ -7,7 +7,10 @@ export function assertMutationComplete(output: MutationOutput, role: "Builder" |
     throw new Error(`${role} blocked (${output.blocker.kind}): ${output.blocker.reason}`);
   }
   if (output.unresolvedIssues.length > 0) {
-    throw new Error(`${role} did not complete the requested work: ${output.unresolvedIssues.join("; ")}`);
+    const help = role === "Tester"
+      ? " Use the structured blocker field instead of unresolvedIssues. Shell unavailability is not a valid unresolved issue — the orchestrator runs checks."
+      : " Use the structured blocker field instead of unresolvedIssues.";
+    throw new Error(`${role} did not complete the requested work: ${output.unresolvedIssues.join("; ")}.${help}`);
   }
 }
 

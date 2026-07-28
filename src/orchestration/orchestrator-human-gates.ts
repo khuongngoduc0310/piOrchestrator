@@ -1,15 +1,14 @@
 import type { ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
-import { formatPlanForReview } from "./plan-review.js";
-import { createPlanReviewComponent, type PlanReviewResult } from "../ui/plan-review-component.js";
+import type { DashboardDecisionAction, DashboardDecisionPresentation } from "../dashboard-types.js";
 import { saveConfig } from "../config/config.js";
 import type { CandidateLesson } from "../memory/memory-types.js";
 import type { CheckpointBindings } from "../persistence/checkpoint-types.js";
 import type { DebuggerOutput, HumanGateState, HumanPlanReviewResult, HumanReviewDecision, OrchestratorConfig, PlannerOutput, ReviewOutput } from "../types.js";
 import type { OrchestratorRuntime } from "./orchestrator-runtime.js";
 import type { ImplementationPlanningResult, WorkflowContext } from "./orchestrator-context.js";
-import { formatCandidateForApproval, raceWithAbort } from "./orchestrator-helpers.js";
+import { formatCandidateForApproval } from "./orchestrator-helpers.js";
 import { requestHumanDecision, type GateInteraction } from "./orchestrator-human-decisions.js";
-import { HumanGateUnavailableError, WorkflowCancelledError } from "./workflow-errors.js";
+import { HumanGateUnavailableError } from "./workflow-errors.js";
 import { resolveParticipationPolicy, requiresHumanDecision } from "./participation-policy.js";
 import { applyParticipationProfile } from "./participation-policy.js";
 import { formatDiagnosisForApproval } from "../ui/session-messages.js";
@@ -60,9 +59,10 @@ export async function runDurableHumanGate<T>(
   resume: import("./human-decision-types.js").HumanDecisionResumePoint,
   bindings: CheckpointBindings,
   prompt: (signal: AbortSignal) => Promise<{ action: import("./human-decision-types.js").HumanDecisionAction; feedback?: string } | undefined | "defer">,
-  parse: (result: Exclude<Awaited<ReturnType<typeof prompt>>, undefined | "defer">) => T
+  parse: (result: Exclude<Awaited<ReturnType<typeof prompt>>, undefined | "defer">) => T,
+  dashboard: DashboardDecisionPresentation,
 ): Promise<T> {
-  const gi: GateInteraction<T> = { label, prompt, parse };
+  const gi: GateInteraction<T> = { label, prompt, parse, dashboard };
   return requestHumanDecision(runtime, workflow, kind as import("./human-decision-types.js").HumanDecisionKind, "mandatory", resume, bindings, gi);
 }
 
@@ -85,62 +85,52 @@ export async function requestBugDiagnosisApproval(
       diagnosis
     },
     async signal => {
-      const viewed = await raceWithAbort(workflow.ctx.ui.editor(
-        "Review the diagnosis before it is used to change the repository",
-        formatDiagnosisForApproval(diagnosis)
-      ), signal);
-      if (viewed === undefined) return undefined;
       const answer = await workflow.ctx.ui.select(
-        "Use this diagnosis for the bug fix?",
+        "Use the diagnosis shown in the session/dashboard for the bug fix?",
         ["Approve diagnosis", "Cancel workflow"],
         { signal }
       );
       if (!answer) return undefined;
       return { action: answer === "Approve diagnosis" ? "approve" as const : "cancel" as const };
     },
-    () => undefined
+    () => undefined,
+    {
+      format: "markdown",
+      content: formatDiagnosisForApproval(diagnosis),
+      actions: [
+        decisionAction("approve", "Approve diagnosis"),
+        decisionAction("cancel", "Cancel workflow"),
+      ],
+    }
   );
 }
 
 export async function promptHumanPlanReview(
   runtime: OrchestratorRuntime,
-  plan: PlannerOutput,
+  _plan: PlannerOutput,
   label: string,
-  ctx: ExtensionCommandContext
+  ctx: ExtensionCommandContext,
+  signal = runtime.requireController().signal,
 ): Promise<HumanPlanReviewResult | undefined> {
   if (!ctx.hasUI) throw new HumanGateUnavailableError(`${label} requires TUI or RPC mode`);
-  const signal = runtime.requireController().signal;
-
-  if (ctx.mode === "tui") {
-    const result = await raceWithAbort(
-      ctx.ui.custom<PlanReviewResult>((tui, theme, _kb, done) =>
-        createPlanReviewComponent(tui, theme, done, plan, label)
-      ),
-      signal
-    );
-    if (!result) return undefined;
-    if (result.action === "cancel") throw new WorkflowCancelledError("Workflow cancelled during plan review", "human_gate");
-    if (result.action === "approve") return { approved: true };
-    const feedback = await raceWithAbort(
-      ctx.ui.input("Describe what changes you need:", "e.g. Add error handling to the login task", { signal }),
-      signal
-    );
-    return feedback === undefined ? undefined : { approved: false, feedback };
-  }
-
-  const title = `${label}\n\nReview the plan below. You can approve, request changes, or cancel.`;
-  const viewed = await raceWithAbort(ctx.ui.editor(title, formatPlanForReview(plan)), signal);
-  if (viewed === undefined) return undefined;
-  const decision = await ctx.ui.select(`${label} — What would you like to do?`, [
+  const decision = await ctx.ui.select(`${label} - review the plan in the session/dashboard`, [
     "Approve plan",
     "Request changes",
     "Cancel workflow"
   ], { signal });
   if (!decision) return undefined;
-  if (decision === "Cancel workflow") throw new WorkflowCancelledError("Workflow cancelled during plan review", "human_gate");
+  if (decision === "Cancel workflow") return { approved: false, cancelled: true };
   if (decision === "Approve plan") return { approved: true };
   const feedback = await ctx.ui.input("Describe what changes you need:", "e.g. Add error handling to the login task", { signal });
   return feedback === undefined ? undefined : { approved: false, feedback };
+}
+
+export function decisionAction(
+  value: DashboardDecisionAction["value"],
+  label: string,
+  requiresFeedback = false,
+): DashboardDecisionAction {
+  return { value, label, requiresFeedback };
 }
 
 export async function promptHumanReviewDecision(
