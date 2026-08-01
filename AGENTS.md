@@ -1,5 +1,10 @@
 # Repository Guide
 
+## Communication
+
+- Keep responses concise: answer directly, avoid preamble and summaries, and match the requested level of detail (one word when possible, more only when the user asks for detail).
+- Report tool actions in one line; don't repeat file content back unless asked.
+
 ## Toolchain
 
 - Use Node.js `>=22.19.0` and npm; `package-lock.json` is the dependency source of truth.
