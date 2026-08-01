@@ -51,6 +51,59 @@ export function buildIdleViewModel(
   };
 }
 
+export interface RequirementsViewModelInput {
+  sessionId: string;
+  cwd: string;
+  goal: string;
+  status: "running" | "waiting" | "completed" | "failed" | "cancelled";
+  round: number;
+  maxRounds: number;
+  waitingFor?: string;
+  pendingDecision?: { id: string; kind: string; label: string; requestedAt: string; dashboardAvailable: boolean };
+  dashboardUrl?: string;
+  message?: string;
+  artifactPath?: string;
+  interviewerStatus: AgentStatus["status"];
+}
+
+/** Mission Control view model for an in-memory requirements-builder session. */
+export function buildRequirementsViewModel(input: RequirementsViewModelInput): OrchestratorViewModel {
+  const agents: AgentSummary[] = AGENT_NAMES.map(name => ({
+    name,
+    model: "",
+    status: name === "interviewer" ? input.interviewerStatus : "idle"
+  }));
+  const runStatus: RunSummary["runStatus"] = input.status === "waiting" ? "paused" : input.status;
+  const stage: Stage = input.status === "waiting" ? "paused" : input.status === "running" ? "exploring" : input.status;
+  const terminal = input.status === "completed" || input.status === "failed" || input.status === "cancelled";
+  const run: RunSummary = {
+    id: input.sessionId,
+    request: input.goal,
+    runStatus,
+    stage,
+    phaseIndex: 0,
+    phaseCount: 1,
+    attempt: input.round,
+    maxAttempts: Math.max(1, input.maxRounds),
+    elapsedMs: 0,
+    artifactPath: input.artifactPath ?? "",
+    message: input.message,
+    waitingFor: input.waitingFor,
+    dashboardUrl: input.dashboardUrl,
+    pendingDecision: input.pendingDecision
+  };
+  return {
+    mode: input.status,
+    cwd: input.cwd,
+    config: { status: "valid", agentCount: AGENT_NAMES.length, checkCount: 0 },
+    run,
+    agents,
+    recentSteps: [],
+    milestones: [],
+    commands: terminal ? [] : ["/orchestrator-cancel"]
+  };
+}
+
 export function buildRunViewModel(
   state: WorkflowState,
   config: ConfigSummary,

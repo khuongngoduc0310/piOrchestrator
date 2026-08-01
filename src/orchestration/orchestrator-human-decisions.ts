@@ -11,7 +11,7 @@ import type {
   RecordedHumanDecision
 } from "./human-decision-types.js";
 import type { DashboardDecisionPresentation } from "../dashboard-types.js";
-import type { DashboardDecisionSubmission } from "../ui/dashboard.js";
+import { beginDecisionRace, type RaceWinner } from "../ui/decision-race.js";
 import { HumanGateUnavailableError, WorkflowCancelledError, WorkflowPausedError, GateInteractionError, WorkflowTerminationError } from "./workflow-errors.js";
 
 let decisionCounter = 0;
@@ -58,9 +58,6 @@ export async function requestHumanDecision<T>(
     const reason = workflowSignal.reason;
     throw reason instanceof WorkflowCancelledError ? reason : new WorkflowCancelledError("Workflow cancelled", "command");
   }
-  const gateController = new AbortController();
-  const cancelGate = (): void => gateController.abort(workflowSignal.reason);
-  workflowSignal.addEventListener("abort", cancelGate, { once: true });
   const existing = state.pendingDecision;
   const request = existing?.kind === kind && JSON.stringify(existing.resume) === JSON.stringify(resume)
     ? existing
@@ -81,21 +78,17 @@ export async function requestHumanDecision<T>(
   state.activeAgent = undefined;
 
   // Register before checkpoint publication so every advertised decision is answerable.
-  const hasDashboard = runtime.dashboard.isListening;
-  let dashboardWait: Promise<DashboardDecisionSubmission> | undefined;
-  if (hasDashboard) {
-    try {
-      dashboardWait = runtime.dashboard.registerDecision(
-        id,
-        interaction.dashboard,
-        gateController.signal,
-      );
-    } catch (error) {
-      if (!gateController.signal.aborted) gateController.abort(error);
-      workflowSignal.removeEventListener("abort", cancelGate);
-      throw new GateInteractionError(`${interaction.label} dashboard registration failed: ${messageOf(error)}`, { cause: error });
-    }
-    void dashboardWait.catch(() => undefined);
+  const race = beginDecisionRace<Awaited<ReturnType<GateInteraction<T>["prompt"]>>>({
+    decisionId: id,
+    label: interaction.label,
+    dashboard: runtime.dashboard,
+    presentation: interaction.dashboard,
+    signal: workflowSignal
+  });
+  try {
+    race.register();
+  } catch (error) {
+    throw new GateInteractionError(`${interaction.label} dashboard registration failed: ${messageOf(error)}`, { cause: error });
   }
 
   const milestoneId = `decision:${id}:requested`;
@@ -118,9 +111,7 @@ export async function requestHumanDecision<T>(
       bindings
     );
   } catch (error) {
-    runtime.dashboard.unregisterDecision(id, error);
-    if (!gateController.signal.aborted) gateController.abort(error);
-    workflowSignal.removeEventListener("abort", cancelGate);
+    race.dispose(error);
     if (!(error instanceof CheckpointPostCommitError)) {
       if (!milestoneExisted) state.milestones = state.milestones?.filter(entry => entry.id !== milestoneId);
       state.pendingDecision = undefined;
@@ -134,8 +125,8 @@ export async function requestHumanDecision<T>(
 
   await persist(runtime, ctx);
 
-  if (!dashboardWait && !canPrompt) {
-    workflowSignal.removeEventListener("abort", cancelGate);
+  if (!race.hasDashboardWaiter && !canPrompt) {
+    race.dispose(new Error(`${interaction.label} has no answer channel`));
     if (mode === "mandatory") {
       throw new WorkflowPausedError(id, `${interaction.label} is awaiting human input`);
     }
@@ -147,23 +138,10 @@ export async function requestHumanDecision<T>(
     throw new HumanGateUnavailableError(`${interaction.label} requires TUI, RPC, or dashboard mode`);
   }
 
-  type Winner = {
-    source: "dashboard" | "pi";
-    result: Awaited<ReturnType<GateInteraction<T>["prompt"]>>;
-    acknowledge?: (error?: unknown) => void;
-  };
-  const candidates: Promise<Winner>[] = [];
-  if (dashboardWait) candidates.push(dashboardWait.then(({ acknowledge, ...result }) => ({ source: "dashboard", result, acknowledge })));
-  if (canPrompt) candidates.push(interaction.prompt(gateController.signal).then(result => ({ source: "pi", result })));
-
-  let winner: Winner;
+  let winner: RaceWinner<Awaited<ReturnType<GateInteraction<T>["prompt"]>>>;
   try {
-    winner = await Promise.race(candidates);
+    winner = await race.race(canPrompt, interaction.prompt);
   } catch (error) {
-    if (dashboardWait) void dashboardWait.then(submission => submission.acknowledge(error), () => undefined);
-    runtime.dashboard.unregisterDecision(id, error);
-    if (!gateController.signal.aborted) gateController.abort(error);
-    workflowSignal.removeEventListener("abort", cancelGate);
     if (workflowSignal.aborted) {
       const reason = workflowSignal.reason;
       throw reason instanceof WorkflowCancelledError ? reason : new WorkflowCancelledError("Workflow cancelled", "command", { cause: error });
@@ -177,16 +155,8 @@ export async function requestHumanDecision<T>(
     throw new GateInteractionError(`${interaction.label} interaction failed: ${messageOf(error)}`, { cause: error });
   }
 
-  if (winner.source === "pi") {
-    const reason = new Error("Pi prompt completed first");
-    runtime.dashboard.unregisterDecision(id, reason);
-    if (dashboardWait) void dashboardWait.then(submission => submission.acknowledge(reason), () => undefined);
-  }
-  if (!gateController.signal.aborted) gateController.abort(new Error(`${winner.source} decision completed first`));
-
   const raw = winner.result;
   if (raw === undefined || raw === "defer") {
-    workflowSignal.removeEventListener("abort", cancelGate);
     state.status = "paused";
     state.humanGate = undefined;
     await persist(runtime, ctx).catch(() => undefined);
@@ -243,7 +213,5 @@ export async function requestHumanDecision<T>(
   } catch (error) {
     winner.acknowledge?.(error);
     throw error;
-  } finally {
-    workflowSignal.removeEventListener("abort", cancelGate);
   }
 }

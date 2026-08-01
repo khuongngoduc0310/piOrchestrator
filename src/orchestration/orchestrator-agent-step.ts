@@ -4,6 +4,7 @@ import type { StructuredAgentResponse } from "../ui/agent-session.js";
 import { createHash } from "node:crypto";
 import { AgentCancelledError, AgentIncompleteResponseError, type AgentRunOptions } from "../agents/agent-runner.js";
 import { type SpawnExplorerResult, isSpawningRole } from "../agents/agent-runner-contracts.js";
+import { agentRemainingTimeoutMs, spawnExplorerRunOptions } from "../agents/explorer-spawn.js";
 import { AGENT_TASK_SCHEMA_VERSION, type AgentOutputMap, type AgentResult, type AgentTaskEnvelope, type AgentTaskMap, type AgentInvocationRecord, type AgentName, type AgentTranscript, type AgentTranscriptArtifact, type PlannerOutput, type Stage } from "../types.js";
 import { ValidationError } from "../validation.js";
 import { compareWorkspaceSnapshots, createWorkspaceSnapshot, deriveRoleMutationPaths, validateReportedFileSet } from "../workspace/workspace-guard.js";
@@ -459,23 +460,19 @@ async function runSpawnedExplorer(
   const config = runtime.requireConfig();
   const controller = runtime.requireController();
   const store = runtime.requireStore();
-  const remainingBudget = Math.max(1_000, config.limits.agentTimeoutMs - (Date.now() - parent.parentRunStartedAt));
   const startedAt = runtime.timestamp();
-  const child: AgentRunOptions = {
-    name: "explorer",
-    task: question,
+  const child = spawnExplorerRunOptions({
+    question,
     cwd: parent.cwd,
     extensionRoot: runtime.extensionRoot,
-    config: config.agents.explorer,
-    promptFileOverride: "explorer-spawn.md",
-    timeoutMs: remainingBudget,
+    explorerConfig: config.agents.explorer,
+    timeoutMs: agentRemainingTimeoutMs(config.limits.agentTimeoutMs, parent.parentRunStartedAt),
     signal: controller.signal,
-    allowedWritePaths: [],
     readRoots: [store.runDir],
     onEvent: event => {
       void store.event("agent_event", { stepId: parent.step.id, agent: "explorer", spawned: true, event }).catch(() => undefined);
     }
-  };
+  });
   try {
     const result = await runtime.agents.run(child);
     if (result.transcript) {

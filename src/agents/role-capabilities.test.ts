@@ -17,7 +17,8 @@ describe("role capabilities", () => {
       tester: "tests",
       builder: "plan_files",
       debugger: "none",
-      documenter: "documentation"
+      documenter: "documentation",
+      interviewer: "none"
     });
   });
 

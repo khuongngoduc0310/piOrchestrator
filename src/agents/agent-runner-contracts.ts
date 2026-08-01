@@ -60,7 +60,7 @@ export interface SpawnExplorerResult {
 
 export const SPAWN_EXPLORER_TOOL = "spawn_explorer";
 
-export const SPAWNING_ROLES = ["planner", "reviewer", "debugger"] as const;
+export const SPAWNING_ROLES = ["planner", "reviewer", "debugger", "interviewer"] as const;
 export type SpawningRole = (typeof SPAWNING_ROLES)[number];
 
 export function isSpawningRole(name: AgentName): name is SpawningRole {

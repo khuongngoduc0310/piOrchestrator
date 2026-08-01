@@ -18,14 +18,18 @@ export function isWorkflowRoute(value: unknown): value is WorkflowRoute {
   return typeof value === "string" && (WORKFLOW_ROUTES as readonly string[]).includes(value);
 }
 
+export async function selectWorkflowRoute(ctx: ExtensionCommandContext): Promise<WorkflowRoute | undefined> {
+  const selectedLabel = await ctx.ui.select("Select a workflow route", WORKFLOW_ROUTE_CHOICES.map(choice => choice.label));
+  return WORKFLOW_ROUTE_CHOICES.find(choice => choice.label === selectedLabel)?.route;
+}
+
 export async function collectWorkflowRequest(ctx: ExtensionCommandContext): Promise<WorkflowRequest | undefined> {
   if (!ctx.hasUI) {
     ctx.ui.notify("The orchestrate command requires an interactive UI.", "error");
     return undefined;
   }
 
-  const selectedLabel = await ctx.ui.select("Select a workflow route", WORKFLOW_ROUTE_CHOICES.map(choice => choice.label));
-  const selectedRoute = WORKFLOW_ROUTE_CHOICES.find(choice => choice.label === selectedLabel)?.route;
+  const selectedRoute = await selectWorkflowRoute(ctx);
   if (!selectedRoute) return undefined;
 
   while (true) {

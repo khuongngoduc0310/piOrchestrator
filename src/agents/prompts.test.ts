@@ -131,7 +131,7 @@ describe("role prompt contracts", () => {
   });
 
   it("documents the spawn_explorer sub-agent tool only for context-hungry roles", async () => {
-    for (const name of ["planner", "reviewer", "debugger"]) {
+    for (const name of ["planner", "reviewer", "debugger", "interviewer"]) {
       const text = await prompt(name);
       expect(text).toContain("`spawn_explorer`");
       expect(text).toContain("Use it sparingly");

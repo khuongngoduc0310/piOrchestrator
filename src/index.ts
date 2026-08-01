@@ -11,6 +11,7 @@ import { UiController } from "./ui/ui-controller.js";
 import { AGENT_NAMES, THINKING_LEVELS, type AgentName, type ThinkingLevel } from "./types.js";
 import { handleResumeCommand } from "./commands/resume-command.js";
 import { collectWorkflowRequest, ORCHESTRATE_USAGE } from "./commands/route-selection.js";
+import { runRequirementsCommand } from "./commands/requirements-command.js";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const agents = new Set<AgentName>(AGENT_NAMES);
@@ -52,6 +53,28 @@ export default function piOrchestrator(pi: ExtensionAPI): void {
         if (workflow) observeBackgroundRun(engine.start(workflow, ctx), ctx, "Workflow could not start");
       } catch (error) {
         ctx.ui.notify(messageOf(error), "error");
+      }
+    }
+  });
+
+  pi.registerCommand("requirements", {
+    description: "Interview to gather structured requirements before orchestrating a workflow",
+    handler: async (args: string, ctx: ExtensionCommandContext) => {
+      if (args.trim()) {
+        ctx.ui.notify("Usage: /requirements", "warning");
+        return;
+      }
+      const cwd = ctx.cwd ?? process.cwd();
+      try {
+        await runRequirementsCommand(cwd, ctx, {
+          extensionRoot: root,
+          startWorkflow: workflow => {
+            observeBackgroundRun(engine.start(workflow, ctx), ctx, "Workflow could not start");
+            return Promise.resolve();
+          }
+        });
+      } catch (error) {
+        ctx.ui.notify(`Requirements command failed: ${messageOf(error)}`, "error");
       }
     }
   });

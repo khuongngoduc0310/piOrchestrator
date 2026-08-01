@@ -30,7 +30,7 @@ async function fixture(): Promise<{ directory: string; state: WorkflowState }> {
       attempt: 0,
       startedAt: "2026-01-01T00:00:00.000Z",
       updatedAt: "2026-01-01T00:00:00.000Z",
-      agents: Object.fromEntries(["explorer", "planner", "reviewer", "tester", "builder", "debugger", "documenter"]
+      agents: Object.fromEntries(["explorer", "planner", "reviewer", "tester", "builder", "debugger", "documenter", "interviewer"]
         .map(name => [name, { status: "idle", model: "test" }])) as WorkflowState["agents"],
       steps: []
     }
@@ -149,7 +149,7 @@ function config() {
     checks: ["check"],
     dashboard: { enabled: false, port: 0 },
     limits: { planRevisions: 1, implementationRetries: 1, reviewRevisions: 1, agentTimeoutMs: 1, checkTimeoutMs: 1, maxOutputBytes: 1, worktreeIsolation: false },
-    agents: Object.fromEntries(["explorer", "planner", "reviewer", "tester", "builder", "debugger", "documenter"].map(name => [name, { model: "test/model", tools: name === "tester" || name === "builder" || name === "documenter" ? ["read", "write"] : ["read"], promptFile: `${name}.md` }])),
+    agents: Object.fromEntries(["explorer", "planner", "reviewer", "tester", "builder", "debugger", "documenter", "interviewer"].map(name => [name, { model: "test/model", tools: name === "tester" || name === "builder" || name === "documenter" ? ["read", "write"] : ["read"], promptFile: `${name}.md` }])),
     humanInTheLoop: { planApproval: false, planRevisionApproval: false, confirmBeforeMutation: false, importantDecisions: true }
   } as any;
 }

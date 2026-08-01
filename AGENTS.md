@@ -2,7 +2,7 @@
 
 ## Communication
 
-- Keep responses concise: answer directly, avoid preamble and summaries, and match the requested level of detail (one word when possible, more only when the user asks for detail).
+- Keep responses concise: answer directly, shortly and concisely, avoid preamble and summaries, and match the requested level of detail (one word when possible, more only when the user asks for detail).
 - Report tool actions in one line; don't repeat file content back unless asked.
 
 ## Toolchain
@@ -18,10 +18,11 @@
 
 - `src/index.ts` is the Pi extension entrypoint and owns lifecycle hooks and slash-command registration.
 - `/orchestrate` is an interactive, argument-free command: collect the workflow route with `ctx.ui.select`, then collect the request with `ctx.ui.input`; keep controller and dashboard guidance consistent with that flow.
+- `/requirements` is an interactive, argument-free interview: an in-memory `RequirementsSession` in `src/commands/requirements-command.ts` owns the session lifecycle and interview loop (a deliberate exception to the orchestration-state rule, kept in the command because it never touches workflow state); `src/agents/explorer-spawn.ts` builds spawned-explorer runs, and `src/ui/decision-race.ts` owns the shared dashboard-vs-prompt decision race used by both the requirements session and the orchestration human gates.
 - `src/orchestrator.ts` is a thin public facade. Mutable services/state and workflow phases live under `src/orchestration/`; SDK agent execution belongs under `src/agents/`, checks under `src/checks/`, and workspace policy under `src/workspace/`.
 - All user-selected routes share exploration/planning, then dispatch through fixed route templates. Check setup is deferred until a mutation route is approved; read-only and planning-only routes run neither checks nor mutation agents.
 - `prompts/*.md` are runtime contracts, not documentation. Changes to agent tasks or responses usually require coordinated edits to `src/agent-task-types.ts`, `src/agents/agent-output-validation.ts`, the relevant prompt, and contract tests such as `src/agents/prompts.test.ts` and `src/validation.test.ts`.
-- Agent sessions are in-memory Pi SDK sessions, not subprocesses. `src/agents/agent-session.ts` disables nested extensions, skills, prompt templates, and shell access; project checks are separate orchestrator-owned `pi.exec` calls. Planner, reviewer, and debugger may spawn read-only `explorer` sub-agents through the orchestrator-owned `spawn_explorer` tool; spawned runs use the dedicated `prompts/explorer-spawn.md` contract and their usage is folded into the parent step.
+- Agent sessions are in-memory Pi SDK sessions, not subprocesses. `src/agents/agent-session.ts` disables nested extensions, skills, prompt templates, and shell access; project checks are separate orchestrator-owned `pi.exec` calls. Planner, reviewer, debugger, and interviewer may spawn read-only `explorer` sub-agents through the orchestrator-owned `spawn_explorer` tool; spawned runs use the dedicated `prompts/explorer-spawn.md` contract and their usage is folded into the parent step.
 
 ## Safety And State
 

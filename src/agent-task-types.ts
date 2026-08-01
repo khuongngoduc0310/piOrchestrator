@@ -4,6 +4,18 @@ import type { BaselineReviewContext, CheckResult } from "./workflow-types.js";
 
 export const AGENT_TASK_SCHEMA_VERSION = 4 as const;
 
+export const MAX_INTERVIEW_ROUNDS = 6 as const;
+export const MIN_INTERVIEW_QUESTIONS = 5 as const;
+export const MAX_INTERVIEW_QUESTIONS = 7 as const;
+export const MIN_INTERVIEW_OPTIONS = 2 as const;
+export const MAX_INTERVIEW_OPTIONS = 6 as const;
+export const MAX_INTERVIEW_QUESTION_BYTES = 500 as const;
+export const MAX_INTERVIEW_OPTION_BYTES = 120 as const;
+export const MAX_INTERVIEW_CUSTOM_BYTES = 2000 as const;
+
+export const INTERVIEW_QUESTION_KINDS = ["single", "multiple"] as const;
+export type InterviewQuestionKind = (typeof INTERVIEW_QUESTION_KINDS)[number];
+
 export const COMMAND_STATUSES = ["passed", "failed", "timed_out", "cancelled"] as const;
 export type CommandStatus = (typeof COMMAND_STATUSES)[number];
 
@@ -375,6 +387,7 @@ export interface AgentTaskMap {
   builder: BuilderTask;
   debugger: DebuggerTask;
   documenter: DocumenterTask;
+  interviewer: InterviewerTask;
 }
 
 export interface AgentOutputMap {
@@ -385,4 +398,70 @@ export interface AgentOutputMap {
   builder: BuilderOutput;
   debugger: DebuggerOutput;
   documenter: DocumenterOutput;
+  interviewer: InterviewerOutput;
+}
+
+export interface InterviewOption {
+  id: string;
+  text: string;
+  /** Exactly one option per question is the recommended default; the user may pick another or type a custom answer. */
+  recommended?: boolean;
+}
+
+export interface InterviewQuestion {
+  id: string;
+  kind: InterviewQuestionKind;
+  text: string;
+  options: InterviewOption[];
+}
+
+export interface InterviewAnswer {
+  questionId: string;
+  selectedOptionIds: string[];
+  customText?: string;
+}
+
+export interface InterviewQAndA {
+  question: InterviewQuestion;
+  answer: InterviewAnswer;
+}
+
+export type InterviewerTask =
+  | { action: "ask_questions"; goal: string; round: number; history: InterviewQAndA[]; insights: string[] }
+  | { action: "assess"; goal: string; round: number; history: InterviewQAndA[]; insights: string[] }
+  | { action: "finalize"; goal: string; history: InterviewQAndA[]; insights: string[] };
+
+export type InterviewerOutput =
+  | { action: "ask_questions"; questions: InterviewQuestion[] }
+  | { action: "assess"; assessment: InterviewerAssessment }
+  | { action: "finalize"; report: InterviewerReport };
+
+export interface InterviewerAssessment {
+  goal: string;
+  clarity: "clear" | "more_information_needed";
+  summary: string;
+  openQuestions?: string[];
+}
+
+export interface InterviewerReport {
+  goal: string;
+  summary: string;
+  openQuestions: string[];
+  scope: string[];
+  constraints: string[];
+  acceptanceCriteria: string[];
+  qa: InterviewQAndA[];
+}
+
+export interface RequirementsDocument {
+  schemaVersion: 1;
+  goal: string;
+  summary: string;
+  scope: string[];
+  constraints: string[];
+  acceptanceCriteria: string[];
+  openQuestions: string[];
+  qa: InterviewQAndA[];
+  handoffRequest: string;
+  createdAt: string;
 }

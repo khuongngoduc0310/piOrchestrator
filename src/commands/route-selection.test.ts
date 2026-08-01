@@ -1,7 +1,7 @@
 import type { ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import { describe, expect, it, vi } from "vitest";
 import { WORKFLOW_ROUTES } from "../agent-task-types.js";
-import { collectWorkflowRequest, isWorkflowRoute, ORCHESTRATE_USAGE, WORKFLOW_ROUTE_CHOICES } from "./route-selection.js";
+import { collectWorkflowRequest, isWorkflowRoute, ORCHESTRATE_USAGE, selectWorkflowRoute, WORKFLOW_ROUTE_CHOICES } from "./route-selection.js";
 
 function context(options: {
   hasUI?: boolean;
@@ -68,6 +68,27 @@ describe("collectWorkflowRequest", () => {
     await expect(collectWorkflowRequest(ui.ctx)).resolves.toBeUndefined();
     expect(ui.select).not.toHaveBeenCalled();
     expect(ui.notify).toHaveBeenCalledWith("The orchestrate command requires an interactive UI.", "error");
+  });
+});
+
+describe("selectWorkflowRoute", () => {
+  it("maps a selected choice label back to its route", async () => {
+    const ui = context({ selections: [WORKFLOW_ROUTE_CHOICES[3].label] });
+
+    await expect(selectWorkflowRoute(ui.ctx)).resolves.toBe(WORKFLOW_ROUTE_CHOICES[3].route);
+    expect(ui.select).toHaveBeenCalledWith("Select a workflow route", WORKFLOW_ROUTE_CHOICES.map(item => item.label));
+  });
+
+  it("returns undefined when the selection is cancelled", async () => {
+    const ui = context({ selections: [undefined] });
+
+    await expect(selectWorkflowRoute(ui.ctx)).resolves.toBeUndefined();
+  });
+
+  it("returns undefined for an unrecognized choice", async () => {
+    const ui = context({ selections: ["unknown"] });
+
+    await expect(selectWorkflowRoute(ui.ctx)).resolves.toBeUndefined();
   });
 });
 

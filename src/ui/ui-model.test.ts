@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { buildIdleViewModel, buildRunViewModel, elapsedText, phaseProgress } from "./ui-model.js";
+import { buildIdleViewModel, buildRequirementsViewModel, buildRunViewModel, elapsedText, phaseProgress } from "./ui-model.js";
 import type { ConfigSummary, WorkflowState, StepRecord } from "../types.js";
 import { AGENT_NAMES, SCHEMA_VERSION } from "../types.js";
 
@@ -389,6 +389,61 @@ describe("UiModel", () => {
     it("returns phase label with optional attempt suffix", () => {
       expect(phaseProgress(0)).toBe("Setup / preflight");
       expect(phaseProgress(5, "attempt 2/3")).toBe("Implementation · attempt 2/3");
+    });
+  });
+
+  describe("buildRequirementsViewModel", () => {
+    const base = {
+      sessionId: "session-1",
+      cwd: "/project",
+      goal: "Build a CLI",
+      status: "running" as const,
+      round: 1,
+      maxRounds: 6,
+      interviewerStatus: "running" as const
+    };
+
+    it("surfaces the session as the live run with only the interviewer agent active", () => {
+      const vm = buildRequirementsViewModel(base);
+      expect(vm.mode).toBe("running");
+      expect(vm.run?.id).toBe("session-1");
+      expect(vm.run?.request).toBe("Build a CLI");
+      expect(vm.run?.runStatus).toBe("running");
+      expect(vm.run?.stage).toBe("exploring");
+      expect(vm.run?.attempt).toBe(1);
+      expect(vm.run?.maxAttempts).toBe(6);
+      expect(vm.agents.find(agent => agent.name === "interviewer")?.status).toBe("running");
+      for (const agent of vm.agents.filter(agent => agent.name !== "interviewer")) {
+        expect(agent.status).toBe("idle");
+      }
+    });
+
+    it("maps waiting to a paused stage and carries the pending decision", () => {
+      const vm = buildRequirementsViewModel({
+        ...base,
+        status: "waiting",
+        waitingFor: "Is the scope clear?",
+        pendingDecision: { id: "d1", kind: "requirements_question", label: "Is the scope clear?", requestedAt: "2026-08-01T00:00:00.000Z", dashboardAvailable: true }
+      });
+      expect(vm.run?.runStatus).toBe("paused");
+      expect(vm.run?.stage).toBe("paused");
+      expect(vm.run?.waitingFor).toBe("Is the scope clear?");
+      expect(vm.run?.pendingDecision?.kind).toBe("requirements_question");
+      expect(vm.run?.pendingDecision?.dashboardAvailable).toBe(true);
+    });
+
+    it("exposes completion state with the artifact path and no commands", () => {
+      const vm = buildRequirementsViewModel({ ...base, status: "completed", interviewerStatus: "succeeded", artifactPath: "/project/.pi/orchestrator/requirements/session-1" });
+      expect(vm.run?.runStatus).toBe("completed");
+      expect(vm.run?.artifactPath).toBe("/project/.pi/orchestrator/requirements/session-1");
+      expect(vm.commands).toEqual([]);
+      expect(vm.agents.find(agent => agent.name === "interviewer")?.status).toBe("succeeded");
+    });
+
+    it("offers cancel while the interview is active", () => {
+      expect(buildRequirementsViewModel(base).commands).toEqual(["/orchestrator-cancel"]);
+      expect(buildRequirementsViewModel({ ...base, status: "waiting" }).commands).toEqual(["/orchestrator-cancel"]);
+      expect(buildRequirementsViewModel({ ...base, status: "failed" }).commands).toEqual([]);
     });
   });
 });

@@ -1,18 +1,29 @@
 import { describe, expect, it } from "vitest";
 import type { IndexedAcceptanceCriterion } from "./types.js";
 import {
+  parseInterviewerOutput,
+  parsePlannerOutput,
+  parseStructuredJson,
   validateBuilderOutput,
   validateDebuggerOutput,
   validateDocumenterOutput,
   validateExplorerOutput,
-  parsePlannerOutput,
-  parseStructuredJson,
+  validateInterviewerOutput,
   validatePlannerOutput,
+  validateRequirementsDocument,
   validateTesterOutput,
   ValidationError
 } from "./validation.js";
 import { MAX_EVIDENCE_DETAIL_BYTES } from "./memory/memory-types.js";
-import { WORKFLOW_ROUTES } from "./types.js";
+import {
+  MAX_INTERVIEW_OPTIONS,
+  MAX_INTERVIEW_OPTION_BYTES,
+  MAX_INTERVIEW_QUESTIONS,
+  MAX_INTERVIEW_QUESTION_BYTES,
+  MIN_INTERVIEW_OPTIONS,
+  MIN_INTERVIEW_QUESTIONS,
+  WORKFLOW_ROUTES
+} from "./types.js";
 
 const validPlan = {
   route: "implementation",
@@ -262,5 +273,161 @@ describe("structured output validation", () => {
       ...base,
       proposedLessons: [{ ...base.proposedLessons[0], scope: { roles: [], paths: [], categories: [], keywords: [] } }]
     })).toThrow("must have at least one non-empty scope dimension");
+  });
+});
+
+const sampleQuestion = (overrides: Record<string, unknown> = {}): Record<string, unknown> => ({
+  id: "q1",
+  kind: "single",
+  text: "Is the scope clear?",
+  options: [
+    { id: "yes", text: "Yes", recommended: true },
+    { id: "no", text: "No" }
+  ],
+  ...overrides
+});
+
+const sampleQuestions = (count: number = MIN_INTERVIEW_QUESTIONS): Record<string, unknown>[] =>
+  Array.from({ length: count }, (_, index) => sampleQuestion({ id: `q${index + 1}`, text: `Question ${index + 1}?` }));
+
+function sampleReport(): Record<string, unknown> {
+  return {
+    goal: "Build a CLI",
+    summary: "A small CLI",
+    openQuestions: [],
+    scope: ["src/"],
+    constraints: ["No new dependencies"],
+    acceptanceCriteria: ["CLI prints help"],
+    qa: [{ question: sampleQuestion(), answer: { questionId: "q1", selectedOptionIds: ["yes"] } }]
+  };
+}
+
+describe("interviewer output validation", () => {
+  it("accepts a valid ask_questions payload", () => {
+    const output = validateInterviewerOutput({ action: "ask_questions", questions: sampleQuestions() });
+    expect(output.action).toBe("ask_questions");
+    if (output.action !== "ask_questions") throw new Error("expected ask_questions");
+    expect(output.questions).toHaveLength(MIN_INTERVIEW_QUESTIONS);
+  });
+
+  it("accepts a fenced parse of interviewer JSON", () => {
+    const parsed = parseInterviewerOutput(`Here are my questions.\n\n\`\`\`json\n${JSON.stringify({ action: "ask_questions", questions: sampleQuestions() })}\n\`\`\``);
+    expect(parsed.action).toBe("ask_questions");
+  });
+
+  it("bounds the question count", () => {
+    expect(() => validateInterviewerOutput({ action: "ask_questions", questions: sampleQuestions(MIN_INTERVIEW_QUESTIONS - 1) }))
+      .toThrow(`must contain at least ${MIN_INTERVIEW_QUESTIONS} questions`);
+    expect(() => validateInterviewerOutput({ action: "ask_questions", questions: sampleQuestions(MAX_INTERVIEW_QUESTIONS + 1) }))
+      .toThrow(`must not contain more than ${MAX_INTERVIEW_QUESTIONS} questions`);
+  });
+
+  it("rejects duplicate question ids", () => {
+    const questions = sampleQuestions();
+    questions[1] = { ...questions[1], id: "q1" };
+    expect(() => validateInterviewerOutput({ action: "ask_questions", questions })).toThrow("duplicate question id");
+  });
+
+  it("enforces option count and exactly one recommended option", () => {
+    const under = sampleQuestion({ options: [{ id: "only", text: "Only" }] });
+    expect(() => validateInterviewerOutput({ action: "ask_questions", questions: [under, ...sampleQuestions().slice(1)] }))
+      .toThrow(`must contain at least ${MIN_INTERVIEW_OPTIONS} options`);
+    const over = sampleQuestion({ options: Array.from({ length: MAX_INTERVIEW_OPTIONS + 1 }, (_, i) => ({ id: `o${i}`, text: `Option ${i}` })) });
+    expect(() => validateInterviewerOutput({ action: "ask_questions", questions: [over, ...sampleQuestions().slice(1)] }))
+      .toThrow(`must not contain more than ${MAX_INTERVIEW_OPTIONS} options`);
+    const none = sampleQuestion({ options: [{ id: "a", text: "A" }, { id: "b", text: "B" }] });
+    expect(() => validateInterviewerOutput({ action: "ask_questions", questions: [none, ...sampleQuestions().slice(1)] }))
+      .toThrow("must mark exactly one option as recommended");
+  });
+
+  it("rejects duplicate option ids and labels", () => {
+    const dupes = sampleQuestion({ options: [{ id: "a", text: "A", recommended: true }, { id: "a", text: "B" }] });
+    expect(() => validateInterviewerOutput({ action: "ask_questions", questions: [dupes, ...sampleQuestions().slice(1)] }))
+      .toThrow("duplicate option id");
+    const labels = sampleQuestion({ options: [{ id: "a", text: "Same", recommended: true }, { id: "b", text: "Same" }] });
+    expect(() => validateInterviewerOutput({ action: "ask_questions", questions: [labels, ...sampleQuestions().slice(1)] }))
+      .toThrow("must not contain duplicate option labels");
+  });
+
+  it("bounds question and option byte sizes", () => {
+    const longText = sampleQuestion({ text: "x".repeat(MAX_INTERVIEW_QUESTION_BYTES + 1) });
+    expect(() => validateInterviewerOutput({ action: "ask_questions", questions: [longText, ...sampleQuestions().slice(1)] }))
+      .toThrow("exceed");
+    const longOption = sampleQuestion({ options: [{ id: "a", text: "x".repeat(MAX_INTERVIEW_OPTION_BYTES + 1), recommended: true }, { id: "b", text: "B" }] });
+    expect(() => validateInterviewerOutput({ action: "ask_questions", questions: [longOption, ...sampleQuestions().slice(1)] }))
+      .toThrow("exceed");
+  });
+
+  it("validates an assess payload", () => {
+    const output = validateInterviewerOutput({
+      action: "assess",
+      assessment: { goal: "Build a CLI", clarity: "more_information_needed", summary: "Scope is vague", openQuestions: ["Where does it run?"] }
+    });
+    expect(output.action).toBe("assess");
+    if (output.action !== "assess") throw new Error("expected assess");
+    expect(output.assessment.clarity).toBe("more_information_needed");
+    expect(() => validateInterviewerOutput({ action: "assess", assessment: { goal: "Build a CLI", clarity: "maybe", summary: "?" } }))
+      .toThrow("expected one of");
+  });
+
+  it("validates a finalize report and its recorded Q&A", () => {
+    const output = validateInterviewerOutput({ action: "finalize", report: sampleReport() });
+    expect(output.action).toBe("finalize");
+    if (output.action !== "finalize") throw new Error("expected finalize");
+    expect(output.report.scope).toEqual(["src/"]);
+    expect(output.report.qa[0].answer.selectedOptionIds).toEqual(["yes"]);
+  });
+
+  it("rejects finalize reports with empty scope, constraints, or acceptance criteria", () => {
+    for (const field of ["scope", "constraints", "acceptanceCriteria"]) {
+      const report = sampleReport();
+      report[field] = [];
+      expect(() => validateInterviewerOutput({ action: "finalize", report })).toThrow("must not be empty");
+    }
+  });
+
+  it("rejects answers referencing unknown options or the wrong question", () => {
+    const report = sampleReport();
+    report.qa = [{ question: sampleQuestion(), answer: { questionId: "q1", selectedOptionIds: ["missing"] } }];
+    expect(() => validateInterviewerOutput({ action: "finalize", report })).toThrow("unknown option id");
+    report.qa = [{ question: sampleQuestion(), answer: { questionId: "other", selectedOptionIds: ["yes"] } }];
+    expect(() => validateInterviewerOutput({ action: "finalize", report })).toThrow("must match question id");
+  });
+
+  it("rejects empty answers without a custom text and multi-picks on single questions", () => {
+    const empty = sampleReport();
+    empty.qa = [{ question: sampleQuestion(), answer: { questionId: "q1", selectedOptionIds: [] } }];
+    expect(() => validateInterviewerOutput({ action: "finalize", report: empty })).toThrow("must select an option or provide a custom answer");
+    const multi = sampleReport();
+    multi.qa = [{ question: sampleQuestion(), answer: { questionId: "q1", selectedOptionIds: ["yes", "no"] } }];
+    expect(() => validateInterviewerOutput({ action: "finalize", report: multi })).toThrow("must not contain more than one option");
+  });
+
+  it("rejects an unexpected action", () => {
+    expect(() => validateInterviewerOutput({ action: "nope" })).toThrow("interviewer.action");
+  });
+});
+
+describe("requirements document validation", () => {
+  const validDocument = {
+    schemaVersion: 1,
+    goal: "Build a CLI",
+    summary: "A small CLI",
+    scope: ["src/"],
+    constraints: ["No new dependencies"],
+    acceptanceCriteria: ["CLI prints help"],
+    openQuestions: [],
+    qa: [{ question: sampleQuestion(), answer: { questionId: "q1", selectedOptionIds: ["yes"] } }],
+    handoffRequest: "Goal: Build a CLI",
+    createdAt: "2026-08-01T00:00:00.000Z"
+  };
+
+  it("accepts a valid document", () => {
+    expect(validateRequirementsDocument(validDocument)).toEqual(validDocument);
+  });
+
+  it("rejects unknown schema versions and missing handoff", () => {
+    expect(() => validateRequirementsDocument({ ...validDocument, schemaVersion: 2 })).toThrow("must be 1");
+    expect(() => validateRequirementsDocument({ ...validDocument, handoffRequest: "" })).toThrow("handoffRequest");
   });
 });

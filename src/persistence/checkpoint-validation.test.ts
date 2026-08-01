@@ -37,7 +37,7 @@ describe("checkpoint validation", () => {
       attempt: 1,
       startedAt: "2026-07-22T10:00:00.000Z",
       updatedAt: "2026-07-22T10:01:00.000Z",
-      agents: { builder: { status: "idle", model: "test" }, explorer: { status: "idle", model: "test" }, planner: { status: "idle", model: "test" }, reviewer: { status: "idle", model: "test" }, documenter: { status: "idle", model: "test" }, tester: { status: "idle", model: "test" }, debugger: { status: "idle", model: "test" } },
+      agents: { builder: { status: "idle", model: "test" }, explorer: { status: "idle", model: "test" }, planner: { status: "idle", model: "test" }, reviewer: { status: "idle", model: "test" }, documenter: { status: "idle", model: "test" }, tester: { status: "idle", model: "test" }, debugger: { status: "idle", model: "test" }, interviewer: { status: "idle", model: "test" } },
       steps: [],
       latestCheckpoint: { number: 1, cursor: "plan_approved", createdAt: "2026-07-22T10:30:00.000Z" }
     };
@@ -63,7 +63,7 @@ describe("checkpoint validation", () => {
       attempt: 0,
       startedAt: "2026-07-22T10:00:00.000Z",
       updatedAt: "2026-07-22T10:01:00.000Z",
-      agents: Object.fromEntries(["explorer", "planner", "reviewer", "tester", "builder", "debugger", "documenter"]
+      agents: Object.fromEntries(["explorer", "planner", "reviewer", "tester", "builder", "debugger", "documenter", "interviewer"]
         .map(name => [name, { status: "idle", model: "test" }])),
       steps: []
     };
@@ -101,7 +101,7 @@ describe("checkpoint validation", () => {
       attempt: 1,
       startedAt: "2026-07-22T10:00:00.000Z",
       updatedAt: "2026-07-22T10:01:00.000Z",
-      agents: { builder: { status: "idle", model: "test" }, explorer: { status: "idle", model: "test" }, planner: { status: "idle", model: "test" }, reviewer: { status: "idle", model: "test" }, documenter: { status: "idle", model: "test" }, tester: { status: "idle", model: "test" }, debugger: { status: "idle", model: "test" } },
+      agents: { builder: { status: "idle", model: "test" }, explorer: { status: "idle", model: "test" }, planner: { status: "idle", model: "test" }, reviewer: { status: "idle", model: "test" }, documenter: { status: "idle", model: "test" }, tester: { status: "idle", model: "test" }, debugger: { status: "idle", model: "test" }, interviewer: { status: "idle", model: "test" } },
       steps: []
     };
     expect(() => validateWorkflowStateForResume({ ...validState, resumeBlockedReason: "finalization started" })).not.toThrow();
@@ -208,7 +208,7 @@ describe("checkpoint validation", () => {
       attempt: 0,
       startedAt: "2026-07-22T10:00:00.000Z",
       updatedAt: "2026-07-22T10:00:00.000Z",
-      agents: Object.fromEntries(["explorer", "planner", "reviewer", "tester", "builder", "debugger", "documenter"]
+      agents: Object.fromEntries(["explorer", "planner", "reviewer", "tester", "builder", "debugger", "documenter", "interviewer"]
         .map(name => [name, { status: "idle", model: "test" }])),
       steps: []
     };
@@ -305,7 +305,7 @@ describe("checkpoint validation", () => {
       attempt: 0,
       startedAt: "2026-07-22T10:00:00.000Z",
       updatedAt: "2026-07-22T10:00:00.000Z",
-      agents: Object.fromEntries(["explorer", "planner", "reviewer", "tester", "builder", "debugger", "documenter"]
+      agents: Object.fromEntries(["explorer", "planner", "reviewer", "tester", "builder", "debugger", "documenter", "interviewer"]
         .map(name => [name, { status: "idle", model: "test" }])),
       steps: []
     };

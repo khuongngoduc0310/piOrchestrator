@@ -36,7 +36,8 @@ export const DEFAULT_CONFIG: OrchestratorConfig = {
     tester: { model: "anthropic/claude-sonnet-4-5", thinking: "high", tools: ["read", "write", "edit", "grep", "find", "ls"], promptFile: "tester.md" },
     builder: { model: "anthropic/claude-sonnet-4-5", thinking: "high", tools: ["read", "write", "edit", "grep", "find", "ls"], promptFile: "builder.md" },
     debugger: { model: "anthropic/claude-sonnet-4-5", thinking: "high", tools: ["read", "grep", "find", "ls"], promptFile: "debugger.md" },
-    documenter: { model: "anthropic/claude-sonnet-4-5", thinking: "medium", tools: ["read", "write", "edit", "grep", "find", "ls"], promptFile: "documenter.md" }
+    documenter: { model: "anthropic/claude-sonnet-4-5", thinking: "medium", tools: ["read", "write", "edit", "grep", "find", "ls"], promptFile: "documenter.md" },
+    interviewer: { model: "anthropic/claude-sonnet-4-5", thinking: "medium", tools: ["read", "grep", "find", "ls"], promptFile: "interviewer.md" }
   },
   humanInTheLoop: {
     planApproval: true,

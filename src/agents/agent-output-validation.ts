@@ -3,7 +3,15 @@ import {
   AGENT_NAMES,
   COMMAND_STATUSES,
   DEBUGGER_CATEGORIES,
+  INTERVIEW_QUESTION_KINDS,
   LESSON_CATEGORIES,
+  MAX_INTERVIEW_CUSTOM_BYTES,
+  MAX_INTERVIEW_OPTIONS,
+  MAX_INTERVIEW_OPTION_BYTES,
+  MAX_INTERVIEW_QUESTIONS,
+  MAX_INTERVIEW_QUESTION_BYTES,
+  MIN_INTERVIEW_OPTIONS,
+  MIN_INTERVIEW_QUESTIONS,
   PRE_IMPLEMENTATION_RESULTS,
   SUPPORTED_HANDOFF_ROLES,
   WORKFLOW_ROUTES,
@@ -14,10 +22,16 @@ import {
   type DocumenterOutput,
   type ExplorerOutput,
   type IndexedAcceptanceCriterion,
+  type InterviewAnswer,
+  type InterviewQAndA,
+  type InterviewQuestion,
+  type InterviewerOutput,
+  type InterviewOption,
   type PlanTask,
   type PlannerOutput,
   type ProposedLesson,
   type RepositoryEvidence,
+  type RequirementsDocument,
   type ReviewOutput,
   type TesterOutput
 } from "../types.js";
@@ -32,6 +46,7 @@ import {
 import {
   ValidationError,
   array,
+  boolean,
   boundedString,
   enumValue,
   integer,
@@ -338,3 +353,155 @@ export function parseReviewOutput(text: string): ReviewOutput { return validateR
 export function parseBuilderOutput(text: string): BuilderOutput { return validateBuilderOutput(parseStructuredJson(text, "builder output")); }
 export function parseDebuggerOutput(text: string): DebuggerOutput { return validateDebuggerOutput(parseStructuredJson(text, "debugger output")); }
 export function parseDocumenterOutput(text: string): DocumenterOutput { return validateDocumenterOutput(parseStructuredJson(text, "documenter output")); }
+
+function interviewOption(value: unknown, path: string): InterviewOption {
+  const item = record(value, path);
+  const result: InterviewOption = {
+    id: string(item.id, `${path}.id`),
+    text: boundedString(item.text, `${path}.text`, MAX_INTERVIEW_OPTION_BYTES)
+  };
+  if (item.recommended !== undefined) result.recommended = boolean(item.recommended, `${path}.recommended`);
+  return result;
+}
+
+function interviewQuestion(value: unknown, path: string): InterviewQuestion {
+  const item = record(value, path);
+  const options = array(item.options, `${path}.options`, interviewOption);
+  if (options.length < MIN_INTERVIEW_OPTIONS) {
+    throw new ValidationError(`${path}.options`, `must contain at least ${MIN_INTERVIEW_OPTIONS} options`);
+  }
+  if (options.length > MAX_INTERVIEW_OPTIONS) {
+    throw new ValidationError(`${path}.options`, `must not contain more than ${MAX_INTERVIEW_OPTIONS} options`);
+  }
+  const ids = new Set<string>();
+  const labels = new Set<string>();
+  let recommendedCount = 0;
+  for (let index = 0; index < options.length; index++) {
+    const option = options[index];
+    if (ids.has(option.id)) throw new ValidationError(`${path}.options[${index}].id`, `duplicate option id ${JSON.stringify(option.id)}`);
+    ids.add(option.id);
+    if (labels.has(option.text)) throw new ValidationError(`${path}.options[${index}].text`, "must not contain duplicate option labels");
+    labels.add(option.text);
+    if (option.recommended) recommendedCount++;
+  }
+  if (recommendedCount !== 1) throw new ValidationError(`${path}.options`, "must mark exactly one option as recommended");
+  return {
+    id: string(item.id, `${path}.id`),
+    kind: enumValue(item.kind, `${path}.kind`, INTERVIEW_QUESTION_KINDS),
+    text: boundedString(item.text, `${path}.text`, MAX_INTERVIEW_QUESTION_BYTES),
+    options
+  };
+}
+
+function interviewAnswer(value: unknown, question: InterviewQuestion, path: string): InterviewAnswer {
+  const item = record(value, path);
+  const questionId = string(item.questionId, `${path}.questionId`);
+  if (questionId !== question.id) throw new ValidationError(`${path}.questionId`, `must match question id ${JSON.stringify(question.id)}`);
+  const optionIds = new Set(question.options.map(option => option.id));
+  const selectedOptionIds = array(item.selectedOptionIds, `${path}.selectedOptionIds`, (entry, entryPath) => string(entry, entryPath));
+  for (let index = 0; index < selectedOptionIds.length; index++) {
+    if (!optionIds.has(selectedOptionIds[index])) {
+      throw new ValidationError(`${path}.selectedOptionIds[${index}]`, `unknown option id ${JSON.stringify(selectedOptionIds[index])}`);
+    }
+  }
+  if (question.kind === "single" && selectedOptionIds.length > 1) {
+    throw new ValidationError(`${path}.selectedOptionIds`, "must not contain more than one option for a single-choice question");
+  }
+  const customText = item.customText === undefined || item.customText === null
+    ? undefined
+    : boundedString(item.customText, `${path}.customText`, MAX_INTERVIEW_CUSTOM_BYTES);
+  if (selectedOptionIds.length === 0 && customText === undefined) {
+    throw new ValidationError(`${path}`, "must select an option or provide a custom answer");
+  }
+  const answer: InterviewAnswer = { questionId, selectedOptionIds };
+  if (customText !== undefined) answer.customText = customText;
+  return answer;
+}
+
+function interviewQAndA(value: unknown, path: string): InterviewQAndA {
+  const item = record(value, path);
+  const question = interviewQuestion(item.question, `${path}.question`);
+  return { question, answer: interviewAnswer(item.answer, question, `${path}.answer`) };
+}
+
+export function validateInterviewerOutput(value: unknown, path = "interviewer"): InterviewerOutput {
+  const item = record(value, path);
+  const action = enumValue(item.action, `${path}.action`, ["ask_questions", "assess", "finalize"] as const);
+  if (action === "ask_questions") {
+    const questions = array(item.questions, `${path}.questions`, interviewQuestion);
+    if (questions.length < MIN_INTERVIEW_QUESTIONS) {
+      throw new ValidationError(`${path}.questions`, `must contain at least ${MIN_INTERVIEW_QUESTIONS} questions`);
+    }
+    if (questions.length > MAX_INTERVIEW_QUESTIONS) {
+      throw new ValidationError(`${path}.questions`, `must not contain more than ${MAX_INTERVIEW_QUESTIONS} questions`);
+    }
+    const ids = new Set<string>();
+    for (let index = 0; index < questions.length; index++) {
+      if (ids.has(questions[index].id)) throw new ValidationError(`${path}.questions[${index}].id`, `duplicate question id ${JSON.stringify(questions[index].id)}`);
+      ids.add(questions[index].id);
+    }
+    return { action: "ask_questions", questions };
+  }
+  if (action === "assess") {
+    const assessment = record(item.assessment, `${path}.assessment`);
+    const openQuestions = assessment.openQuestions === undefined
+      ? undefined
+      : strings(assessment.openQuestions, `${path}.assessment.openQuestions`);
+    return {
+      action: "assess",
+      assessment: {
+        goal: string(assessment.goal, `${path}.assessment.goal`),
+        clarity: enumValue(assessment.clarity, `${path}.assessment.clarity`, ["clear", "more_information_needed"] as const),
+        summary: string(assessment.summary, `${path}.assessment.summary`),
+        ...(openQuestions ? { openQuestions } : {})
+      }
+    };
+  }
+  const report = record(item.report, `${path}.report`);
+  const scope = strings(report.scope, `${path}.report.scope`);
+  if (scope.length === 0) throw new ValidationError(`${path}.report.scope`, "must not be empty");
+  const constraints = strings(report.constraints, `${path}.report.constraints`);
+  if (constraints.length === 0) throw new ValidationError(`${path}.report.constraints`, "must not be empty");
+  const acceptanceCriteria = strings(report.acceptanceCriteria, `${path}.report.acceptanceCriteria`);
+  if (acceptanceCriteria.length === 0) throw new ValidationError(`${path}.report.acceptanceCriteria`, "must not be empty");
+  return {
+    action: "finalize",
+    report: {
+      goal: string(report.goal, `${path}.report.goal`),
+      summary: string(report.summary, `${path}.report.summary`),
+      openQuestions: strings(report.openQuestions, `${path}.report.openQuestions`),
+      scope,
+      constraints,
+      acceptanceCriteria,
+      qa: array(report.qa, `${path}.report.qa`, interviewQAndA)
+    }
+  };
+}
+
+export function parseInterviewerOutput(text: string): InterviewerOutput {
+  return validateInterviewerOutput(parseStructuredJson(text, "interviewer output"));
+}
+
+export function validateRequirementsDocument(value: unknown, path = "requirements"): RequirementsDocument {
+  const item = record(value, path);
+  const schemaVersion = integer(item.schemaVersion, `${path}.schemaVersion`, 1);
+  if (schemaVersion !== 1) throw new ValidationError(`${path}.schemaVersion`, "must be 1");
+  const scope = strings(item.scope, `${path}.scope`);
+  if (scope.length === 0) throw new ValidationError(`${path}.scope`, "must not be empty");
+  const constraints = strings(item.constraints, `${path}.constraints`);
+  if (constraints.length === 0) throw new ValidationError(`${path}.constraints`, "must not be empty");
+  const acceptanceCriteria = strings(item.acceptanceCriteria, `${path}.acceptanceCriteria`);
+  if (acceptanceCriteria.length === 0) throw new ValidationError(`${path}.acceptanceCriteria`, "must not be empty");
+  return {
+    schemaVersion: 1,
+    goal: string(item.goal, `${path}.goal`),
+    summary: string(item.summary, `${path}.summary`),
+    scope,
+    constraints,
+    acceptanceCriteria,
+    openQuestions: strings(item.openQuestions, `${path}.openQuestions`),
+    qa: array(item.qa, `${path}.qa`, interviewQAndA),
+    handoffRequest: string(item.handoffRequest, `${path}.handoffRequest`),
+    createdAt: string(item.createdAt, `${path}.createdAt`)
+  };
+}

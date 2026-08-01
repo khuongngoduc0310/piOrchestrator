@@ -5,7 +5,8 @@ export const AGENT_NAMES = [
   "tester",
   "builder",
   "debugger",
-  "documenter"
+  "documenter",
+  "interviewer"
 ] as const;
 export type AgentName = (typeof AGENT_NAMES)[number];
 

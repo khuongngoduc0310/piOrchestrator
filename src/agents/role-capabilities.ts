@@ -18,7 +18,8 @@ export const ROLE_CAPABILITIES: Readonly<Record<AgentName, RoleCapability>> = Ob
   tester: Object.freeze({ tools: MUTATING_TOOLS, mutation: "tests" }),
   builder: Object.freeze({ tools: MUTATING_TOOLS, mutation: "plan_files" }),
   debugger: Object.freeze({ tools: READ_ONLY_TOOLS, mutation: "none" }),
-  documenter: Object.freeze({ tools: MUTATING_TOOLS, mutation: "documentation" })
+  documenter: Object.freeze({ tools: MUTATING_TOOLS, mutation: "documentation" }),
+  interviewer: Object.freeze({ tools: READ_ONLY_TOOLS, mutation: "none" })
 });
 
 export const ROLE_MAXIMUM_TOOLS: Readonly<Record<AgentName, readonly BuiltInToolName[]>> = Object.freeze({
@@ -28,7 +29,8 @@ export const ROLE_MAXIMUM_TOOLS: Readonly<Record<AgentName, readonly BuiltInTool
   tester: ROLE_CAPABILITIES.tester.tools,
   builder: ROLE_CAPABILITIES.builder.tools,
   debugger: ROLE_CAPABILITIES.debugger.tools,
-  documenter: ROLE_CAPABILITIES.documenter.tools
+  documenter: ROLE_CAPABILITIES.documenter.tools,
+  interviewer: ROLE_CAPABILITIES.interviewer.tools
 });
 
 export const ROLE_MUTATION_KINDS: Readonly<Record<AgentName, MutationKind>> = Object.freeze({
@@ -38,7 +40,8 @@ export const ROLE_MUTATION_KINDS: Readonly<Record<AgentName, MutationKind>> = Ob
   tester: ROLE_CAPABILITIES.tester.mutation,
   builder: ROLE_CAPABILITIES.builder.mutation,
   debugger: ROLE_CAPABILITIES.debugger.mutation,
-  documenter: ROLE_CAPABILITIES.documenter.mutation
+  documenter: ROLE_CAPABILITIES.documenter.mutation,
+  interviewer: ROLE_CAPABILITIES.interviewer.mutation
 });
 
 export class RoleCapabilityError extends Error {

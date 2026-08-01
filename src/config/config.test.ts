@@ -137,4 +137,13 @@ describe("configuration", () => {
     await writeFile(file, JSON.stringify(config));
     await expect(loadConfig(cwd)).rejects.toThrow("config.agents.explorer.tools[4]");
   });
+
+  it("defaults a read-only interviewer agent using the interviewer prompt", () => {
+    const interviewer = DEFAULT_CONFIG.agents.interviewer;
+    expect(interviewer.promptFile).toBe("interviewer.md");
+    expect(interviewer.tools).not.toContain("bash");
+    expect(interviewer.tools).not.toContain("write");
+    expect(interviewer.tools).not.toContain("edit");
+    expect(interviewer.model).toBeTruthy();
+  });
 });
