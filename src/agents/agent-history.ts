@@ -1,6 +1,7 @@
 import { AGENT_NAMES, type AgentUsage } from "../agent-types.js";
 import type { AgentHistoryInvocation, AgentHistoryResponse, AgentUsageSummary } from "../dashboard-types.js";
 import type { WorkflowState } from "../workflow-types.js";
+import { addUsage } from "./agent-usage.js";
 
 export function buildAgentHistory(
   state: WorkflowState,
@@ -59,29 +60,6 @@ function emptyUsage(): AgentUsage {
     totalTokens: 0,
     costBreakdown: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }
   };
-}
-
-function addUsage(total: AgentUsage, usage: AgentUsage): AgentUsage {
-  total.input += usage.input;
-  total.output += usage.output;
-  total.cacheRead += usage.cacheRead;
-  total.cacheWrite += usage.cacheWrite;
-  total.cost += usage.cost;
-  total.totalTokens = (total.totalTokens ?? 0) + (usage.totalTokens ?? tokenTotal(usage));
-  if (usage.reasoning !== undefined) total.reasoning = (total.reasoning ?? 0) + usage.reasoning;
-  if (usage.cacheWrite1h !== undefined) total.cacheWrite1h = (total.cacheWrite1h ?? 0) + usage.cacheWrite1h;
-  if (usage.costBreakdown) {
-    total.costBreakdown ??= { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 };
-    total.costBreakdown.input += usage.costBreakdown.input;
-    total.costBreakdown.output += usage.costBreakdown.output;
-    total.costBreakdown.cacheRead += usage.costBreakdown.cacheRead;
-    total.costBreakdown.cacheWrite += usage.costBreakdown.cacheWrite;
-  }
-  return total;
-}
-
-function tokenTotal(usage: AgentUsage): number {
-  return usage.input + usage.output + usage.cacheRead + usage.cacheWrite;
 }
 
 function durationMs(startedAt: string, completedAt: string | undefined): number | undefined {

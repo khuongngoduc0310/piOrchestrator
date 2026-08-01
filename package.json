@@ -56,5 +56,8 @@
     "extensions": [
       "./src/index.ts"
     ]
+  },
+  "dependencies": {
+    "typebox": "1.1.38"
   }
 }

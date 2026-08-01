@@ -130,6 +130,22 @@ describe("role prompt contracts", () => {
     expect(documenter).toContain("only uses `scope` blockers");
   });
 
+  it("documents the spawn_explorer sub-agent tool only for context-hungry roles", async () => {
+    for (const name of ["planner", "reviewer", "debugger"]) {
+      const text = await prompt(name);
+      expect(text).toContain("`spawn_explorer`");
+      expect(text).toContain("Use it sparingly");
+      expect(text).toContain("advisory leads, not as evidence you observed");
+    }
+    for (const name of ["explorer", "tester", "builder", "documenter"]) {
+      expect(await prompt(name)).not.toContain("spawn_explorer");
+    }
+    const child = await prompt("explorer-spawn");
+    expect(child).toContain("read-only repository Explorer sub-agent");
+    expect(child).toContain("plain prose findings");
+    expect(child).toContain("No JSON object");
+  });
+
   it("documents repository evidence detail byte limits", async () => {
     const expectedLimits = [
       ["explorer", "`evidence[].detail`"],

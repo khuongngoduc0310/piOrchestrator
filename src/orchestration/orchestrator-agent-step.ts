@@ -3,6 +3,7 @@ import { CONFIG_DIR_NAME } from "@earendil-works/pi-coding-agent";
 import type { StructuredAgentResponse } from "../ui/agent-session.js";
 import { createHash } from "node:crypto";
 import { AgentCancelledError, AgentIncompleteResponseError, type AgentRunOptions } from "../agents/agent-runner.js";
+import { type SpawnExplorerResult, isSpawningRole } from "../agents/agent-runner-contracts.js";
 import { AGENT_TASK_SCHEMA_VERSION, type AgentOutputMap, type AgentResult, type AgentTaskEnvelope, type AgentTaskMap, type AgentInvocationRecord, type AgentName, type AgentTranscript, type AgentTranscriptArtifact, type PlannerOutput, type Stage } from "../types.js";
 import { ValidationError } from "../validation.js";
 import { compareWorkspaceSnapshots, createWorkspaceSnapshot, deriveRoleMutationPaths, validateReportedFileSet } from "../workspace/workspace-guard.js";
@@ -60,6 +61,8 @@ export async function runAgentStep<A extends AgentName>(
       updateAgentActivity(runtime, event, agent);
       throttledPersist(runtime, ctx);
     };
+    const spawnCount = { value: 0 };
+    const parentRunStartedAt = { value: 0 };
     const runBase = {
       name: agent,
       cwd,
@@ -69,7 +72,21 @@ export async function runAgentStep<A extends AgentName>(
       signal: controller.signal,
       onEvent,
       allowedWritePaths,
-      readRoots: [store.runDir]
+      readRoots: [store.runDir],
+      ...(isSpawningRole(agent)
+        ? {
+            spawnExplorer: (question: string) => runSpawnedExplorer(runtime, {
+              step,
+              qualifier,
+              stage,
+              agent,
+              cwd,
+              spawnCount,
+              parentRunStartedAt: parentRunStartedAt.value,
+              explorerModel: config.agents.explorer.model
+            }, question)
+          }
+        : {})
     } satisfies Omit<AgentRunOptions, "task">;
 
     const executeInvocation = async (
@@ -77,6 +94,8 @@ export async function runAgentStep<A extends AgentName>(
       runConfig: AgentRunOptions["config"],
       task: string
     ): Promise<AgentResult> => {
+      const baseRun = mode === "correct_output" ? omitSpawnExplorer(runBase) : runBase;
+      parentRunStartedAt.value = Date.now();
       const invocation: AgentInvocationRecord = {
         sequence: (step.invocations?.length ?? 0) + 1,
         mode,
@@ -99,7 +118,7 @@ export async function runAgentStep<A extends AgentName>(
       let invocationError: unknown;
       try {
         const result = await runtime.agents.run({
-          ...runBase,
+          ...baseRun,
           config: runConfig,
           task,
           onTranscript: next => {
@@ -147,8 +166,8 @@ export async function runAgentStep<A extends AgentName>(
             invocation.messageCount = latestTranscript.messages.length;
             invocation.truncated = latestTranscript.truncated;
             const transcriptName = store.artifactName({ ...qualifier, sequence: step.sequence, stage, agent, kind: `invocation-${invocation.sequence}-transcript` });
-            const transcriptArtifact: AgentTranscriptArtifact = {
-              ...latestTranscript,
+            const transcriptArtifact = buildTranscriptArtifact({
+              transcript: latestTranscript,
               stepId: step.id,
               agent,
               invocation: invocation.sequence,
@@ -157,7 +176,7 @@ export async function runAgentStep<A extends AgentName>(
               model: runConfig.model,
               startedAt: invocation.startedAt,
               completedAt: invocation.completedAt
-            };
+            });
             invocation.transcriptArtifact = await store.saveJson(transcriptName, transcriptArtifact);
           }
         } catch (transcriptError) {
@@ -420,4 +439,100 @@ export async function runAgentStep<A extends AgentName>(
 function changedFilesOf(output: unknown): string[] {
   const changedFiles = (output as { changedFiles?: unknown }).changedFiles;
   return Array.isArray(changedFiles) ? changedFiles.filter((value): value is string => typeof value === "string") : [];
+}
+
+/** Run a read-only explorer sub-agent and report its findings back to the parent agent. */
+async function runSpawnedExplorer(
+  runtime: OrchestratorRuntime,
+  parent: {
+    step: Awaited<ReturnType<typeof beginStep>>;
+    qualifier: { attempt?: number; revision?: number; mutationPlan?: PlannerOutput };
+    stage: Stage;
+    agent: AgentName;
+    cwd: string;
+    spawnCount: { value: number };
+    parentRunStartedAt: number;
+    explorerModel: string;
+  },
+  question: string
+): Promise<SpawnExplorerResult> {
+  const config = runtime.requireConfig();
+  const controller = runtime.requireController();
+  const store = runtime.requireStore();
+  const remainingBudget = Math.max(1_000, config.limits.agentTimeoutMs - (Date.now() - parent.parentRunStartedAt));
+  const startedAt = runtime.timestamp();
+  const child: AgentRunOptions = {
+    name: "explorer",
+    task: question,
+    cwd: parent.cwd,
+    extensionRoot: runtime.extensionRoot,
+    config: config.agents.explorer,
+    promptFileOverride: "explorer-spawn.md",
+    timeoutMs: remainingBudget,
+    signal: controller.signal,
+    allowedWritePaths: [],
+    readRoots: [store.runDir],
+    onEvent: event => {
+      void store.event("agent_event", { stepId: parent.step.id, agent: "explorer", spawned: true, event }).catch(() => undefined);
+    }
+  };
+  try {
+    const result = await runtime.agents.run(child);
+    if (result.transcript) {
+      const completedAt = runtime.timestamp();
+      const name = store.artifactName({
+        ...parent.qualifier,
+        sequence: parent.step.sequence,
+        stage: parent.stage,
+        agent: parent.agent,
+        kind: `spawn-${++parent.spawnCount.value}-transcript`
+      });
+      const artifact = buildTranscriptArtifact({
+        transcript: result.transcript,
+        stepId: parent.step.id,
+        agent: "explorer",
+        invocation: 0,
+        mode: "execute",
+        status: "succeeded",
+        model: parent.explorerModel,
+        startedAt,
+        completedAt
+      });
+      await store.saveJson(name, artifact);
+    }
+    return { text: result.text, usage: result.usage, transcript: result.transcript };
+  } catch (error) {
+    if (error instanceof AgentCancelledError) throw error;
+    const usage = error instanceof AgentIncompleteResponseError ? error.usage : undefined;
+    return { text: `Explorer sub-agent failed: ${messageOf(error)}`, usage };
+  }
+}
+
+function buildTranscriptArtifact(options: {
+  transcript: AgentTranscript;
+  stepId: string;
+  agent: AgentName;
+  invocation: number;
+  mode: AgentInvocationRecord["mode"];
+  status: AgentInvocationRecord["status"];
+  model: string;
+  startedAt: string;
+  completedAt: string;
+}): AgentTranscriptArtifact {
+  return {
+    ...options.transcript,
+    stepId: options.stepId,
+    agent: options.agent,
+    invocation: options.invocation,
+    mode: options.mode,
+    status: options.status,
+    model: options.model,
+    startedAt: options.startedAt,
+    completedAt: options.completedAt
+  };
+}
+
+function omitSpawnExplorer(runBase: Omit<AgentRunOptions, "task">): Omit<AgentRunOptions, "task"> {
+  const { spawnExplorer: _omitted, ...rest } = runBase;
+  return rest;
 }

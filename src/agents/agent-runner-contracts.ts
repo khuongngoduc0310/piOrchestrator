@@ -46,6 +46,25 @@ export interface AgentRunOptions {
   onUsage?: (snapshot: AgentUsageSnapshot) => void;
   allowedWritePaths?: readonly string[];
   readRoots?: readonly string[];
+  /** Use a different prompt file than the role's configured one (e.g. for spawned sub-agents). */
+  promptFileOverride?: string;
+  /** Spawn a read-only explorer sub-agent. When absent, no spawn tool is registered. */
+  spawnExplorer?: (question: string) => Promise<SpawnExplorerResult>;
+}
+
+export interface SpawnExplorerResult {
+  text: string;
+  usage?: AgentUsage;
+  transcript?: AgentTranscript;
+}
+
+export const SPAWN_EXPLORER_TOOL = "spawn_explorer";
+
+export const SPAWNING_ROLES = ["planner", "reviewer", "debugger"] as const;
+export type SpawningRole = (typeof SPAWNING_ROLES)[number];
+
+export function isSpawningRole(name: AgentName): name is SpawningRole {
+  return (SPAWNING_ROLES as readonly AgentName[]).includes(name);
 }
 
 export interface AgentExecutor {

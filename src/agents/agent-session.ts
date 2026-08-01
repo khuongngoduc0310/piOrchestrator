@@ -1,15 +1,24 @@
 import { lstat, realpath } from "node:fs/promises";
 import path from "node:path";
+import { Type } from "typebox";
 import {
   createAgentSession,
   DefaultResourceLoader,
+  defineTool,
   getAgentDir,
   SessionManager,
   type ExtensionFactory,
   type ModelRuntime,
-  type ToolCallEvent
+  type ToolCallEvent,
+  type ToolDefinition
 } from "@earendil-works/pi-coding-agent";
-import type { AgentRunOptions, AgentSessionLike, ResolvedAgent } from "./agent-runner-contracts.js";
+import type {
+  AgentRunOptions,
+  AgentSessionLike,
+  ResolvedAgent,
+  SpawnExplorerResult
+} from "./agent-runner-contracts.js";
+import { SPAWN_EXPLORER_TOOL, isSpawningRole } from "./agent-runner-contracts.js";
 import { normalizeRepositoryPath } from "../workspace/path-validation.js";
 import { intersectRoleTools, ROLE_MUTATION_KINDS } from "./role-capabilities.js";
 import type { AgentName } from "../types.js";
@@ -21,8 +30,11 @@ export async function createSdkSession(options: {
   runtime: ModelRuntime;
 }): Promise<AgentSessionLike> {
   if (!options.resolved.model) throw new Error(`Model was not resolved for ${options.run.name}`);
-  const tools = intersectRoleTools(options.run.name, options.run.config.tools);
+  const tools = resolveSessionToolAllowlist(options.run);
   if (tools.length === 0) throw new Error(`${options.run.name} has no tools permitted by its role policy`);
+  const canSpawn = shouldEnableSpawnTool(options.run);
+  const customTools = canSpawn ? [spawnExplorerTool(options.run)] : undefined;
+  assertCustomToolsAdmitted(tools, customTools);
   const policyPrompt = rolePolicyPrompt(options.run.name, options.run.allowedWritePaths ?? []);
   const loader = new DefaultResourceLoader({
     cwd: options.run.cwd,
@@ -32,7 +44,7 @@ export async function createSdkSession(options: {
     noPromptTemplates: true,
     noThemes: true,
     appendSystemPromptOverride: () => [options.rolePrompt, policyPrompt],
-    extensionFactories: [createCapabilityGuard(options.run, tools)]
+    extensionFactories: [createCapabilityGuard(options.run)]
   });
   await loader.reload();
   const { session } = await createAgentSession({
@@ -40,11 +52,59 @@ export async function createSdkSession(options: {
     model: options.resolved.model,
     thinkingLevel: options.resolved.thinkingLevel,
     tools,
+    customTools,
     resourceLoader: loader,
     sessionManager: SessionManager.inMemory(options.run.cwd),
     modelRuntime: options.runtime
   });
   return session;
+}
+
+/** A role may spawn explorers only when the orchestrator supplied the callback for this run. */
+export function shouldEnableSpawnTool(run: AgentRunOptions): boolean {
+  return run.spawnExplorer !== undefined && isSpawningRole(run.name);
+}
+
+/**
+ * Single definition of the tool allowlist for a run's session. Both the session
+ * and the capability guard derive their lists from here, so a tool can never be
+ * registered without being admitted. Add any new custom tool to this function.
+ */
+export function resolveSessionToolAllowlist(run: AgentRunOptions): string[] {
+  const roleTools = intersectRoleTools(run.name, run.config.tools);
+  return shouldEnableSpawnTool(run) ? [...roleTools, SPAWN_EXPLORER_TOOL] : roleTools;
+}
+
+/** Fail fast: every registered custom tool must be admitted by the allowlist. */
+export function assertCustomToolsAdmitted(tools: readonly string[], customTools?: readonly ToolDefinition[]): void {
+  const allowlist = new Set(tools);
+  for (const tool of customTools ?? []) {
+    if (!allowlist.has(tool.name)) {
+      throw new Error(`Custom tool ${tool.name} is not in the session allowlist; add it to resolveSessionToolAllowlist`);
+    }
+  }
+}
+
+function spawnExplorerTool(run: AgentRunOptions): ToolDefinition {
+  return defineTool({
+    name: SPAWN_EXPLORER_TOOL,
+    label: "Spawn explorer",
+    description:
+      "Spawn a read-only explorer sub-agent to investigate one focused question in the repository and report findings as plain text. Use sparingly and only when your own read tools cannot determine the answer; the reply is advisory context, not evidence you observed.",
+    promptSnippet: "spawn_explorer({ question }) — investigate a focused question via a read-only sub-agent",
+    parameters: Type.Object({
+      question: Type.String({ minLength: 1 })
+    }),
+    execute: async (_toolCallId, params): Promise<{ content: { type: "text"; text: string }[]; details: { question: string } }> => {
+      const spawn = run.spawnExplorer;
+      if (!spawn) throw new Error("Explorer spawning is not available in this run");
+      const result: SpawnExplorerResult = await spawn(params.question);
+      return {
+        content: [{ type: "text", text: result.text }],
+        details: { question: params.question }
+      };
+    }
+  });
 }
 
 function rolePolicyPrompt(name: AgentName, allowedWritePaths: readonly string[]): string {
@@ -55,8 +115,8 @@ function rolePolicyPrompt(name: AgentName, allowedWritePaths: readonly string[])
   return `Runtime capability policy (authoritative): shell execution is disabled. ${scope}`;
 }
 
-function createCapabilityGuard(run: AgentRunOptions, tools: readonly string[]): ExtensionFactory {
-  const allowedTools = new Set(tools);
+export function createCapabilityGuard(run: AgentRunOptions): ExtensionFactory {
+  const allowedTools = new Set(resolveSessionToolAllowlist(run));
   const writePaths = new Set((run.allowedWritePaths ?? []).map(file => normalizeRepositoryPath(file)));
   const readRoots = [run.cwd, ...(run.readRoots ?? [])].map(root => path.resolve(root));
   return pi => {
@@ -84,6 +144,8 @@ function createCapabilityGuard(run: AgentRunOptions, tools: readonly string[]): 
   };
 }
 
+// Tools whose input.path must be path-checked. Any future tool with a path
+// argument must be added here or its paths silently skip validation.
 function toolPath(event: ToolCallEvent): string | undefined {
   if (!["read", "write", "edit", "grep", "find", "ls"].includes(event.toolName)) return undefined;
   const value = (event.input as { path?: unknown }).path;

@@ -1,7 +1,7 @@
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import type { AgentSessionEvent, ModelRuntime } from "@earendil-works/pi-coding-agent";
-import { AgentIncompleteResponseError, AgentTimeoutError, normalizeAgentTranscript, PiSdkAgentExecutor } from "./agent-runner.js";
+import { AgentIncompleteResponseError, AgentTimeoutError, normalizeAgentTranscript, PiSdkAgentExecutor, type AgentRunOptions } from "./agent-runner.js";
 import { DEFAULT_CONFIG } from "../config/config.js";
 
 const model = { provider: "test", id: "model" } as never;
@@ -369,6 +369,97 @@ describe("PiSdkAgentExecutor", () => {
       timeoutMs: 100,
       signal: new AbortController().signal
     })).rejects.toThrow(expectedMessage);
+  });
+
+  it("folds spawned explorer usage into the parent run and honors promptFileOverride", async () => {
+    let listener: ((event: AgentSessionEvent) => void) | undefined;
+    let capturedRun: AgentRunOptions | undefined;
+    const executor = new PiSdkAgentExecutor({
+      runtime: async () => runtime,
+      resolveModel: () => resolved,
+      createSession: async options => {
+        expect(options.rolePrompt).toContain("Explorer sub-agent role");
+        capturedRun = options.run;
+        return {
+          isStreaming: false,
+          subscribe: callback => { listener = callback; return () => undefined; },
+          prompt: async () => {
+            await capturedRun?.spawnExplorer?.("Where is the auth flow?");
+            listener?.(assistantEvent("planned"));
+          },
+          abort: async () => undefined,
+          dispose: () => undefined
+        };
+      }
+    });
+    await executor.preflight(DEFAULT_CONFIG, process.cwd(), path.resolve("."));
+    const result = await executor.run({
+      name: "planner",
+      task: "task",
+      cwd: process.cwd(),
+      extensionRoot: path.resolve("."),
+      config: DEFAULT_CONFIG.agents.planner,
+      timeoutMs: 1000,
+      signal: new AbortController().signal,
+      promptFileOverride: "explorer-spawn.md",
+      spawnExplorer: async () => ({
+        text: "findings",
+        usage: {
+          input: 5,
+          output: 7,
+          cacheRead: 1,
+          cacheWrite: 0,
+          totalTokens: 13,
+          cost: 1.5,
+          costBreakdown: { input: 1, output: 0.5, cacheRead: 0, cacheWrite: 0 }
+        }
+      })
+    });
+
+    expect(capturedRun?.spawnExplorer).toBeDefined();
+    expect(result.usage).toEqual({
+      input: 7,
+      output: 10,
+      cacheRead: 2,
+      cacheWrite: 0,
+      totalTokens: 19,
+      cost: 1.8,
+      costBreakdown: { input: 1.1, output: 0.7, cacheRead: 0, cacheWrite: 0 }
+    });
+  });
+
+  it("propagates spawned explorer failures so the SDK marks the tool result as an error", async () => {
+    let listener: ((event: AgentSessionEvent) => void) | undefined;
+    let capturedRun: AgentRunOptions | undefined;
+    const executor = new PiSdkAgentExecutor({
+      runtime: async () => runtime,
+      resolveModel: () => resolved,
+      createSession: async options => {
+        capturedRun = options.run;
+        return {
+          isStreaming: false,
+          subscribe: callback => { listener = callback; return () => undefined; },
+          prompt: async () => {
+            await expect(capturedRun?.spawnExplorer?.("question")).rejects.toThrow("boom");
+            listener?.(assistantEvent("done"));
+          },
+          abort: async () => undefined,
+          dispose: () => undefined
+        };
+      }
+    });
+    await executor.preflight(DEFAULT_CONFIG, process.cwd(), path.resolve("."));
+    const result = await executor.run({
+      name: "planner",
+      task: "task",
+      cwd: process.cwd(),
+      extensionRoot: path.resolve("."),
+      config: DEFAULT_CONFIG.agents.planner,
+      timeoutMs: 1000,
+      signal: new AbortController().signal,
+      spawnExplorer: async () => { throw new Error("boom"); }
+    });
+    expect(result.text).toBe("done");
   });
 
   it("disposes the session when subscription fails", async () => {

@@ -17,6 +17,7 @@ import {
 } from "./agent-runner-contracts.js";
 import { createSdkSession, resolvePromptPath } from "./agent-session.js";
 import { normalizeAgentTranscript, updateTranscriptMessages } from "./agent-transcript.js";
+import { addUsage, cloneUsage, sdkUsageToAgentUsage } from "./agent-usage.js";
 import type {
   AgentConfig,
   AgentName,
@@ -146,6 +147,7 @@ export class PiSdkAgentExecutor implements AgentExecutor {
     let transcript: AgentTranscript | undefined;
     let transcriptMessages: unknown[] = [];
     let lastTranscriptEmitAt = 0;
+    const toolStartTimestamps = new Map<string, number>();
     const usage: AgentUsage = {
       input: 0,
       output: 0,
@@ -155,15 +157,24 @@ export class PiSdkAgentExecutor implements AgentExecutor {
       totalTokens: 0,
       costBreakdown: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }
     };
-    let hasReasoning = false;
-    let hasCacheWrite1h = false;
+    const spawnExplorer = options.spawnExplorer
+      ? async (question: string): Promise<import("./agent-runner-contracts.js").SpawnExplorerResult> => {
+        const result = await Promise.race([options.spawnExplorer!(question), stop]);
+        if (result.usage) addUsage(usage, result.usage);
+        return result;
+      }
+      : undefined;
+    const sessionRun = spawnExplorer ? { ...options, spawnExplorer } : options;
 
     try {
       const runtime = await withinDeadline(this.runtime());
-      const resolved = this.resolved.get(options.name) ?? await withinDeadline(this.resolveOne(options, runtime));
-      if (!resolved.model) throw new Error(`Model was not resolved for ${options.name}`);
-      const rolePrompt = await withinDeadline(readFile(resolved.promptPath, "utf8"));
-      const creation = this.sessionFactory({ run: options, rolePrompt, resolved, runtime });
+      const resolved = this.resolved.get(sessionRun.name) ?? await withinDeadline(this.resolveOne(sessionRun, runtime));
+      if (!resolved.model) throw new Error(`Model was not resolved for ${sessionRun.name}`);
+      const promptPath = sessionRun.promptFileOverride
+        ? await withinDeadline(resolvePromptPath(sessionRun.extensionRoot, sessionRun.promptFileOverride))
+        : resolved.promptPath;
+      const rolePrompt = await withinDeadline(readFile(promptPath, "utf8"));
+      const creation = this.sessionFactory({ run: sessionRun, rolePrompt, resolved, runtime });
       pendingSession = creation;
       void creation.then(lateSession => {
         if (!stopped || session === lateSession) return;
@@ -172,7 +183,6 @@ export class PiSdkAgentExecutor implements AgentExecutor {
       }).catch(() => undefined);
       session = await withinDeadline(creation);
       if (options.signal.aborted) throw new AgentCancelledError(options.name);
-      resetToolTimestamps();
       unsubscribe = session.subscribe(event => {
         const nextTranscriptMessages = updateTranscriptMessages(transcriptMessages, event);
         const transcriptChanged = nextTranscriptMessages !== transcriptMessages;
@@ -185,7 +195,7 @@ export class PiSdkAgentExecutor implements AgentExecutor {
           lastTranscriptEmitAt = now;
           try { options.onTranscript?.(transcript); } catch { /* observers must not interrupt execution */ }
         }
-        const metadata = sanitizeEvent(event);
+        const metadata = sanitizeEvent(event, toolStartTimestamps);
         if (metadata) options.onEvent?.(metadata);
         if (event.type !== "message_end" || event.message.role !== "assistant") return;
         const text = event.message.content
@@ -199,26 +209,7 @@ export class PiSdkAgentExecutor implements AgentExecutor {
         finalProvider = event.message.provider;
         finalModel = event.message.responseModel ?? event.message.model;
         finalApi = event.message.api;
-        usage.input += event.message.usage.input;
-        usage.output += event.message.usage.output;
-        usage.cacheRead += event.message.usage.cacheRead;
-        usage.cacheWrite += event.message.usage.cacheWrite;
-        usage.totalTokens = (usage.totalTokens ?? 0) + event.message.usage.totalTokens;
-        if (event.message.usage.reasoning !== undefined) {
-          usage.reasoning = (usage.reasoning ?? 0) + event.message.usage.reasoning;
-          hasReasoning = true;
-        }
-        if (event.message.usage.cacheWrite1h !== undefined) {
-          usage.cacheWrite1h = (usage.cacheWrite1h ?? 0) + event.message.usage.cacheWrite1h;
-          hasCacheWrite1h = true;
-        }
-        usage.costBreakdown!.input += event.message.usage.cost.input;
-        usage.costBreakdown!.output += event.message.usage.cost.output;
-        usage.costBreakdown!.cacheRead += event.message.usage.cost.cacheRead;
-        usage.costBreakdown!.cacheWrite += event.message.usage.cost.cacheWrite;
-        usage.cost += event.message.usage.cost.total;
-        if (!hasReasoning) delete usage.reasoning;
-        if (!hasCacheWrite1h) delete usage.cacheWrite1h;
+        addUsage(usage, sdkUsageToAgentUsage(event.message.usage));
         try {
           options.onUsage?.({
             usage: cloneUsage(usage),
@@ -292,18 +283,7 @@ export class PiSdkAgentExecutor implements AgentExecutor {
   }
 }
 
-function cloneUsage(usage: AgentUsage): AgentUsage {
-  return {
-    ...usage,
-    costBreakdown: usage.costBreakdown ? { ...usage.costBreakdown } : undefined
-  };
-}
-
-let toolStartTimestamps = new Map<string, number>();
-
-function resetToolTimestamps(): void { toolStartTimestamps = new Map(); }
-
-function sanitizeEvent(event: AgentSessionEvent): import("./agent-runner-contracts.js").AgentEventMetadata | undefined {
+function sanitizeEvent(event: AgentSessionEvent, toolStartTimestamps: Map<string, number>): import("./agent-runner-contracts.js").AgentEventMetadata | undefined {
   const now = Date.now();
   switch (event.type) {
     case "agent_start":

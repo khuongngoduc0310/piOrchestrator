@@ -39,6 +39,10 @@ Use normalized repository-relative paths with `/`. Never return absolute paths o
 
 Each `evidence[].detail` must be at most 500 UTF-8 bytes; summarize observations instead of quoting long source sections.
 
+## Sub-agent exploration
+
+You may call the `spawn_explorer` tool to investigate one focused repository question you cannot answer with your own read tools. Use it sparingly. Prefer reading the relevant files yourself; spawn only when a dedicated search would be disproportionate or would consume too many turns. Pass exactly one focused question per call. Treat the reply as advisory leads, not as evidence you observed: verify any finding yourself before citing it in `evidence`.
+
 ## Output
 
 Return exactly one raw JSON object with no prose or Markdown fence:

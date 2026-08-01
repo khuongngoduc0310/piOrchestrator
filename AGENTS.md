@@ -21,7 +21,7 @@
 - `src/orchestrator.ts` is a thin public facade. Mutable services/state and workflow phases live under `src/orchestration/`; SDK agent execution belongs under `src/agents/`, checks under `src/checks/`, and workspace policy under `src/workspace/`.
 - All user-selected routes share exploration/planning, then dispatch through fixed route templates. Check setup is deferred until a mutation route is approved; read-only and planning-only routes run neither checks nor mutation agents.
 - `prompts/*.md` are runtime contracts, not documentation. Changes to agent tasks or responses usually require coordinated edits to `src/agent-task-types.ts`, `src/agents/agent-output-validation.ts`, the relevant prompt, and contract tests such as `src/agents/prompts.test.ts` and `src/validation.test.ts`.
-- Agent sessions are in-memory Pi SDK sessions, not subprocesses. `src/agents/agent-session.ts` disables nested extensions, skills, prompt templates, and shell access; project checks are separate orchestrator-owned `pi.exec` calls.
+- Agent sessions are in-memory Pi SDK sessions, not subprocesses. `src/agents/agent-session.ts` disables nested extensions, skills, prompt templates, and shell access; project checks are separate orchestrator-owned `pi.exec` calls. Planner, reviewer, and debugger may spawn read-only `explorer` sub-agents through the orchestrator-owned `spawn_explorer` tool; spawned runs use the dedicated `prompts/explorer-spawn.md` contract and their usage is folded into the parent step.
 
 ## Safety And State
 
