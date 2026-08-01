@@ -71,7 +71,14 @@ describe("worktree", () => {
   it("rejects a non-repository directory", async () => {
     const directory = await mkdtemp(path.join(os.tmpdir(), "pi-no-repo-"));
     directories.push(directory);
-    await expect(createWorktree(directory, "failure")).rejects.toThrow("Not a git repository");
+    const previousCeiling = process.env.GIT_CEILING_DIRECTORIES;
+    process.env.GIT_CEILING_DIRECTORIES = os.tmpdir().replace(/\\/g, "/");
+    try {
+      await expect(createWorktree(directory, "failure")).rejects.toThrow("Not a git repository");
+    } finally {
+      if (previousCeiling === undefined) delete process.env.GIT_CEILING_DIRECTORIES;
+      else process.env.GIT_CEILING_DIRECTORIES = previousCeiling;
+    }
   });
 
   it("attaches a valid persisted detached worktree and validates its snapshot digest", async () => {

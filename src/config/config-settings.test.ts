@@ -100,7 +100,8 @@ describe("config-settings", () => {
       if (callCount === 4) return " Review plan before approval";
       if (callCount === 5) return " Review plan revisions";
       if (callCount === 6) return "Back to categories";
-      if (callCount === 7) return "Save all changes";
+      if (callCount === 7) return "Back to categories";
+      if (callCount === 8) return "Save all changes";
       return "Cancel";
     });
     const confirm = vi.fn(async () => true);
@@ -108,7 +109,7 @@ describe("config-settings", () => {
     const result = await openSettings(cwd, ctx, { isRunning: () => false, save: vi.fn() });
     expect(result).toBe("saved");
     const saved = await loadConfig(cwd);
-    expect(saved.humanInTheLoop.planApproval).toBe(true);
+    expect(saved.humanInTheLoop.planApproval).toBe(false);
     expect(saved.humanInTheLoop.planRevisionApproval).toBe(true);
   });
 
@@ -122,7 +123,8 @@ describe("config-settings", () => {
       if (callCount === 3) return "Custom / advanced";
       if (callCount === 4) return " Handle exceptional decisions — scope expansion, review rejection, repair limits";
       if (callCount === 5) return "Back to categories";
-      if (callCount === 6) return "Save all changes";
+      if (callCount === 6) return "Back to categories";
+      if (callCount === 7) return "Save all changes";
       return "Cancel";
     });
     const confirm = vi.fn(async () => true);

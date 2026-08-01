@@ -2468,7 +2468,15 @@ describe("Orchestrator", () => {
         throw new Error("provider disconnected");
       }
     };
-    const { engine } = await scenario([], [], undefined, { agentExecutor: failingAgent });
+    const previousCeiling = process.env.GIT_CEILING_DIRECTORIES;
+    process.env.GIT_CEILING_DIRECTORIES = os.tmpdir().replace(/\\/g, "/");
+    let engine: Orchestrator;
+    try {
+      ({ engine } = await scenario([], [], undefined, { agentExecutor: failingAgent }));
+    } finally {
+      if (previousCeiling === undefined) delete process.env.GIT_CEILING_DIRECTORIES;
+      else process.env.GIT_CEILING_DIRECTORIES = previousCeiling;
+    }
     const state = engine.getState()!;
     const invocation = state.steps[0].invocations![0];
     const transcript = JSON.parse(await readFile(path.join(state.runDir, invocation.transcriptArtifact!), "utf8"));

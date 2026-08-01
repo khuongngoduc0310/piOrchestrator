@@ -81,9 +81,16 @@ describe("Git invocation tree diffs", () => {
   it("reports an unavailable diff outside Git", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "pi-no-git-"));
     directories.push(root);
-    const capture = await captureGitTree(root);
-    const diff = await compareGitTrees(capture, capture);
-    expect(diff.metadata).toMatchObject({ status: "unavailable", changedFiles: [], patchBytes: 0 });
+    const previousCeiling = process.env.GIT_CEILING_DIRECTORIES;
+    process.env.GIT_CEILING_DIRECTORIES = os.tmpdir().replace(/\\/g, "/");
+    try {
+      const capture = await captureGitTree(root);
+      const diff = await compareGitTrees(capture, capture);
+      expect(diff.metadata).toMatchObject({ status: "unavailable", changedFiles: [], patchBytes: 0 });
+    } finally {
+      if (previousCeiling === undefined) delete process.env.GIT_CEILING_DIRECTORIES;
+      else process.env.GIT_CEILING_DIRECTORIES = previousCeiling;
+    }
   });
 
   it("rejects malformed persisted diff metadata", () => {
