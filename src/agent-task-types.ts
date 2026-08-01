@@ -424,6 +424,8 @@ export interface InterviewAnswer {
 export interface InterviewQAndA {
   question: InterviewQuestion;
   answer: InterviewAnswer;
+  /** Interview round this question was asked in; absent on model-echoed report qa. */
+  round?: number;
 }
 
 export type InterviewerTask =
@@ -438,8 +440,9 @@ export type InterviewerOutput =
 
 export interface InterviewerAssessment {
   goal: string;
-  clarity: "clear" | "more_information_needed";
+  /** Short synthesis of what is known so far; shown verbatim to the user, who decides whether the goal is clear. */
   summary: string;
+  /** Specific gaps the interviewer still sees; shown as follow-up context. */
   openQuestions?: string[];
 }
 

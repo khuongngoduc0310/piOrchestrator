@@ -29,4 +29,29 @@ describe("ArtifactViewer", () => {
     expect(onOpenArtifact).toHaveBeenCalledOnce();
     expect(onOpenArtifact).toHaveBeenCalledWith("plan.md");
   });
+
+  it("lists run-level artifact names and de-duplicates step artifacts", () => {
+    const onOpenArtifact = vi.fn();
+    const snapshot = {
+      run: { artifactNames: ["requirements.md", "requirements.json"] },
+      recentSteps: [{ id: "step-1", artifact: "requirements.md" }],
+    } as unknown as OrchestratorViewModel;
+
+    render(
+      <ArtifactViewer
+        snapshot={snapshot}
+        selectedArtifact={null}
+        runId="run-1"
+        onCloseArtifact={vi.fn()}
+        onOpenArtifact={onOpenArtifact}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "requirements.md" }));
+    fireEvent.click(screen.getByRole("button", { name: "requirements.json" }));
+
+    expect(onOpenArtifact).toHaveBeenNthCalledWith(1, "requirements.md");
+    expect(onOpenArtifact).toHaveBeenNthCalledWith(2, "requirements.json");
+    expect(screen.getAllByRole("button", { name: "requirements.md" })).toHaveLength(1);
+  });
 });

@@ -451,7 +451,6 @@ export function validateInterviewerOutput(value: unknown, path = "interviewer"):
       action: "assess",
       assessment: {
         goal: string(assessment.goal, `${path}.assessment.goal`),
-        clarity: enumValue(assessment.clarity, `${path}.assessment.clarity`, ["clear", "more_information_needed"] as const),
         summary: string(assessment.summary, `${path}.assessment.summary`),
         ...(openQuestions ? { openQuestions } : {})
       }

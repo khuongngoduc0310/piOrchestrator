@@ -31,6 +31,9 @@ export function ArtifactViewer({
     addUnique(step.rawArtifact, names, list);
     addUnique(step.mutationArtifact, names, list);
   }
+  for (const name of run?.artifactNames ?? []) {
+    addUnique(name, names, list);
+  }
   if (run?.failedArtifact && !names.has(run.failedArtifact)) {
     list.push(run.failedArtifact);
   }

@@ -95,6 +95,7 @@ Alternatively, set the following config directly:
     "worktreeIsolation": true
   },
   "agents": {
+    "interviewer": { "model": "anthropic/claude-sonnet-4-5", "thinking": "medium", "tools": ["read", "grep", "find", "ls"], "promptFile": "interviewer.md" },
     "explorer": { "model": "anthropic/claude-sonnet-4-5", "tools": ["read", "grep", "find", "ls"], "promptFile": "explorer.md" },
     "planner": { "model": "anthropic/claude-sonnet-4-5", "thinking": "high", "tools": ["read", "grep", "find", "ls"], "promptFile": "planner.md" },
     "reviewer": { "model": "anthropic/claude-sonnet-4-5", "thinking": "high", "tools": ["read", "grep", "find", "ls"], "promptFile": "reviewer.md" },

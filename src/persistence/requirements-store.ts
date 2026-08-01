@@ -5,8 +5,8 @@ import type { ArtifactContent, RequirementsDocument } from "../types.js";
 import { atomicReplace } from "./atomic-write.js";
 import { validateRequirementsDocument } from "../validation.js";
 
-const REQUIREMENTS_JSON = "requirements.json";
-const REQUIREMENTS_MARKDOWN = "requirements.md";
+export const REQUIREMENTS_JSON = "requirements.json";
+export const REQUIREMENTS_MARKDOWN = "requirements.md";
 
 /**
  * Persistence for requirements-builder sessions. Lives under

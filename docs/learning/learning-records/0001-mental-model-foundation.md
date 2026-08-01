@@ -1,0 +1,7 @@
+# 0001 — Established mental model foundation: author, not yet owner
+
+The user is the sole author of piOrchestrator but had the agent build most of it; they disclosed deep hands-on familiarity with specific surfaces — the `/requirements` command internals (question hub coroutines, parked prompts, the dashboard-vs-TUI decision race, the arrow-key translator), Mission Control, and dashboard panels — without a whole-system mental model. Lesson 0001 delivered the unifying map: the core inversion (orchestrator owns every transition; agents are disposable workers), the canonical pipeline with deferred check setup, the eight fixed route templates, the two capability classes of roles, and the two UI surfaces plus the interview as front doors.
+
+Evidence: the mission interview ("Own it fully myself" — explain it to others and drive changes without relying on the agent's summaries); the learner's own Phase A–C work was cited inside the lesson as confirmation of the pattern (engine-owned coroutines, agents emit validated actions only).
+
+Implications: the zone of proximal development is the orchestration core. Next lesson should be phases & route templates (`orchestrator-routes.ts`, `orchestrator-workflow.ts`), since the learner can now place it on the map. Quiz results from 0001 (retrieval practice on the core inversion, read-only-vs-checks, mutation permissions, Mission Control gate behavior) will show which pieces of the map need reinforcement before moving deeper.

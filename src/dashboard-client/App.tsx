@@ -23,6 +23,10 @@ import { LiveConsole } from "./components/LiveConsole.js";
 import { CommandPalette, type PaletteCommand } from "./components/CommandPalette.js";
 import { CompletionReport } from "./components/CompletionReport.js";
 import { DecisionPanel } from "./components/DecisionPanel.js";
+import { InterviewDecisionPanel } from "./components/InterviewDecisionPanel.js";
+import { InterviewSetPanel } from "./components/InterviewSetPanel.js";
+import { InterviewRecord } from "./components/InterviewRecord.js";
+import { RequirementReport } from "./components/RequirementReport.js";
 
 export function App() {
   const [state, dispatch] = useReducer(dashboardReducer, INITIAL_STATE);
@@ -33,6 +37,7 @@ export function App() {
   const [narrow, setNarrow] = useState(() => typeof window !== "undefined" && isNarrowWorkspace(window.innerWidth));
   const [selectedMilestone, setSelectedMilestone] = useState<WorkflowMilestone | null>(null);
   const abortRef = useRef<AbortController | null>(null);
+  const submittingRef = useRef(false);
 
   useDashboardStream(dispatchAction);
   const liveRunId = state.liveSnapshot?.run?.id ?? null;
@@ -46,7 +51,8 @@ export function App() {
         : null;
   const runId = state.selectedRunId ?? snap?.run?.id ?? null;
   const elapsedText = useElapsedTime(snap);
-  const approvalActive = Boolean(isSelectedLiveRun(state) && state.pendingDecision?.dashboardAvailable && state.pendingDecision);
+  const approvalActive = Boolean(isSelectedLiveRun(state) && state.pendingDecision?.dashboardAvailable && state.pendingDecision) ||
+    (isSelectedLiveRun(state) && state.questionSet.length > 0);
   const agentHistoryStructureRevision = (snap?.agents ?? [])
     .map(agent => `${agent.name}:${agent.status}:${agent.invocationCount ?? 0}`)
     .join("|");
@@ -85,7 +91,7 @@ export function App() {
     abortRef.current = controller;
     const id = state.currentDecisionId;
     getDecisionPreview(id, controller.signal).then(result => {
-      if (!controller.signal.aborted) dispatchAction({ type: "planPreviewLoaded", decisionId: id, markdown: result.content, actions: result.actions });
+      if (!controller.signal.aborted) dispatchAction({ type: "planPreviewLoaded", decisionId: id, markdown: result.content, actions: result.actions, question: result.question ?? null });
     }).catch((error: unknown) => {
       if (!controller.signal.aborted) dispatchAction({ type: "planPreviewError", decisionId: id, error: error instanceof Error ? error.message : "Failed to load preview" });
     });
@@ -128,10 +134,21 @@ export function App() {
 
   async function submit(action: HumanDecisionAction, feedback?: string) {
     const decisionId = state.currentDecisionId;
-    if (!decisionId) return;
+    if (!decisionId || submittingRef.current) return;
+    submittingRef.current = true;
     dispatchAction({ type: "decisionSubmitting" });
     try { await submitDecision(decisionId, action, feedback); dispatchAction({ type: "decisionSubmitted", decisionId }); }
     catch (error) { dispatchAction({ type: "decisionError", decisionId, error: error instanceof Error ? error.message : "Submission failed" }); }
+    finally { submittingRef.current = false; }
+  }
+
+  async function submitQuestion(decisionId: string, action: HumanDecisionAction, feedback?: string) {
+    if (submittingRef.current) return;
+    submittingRef.current = true;
+    dispatchAction({ type: "questionSubmitting", decisionId });
+    try { await submitDecision(decisionId, action, feedback); dispatchAction({ type: "questionSubmitted", decisionId }); }
+    catch (error) { dispatchAction({ type: "questionError", decisionId, error: error instanceof Error ? error.message : "Submission failed" }); }
+    finally { submittingRef.current = false; }
   }
 
   const commands: PaletteCommand[] = [
@@ -164,6 +181,8 @@ export function App() {
             <MilestoneRail milestones={snap?.milestones ?? []} selectedId={selectedMilestone?.id ?? null} onSelect={selectMilestone} />
           </div>
           <section className="artifact-index" aria-label="Artifact index"><ArtifactViewer snapshot={snap} selectedArtifact={null} runId={runId} onCloseArtifact={() => {}} onOpenArtifact={openArtifact} /></section>
+          {snap?.run?.requirement && <RequirementReport requirement={snap.run.requirement} />}
+          {snap?.run?.qa !== undefined && <InterviewRecord qa={snap.run.qa} />}
         </main>
         {(!narrow || inspectorOpen) && <aside className={`context-inspector${inspectorOpen ? " open" : ""}`} aria-label="Context inspector">
           <div className="inspector-heading"><div><span className="section-kicker">CONTEXT DOCK</span><h2>{selectedMilestone ? "Milestone" : state.selectedArtifact ? "Artifact" : state.selectedAgent ? "Agent" : "Inspector"}</h2></div><button type="button" className="icon-btn" onClick={() => { setInspectorOpen(false); setSelectedMilestone(null); dispatchAction({ type: "artifactClosed" }); }} aria-label="Close inspector">x</button></div>
@@ -174,7 +193,8 @@ export function App() {
     </div>
     {state.view === "run" && isViewingLiveRun(state) && <LiveConsole snapshot={snap} />}
     {!approvalActive && <CommandPalette open={paletteOpen} commands={commands} onClose={() => setPaletteOpen(false)} />}
-    {showDecision && <div className="decision-overlay"><DecisionPanel key={state.currentDecisionId!} decisionId={state.currentDecisionId!} kind={state.pendingDecision!.kind} label={state.pendingDecision!.label} planMarkdown={state.planMarkdown} allowedActions={state.allowedActions} previewStatus={state.previewStatus} previewError={state.previewError} submissionStatus={state.submissionStatus} submissionError={state.submissionError} onRetryPreview={() => dispatchAction({ type: "planPreviewRetryRequested" })} onSubmitAction={submit} onDismissError={() => dispatchAction({ type: "decisionDismissed" })} /></div>}
+    {isSelectedLiveRun(state) && state.questionSet.length > 0 && <InterviewSetPanel key={runId} runId={runId} questions={state.questionSet} focusIndex={state.questionFocusIndex} onFocus={(index) => dispatchAction({ type: "questionFocusMoved", index })} submissions={state.questionSubmissions} errors={state.questionErrors} onSubmitAction={submitQuestion} onDismissError={(decisionId) => dispatchAction({ type: "questionDismissed", decisionId })} />}
+    {showDecision && <div className="decision-overlay">{state.pendingDecision!.kind === "requirements_question" ? <InterviewDecisionPanel key={state.currentDecisionId!} decisionId={state.currentDecisionId!} label={state.pendingDecision!.label} content={state.planMarkdown} question={state.decisionQuestion} allowedActions={state.allowedActions} previewStatus={state.previewStatus} previewError={state.previewError} submissionStatus={state.submissionStatus} submissionError={state.submissionError} currentDecisionId={state.currentDecisionId} onRetryPreview={() => dispatchAction({ type: "planPreviewRetryRequested" })} onSubmitAction={submit} onDismissError={() => dispatchAction({ type: "decisionDismissed" })} /> : <DecisionPanel key={state.currentDecisionId!} decisionId={state.currentDecisionId!} kind={state.pendingDecision!.kind} label={state.pendingDecision!.label} planMarkdown={state.planMarkdown} allowedActions={state.allowedActions} previewStatus={state.previewStatus} previewError={state.previewError} submissionStatus={state.submissionStatus} submissionError={state.submissionError} onRetryPreview={() => dispatchAction({ type: "planPreviewRetryRequested" })} onSubmitAction={submit} onDismissError={() => dispatchAction({ type: "decisionDismissed" })} />}</div>}
     {isSelectedLiveRun(state) && state.submissionStatus === "submitted" && <div className="decision-overlay"><div className="decision-submitted" role="status"><strong>Decision submitted</strong><p>The server accepted the decision. Waiting for workflow continuation.</p></div></div>}
   </div>;
 }

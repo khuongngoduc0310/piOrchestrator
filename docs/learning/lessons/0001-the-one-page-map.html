@@ -1,0 +1,177 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Lesson 0001 — The one-page map — piOrchestrator</title>
+<link rel="stylesheet" href="../assets/lesson.css">
+</head>
+<body>
+<main class="lesson">
+
+<header class="lesson-header">
+  <p class="kicker">Lesson 0001 · High-level map</p>
+  <h1>The one-page map of piOrchestrator</h1>
+  <p class="subtitle">You already live in parts of this codebase. This lesson connects your islands into one model.</p>
+</header>
+
+<h2>What this is, in one sentence</h2>
+<p>
+<strong>piOrchestrator is a deterministic, sequential multi-agent workflow engine that runs inside the Pi coding agent.</strong>
+It takes a route and a request, runs a fixed sequence of role sessions, and decides everything itself — which agent runs, what it may touch, when to ask you, and whether the result is acceptable.
+</p>
+<p class="cite">Sources: <a href="../../../README.md">README.md</a> (opening), <a href="../../../AGENTS.md">AGENTS.md</a> §Architecture</p>
+
+<h2>The one idea to internalize</h2>
+<div class="callout">
+  <span class="callout-label">The core inversion</span>
+  <p>
+  <strong>The orchestrator owns every transition, validation decision, and retry limit. Agents cannot advance workflow state themselves.</strong>
+  </p>
+  <p>
+  This is the opposite of an "agent swarm" where agents decide what to do next. Here, agents are disposable workers: they receive a task envelope, produce a structured response, and the engine validates it and moves the state machine forward. No role session can ask for more tools, change the plan's scope, or start the next phase on its own.
+  </p>
+</div>
+<p class="cite">Source: <a href="../../../README.md">README.md</a> §Workflow — "The orchestrator owns every transition, validation decision, and retry limit. Agents cannot advance workflow state themselves."</p>
+
+<p>You saw this inversion from the inside when we built the arrow-key feature: the interview's question hub and the parked prompts are engine-owned coroutines, and the <em>agent</em> only ever emits a validated action. Same pattern everywhere else.</p>
+
+<h2>The canonical pipeline</h2>
+<p>Every route shares the same front half, then branches:</p>
+<div class="pipeline">
+  <span class="step">Explore</span><span class="arrow">→</span>
+  <span class="step">Plan</span><span class="arrow">→</span>
+  <span class="step">Plan review</span><span class="arrow">→</span>
+  <span class="step gate">Human gate</span><span class="arrow">→</span>
+  <span class="step mut">Check setup</span><span class="arrow">→</span>
+  <span class="step mut">Baseline</span><span class="arrow">→</span>
+  <span class="step mut">Tester</span><span class="arrow">→</span>
+  <span class="step mut">Builder</span><span class="arrow">→</span>
+  <span class="step mut">Review + fixes</span><span class="arrow">→</span>
+  <span class="step mut">Docs</span><span class="arrow">→</span>
+  <span class="step mut">Final checks</span><span class="arrow">→</span>
+  <span class="step mut">Worktree sync</span>
+</div>
+<ul>
+  <li><strong>Read-only routes</strong> (<code>review_only</code>, <code>investigation_only</code>) stop after their route-specific read-only result — never checks, never mutation agents.</li>
+  <li><strong>Planning-only routes</strong> (<code>planning_only</code>) complete right after approved planning.</li>
+  <li><strong>Mutation routes</strong> continue past the human gate: check setup is <em>deferred</em> until the plan is approved, then a green baseline, then the fixed mutation/review/finalization phases.</li>
+</ul>
+<div class="callout good">
+  <span class="callout-label">Why deferred check setup?</span>
+  <p>Because read-only routes should be usable on projects with no checks at all. Discovered checks are never executed or saved without your explicit approval — and only mutation routes need them.</p>
+</div>
+<p class="cite">Sources: <a href="../../../README.md">README.md</a> §Workflow, §Workflow routes, §Configuration; <a href="../../../AGENTS.md">AGENTS.md</a> — "Check setup is deferred until a mutation route is approved"</p>
+
+<h2>Routes and roles</h2>
+<p>The user picks one of eight validated routes; the orchestrator then owns the route's fixed phase sequence. Roles come in two capability classes, enforced at four boundaries (config, session, tool-call, post-session diff):</p>
+<table>
+  <tr><th>Class</th><th>Roles</th><th>Tools</th><th>Files</th></tr>
+  <tr><td>Read-only</td><td>Explorer, Planner, Reviewer, Debugger, Interviewer</td><td><code>read</code>, <code>grep</code>, <code>find</code>, <code>ls</code></td><td>Inspection targets only</td></tr>
+  <tr><td>Mutation</td><td>Tester, Builder, Documenter</td><td>+ <code>write</code>, <code>edit</code></td><td>Exact plan <code>files</code> / <code>testSupportFiles</code></td></tr>
+</table>
+<p>Two details that make this safe: roles run as in-memory Pi SDK sessions with nested extensions, skills, and shell access disabled; and project checks are orchestrator-owned <code>pi.exec</code> calls — an agent can never run your test suite itself.</p>
+<p class="cite">Sources: <a href="../../../README.md">README.md</a> §Role tools, §SDK execution; <a href="../../../AGENTS.md">AGENTS.md</a> §Safety And State</p>
+
+<h2>Where you live in it</h2>
+<ul>
+  <li><strong>Mission Control</strong> — the TUI overlay (<code>/orchestrator-control</code>); a read-only window into agent activity. It closes before every human decision point and reopens when the workflow continues.</li>
+  <li><strong>Browser dashboard</strong> — optional React console (<code>127.0.0.1</code>, SSE live state) with Overview / Agents / Timeline / Artifacts tabs.</li>
+  <li><strong><code>/requirements</code></strong> — the interactive interview you've been building: question hub, dashboard-vs-TUI decision race, and handoff into a workflow via <code>startWorkflow</code>.</li>
+</ul>
+<p class="cite">Sources: <a href="../../../README.md">README.md</a> §Mission Control dashboard, §Browser dashboard, §Workflow lifecycle</p>
+
+<h2>Practice</h2>
+
+<div id="quiz-1"></div>
+
+<h3>Trace it yourself (5 minutes)</h3>
+<ol>
+  <li>Open <a href="../../../README.md">README.md</a> and read §Workflow and §Workflow routes.</li>
+  <li>Open <a href="../../../src/index.ts">src/index.ts</a> — find the <code>/orchestrate</code> handler. It collects the route+request, then calls <code>engine.start(...)</code> and returns immediately.</li>
+  <li>Open <a href="../../../src/orchestrator.ts">src/orchestrator.ts</a> — the thin facade. <code>start()</code> delegates to <code>runWorkflow</code> in <code>src/orchestration/orchestrator-workflow.ts</code>.</li>
+  <li>Grep for <code>routePhases</code> or the route table in <code>src/orchestration/orchestrator-routes.ts</code> — that is where the fixed templates live.</li>
+  <li><strong>Find on your own:</strong> which file owns the human gate for plan approval? (Hint: it lives in <code>src/orchestration/</code> and its name contains "human".) Open it and confirm the gate pauses, doesn't guess.</li>
+</ol>
+
+<div class="primary-source">
+  <h3>Primary source for this lesson</h3>
+  <p><a href="../../../README.md">README.md</a> — §Workflow, §Workflow routes, §Role tools, §SDK execution, §Reliability policy. It is the project's own contract and the highest-trust description of how the system behaves.</p>
+  <p>Design history worth skimming: <a href="../../archive/plans/README.md">docs/archive/plans/README.md</a> (HITL, check approval, persistent UI redesign).</p>
+</div>
+
+<div class="callout">
+  <span class="callout-label">Anything unclear?</span>
+  <p>Ask your teacher — I can pull up the exact code for any claim in this lesson, re-explain the core inversion from another angle, or sketch how a specific route flows end to end. The reference card is at <a href="../reference/project-at-a-glance.html">project-at-a-glance</a>.</p>
+</div>
+
+<footer class="lesson-footer">
+  <p>Mission: <a href="../MISSION.md">MISSION.md</a> · Resources: <a href="../RESOURCES.md">RESOURCES.md</a> · Reference: <a href="../reference/project-at-a-glance.html">at-a-glance</a></p>
+  <p class="next">Next lesson: <strong>Phases &amp; route templates</strong> — how the 8 routes map to phase sequences and why the orchestrator (not the planner) owns them.</p>
+</footer>
+
+</main>
+
+<script src="../assets/quiz.js"></script>
+<script>
+LessonQuiz.render(document.getElementById("quiz-1"), {
+  questions: [
+    {
+      type: "choice",
+      prompt: "Who owns every workflow transition?",
+      options: [
+        { label: "the orchestrator", correct: true, note: "Agents produce validated outputs; the engine decides what happens next." },
+        { label: "the active agent", correct: false, note: "No role session can advance state on its own." },
+        { label: "the latest agent", correct: false, note: "The newest session has no more authority than the first." },
+        { label: "the route chooser", correct: false, note: "Picking the route is a user action, not a state transition owner." }
+      ]
+    },
+    {
+      type: "choice",
+      prompt: "Do read-only routes ever run project checks?",
+      options: [
+        { label: "never, they skip checks", correct: true, note: "Check setup is deferred until a mutation route's plan is approved." },
+        { label: "always before planning", correct: false, note: "Read-only routes run no checks at any point." },
+        { label: "when tests stay green", correct: false, note: "Baselines are a mutation-route concept." },
+        { label: "only on review routes", correct: false, note: "review_only runs no checks and no mutation-capable agents." }
+      ]
+    },
+    {
+      type: "choice",
+      prompt: "What limits where Tester, Builder, and Documenter can write?",
+      options: [
+        { label: "the plan file permissions", correct: true, note: "Plan `files`/`testSupportFiles` are exact repository-relative paths, not globs." },
+        { label: "the agent's own judgement", correct: false, note: "The capability is enforced by the engine at four boundaries." },
+        { label: "the route's fixed phases", correct: false, note: "Phases order the work; permissions bound the writes." },
+        { label: "the dashboard's live view", correct: false, note: "The dashboard is read-only." }
+      ]
+    },
+    {
+      type: "choice",
+      prompt: "At a human decision point, Mission Control\u2026",
+      options: [
+        { label: "closes, then reopens after", correct: true, note: "It auto-closes before the gate and reopens when the workflow continues." },
+        { label: "stays open, waits for you", correct: false, note: "The overlay closes; you complete the gate dialog, then it returns." },
+        { label: "switches to the dashboard", correct: false, note: "Dashboard and Mission Control are separate surfaces." },
+        { label: "keeps running in the back", correct: false, note: "The workflow pauses at the gate; it does not keep running." }
+      ]
+    },
+    {
+      type: "order",
+      prompt: "Order the pipeline for an implementation route (compressed)",
+      items: [
+        { label: "Explore", position: 1 },
+        { label: "Plan review", position: 2 },
+        { label: "Check setup", position: 3 },
+        { label: "Baseline", position: 4 },
+        { label: "Builder", position: 5 },
+        { label: "Final checks", position: 6 },
+        { label: "Worktree sync", position: 7 }
+      ],
+      note: "Compressed: on a real run, Plan precedes Plan review, and Tester, code review + fixes, and documentation sit between Builder and Final checks."
+    }
+  ]
+});
+</script>
+</body>
+</html>

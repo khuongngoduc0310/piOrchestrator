@@ -1,0 +1,118 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>piOrchestrator at a glance — Reference</title>
+<link rel="stylesheet" href="../assets/lesson.css">
+</head>
+<body>
+<main class="lesson">
+
+<header class="lesson-header">
+  <p class="kicker">Reference</p>
+  <h1>piOrchestrator at a glance</h1>
+  <p class="subtitle">The compressed map of the whole system — print me, keep me on the desk.</p>
+</header>
+
+<h2>The one idea</h2>
+<div class="callout">
+  <span class="callout-label">The core inversion</span>
+  <p><strong>The orchestrator owns every transition, validation decision, and retry limit. Agents cannot advance workflow state themselves.</strong>
+  Agents are disposable workers that produce validated outputs; the engine decides what happens next.</p>
+</div>
+<p class="cite">Source: <a href="../../../README.md">README.md</a> §Workflow</p>
+
+<h2>The canonical pipeline</h2>
+<p>Every route begins with exploration and planning; only approved mutation routes continue into checks and mutation:</p>
+<div class="pipeline">
+  <span class="step">Explore</span><span class="arrow">→</span>
+  <span class="step">Plan</span><span class="arrow">→</span>
+  <span class="step">Plan review</span><span class="arrow">→</span>
+  <span class="step gate">Human gate</span><span class="arrow">→</span>
+  <span class="step mut">Check setup</span><span class="arrow">→</span>
+  <span class="step mut">Baseline</span><span class="arrow">→</span>
+  <span class="step mut">Tester</span><span class="arrow">→</span>
+  <span class="step mut">Builder</span><span class="arrow">→</span>
+  <span class="step mut">Review + fixes</span><span class="arrow">→</span>
+  <span class="step mut">Docs</span><span class="arrow">→</span>
+  <span class="step mut">Final checks</span><span class="arrow">→</span>
+  <span class="step mut">Worktree sync</span>
+</div>
+<ul>
+  <li><strong>Deferred check setup:</strong> read-only and planning-only routes run <em>neither</em> checks <em>nor</em> mutation agents. Check setup happens only after a mutation route's plan is approved.</li>
+  <li><strong>Human gates</strong> (plan approval, check setup, diagnosis approval, memory approval) pause the workflow; Mission Control closes and reopens around them.</li>
+</ul>
+
+<h2>Routes (fixed templates)</h2>
+<table>
+  <tr><th>Route</th><th>Class</th><th>Runs</th></tr>
+  <tr><td><code>implementation</code></td><td>mutation</td><td>Full pipeline: checks, baseline, Tester, Builder + retries, review + fixes, docs, final checks, optional worktree sync</td></tr>
+  <tr><td><code>quick_implementation</code></td><td>mutation</td><td>Skips test-first generation; keeps baseline, Builder verification, review, docs, final checks</td></tr>
+  <tr><td><code>bug_fix</code></td><td>mutation</td><td>Green baseline, root-cause diagnosis before regression tests, optional diagnosis approval, then Builder/review/docs/final checks</td></tr>
+  <tr><td><code>tests_only</code></td><td>mutation</td><td>Green baseline; only Tester changes to test-classified paths; must leave checks green</td></tr>
+  <tr><td><code>documentation_only</code></td><td>mutation</td><td>Only Documenter changes to documentation-classified files; green baseline + final checks</td></tr>
+  <tr><td><code>review_only</code></td><td>read-only</td><td>Explore, plan approval, repository Reviewer; findings report; no checks, no mutation</td></tr>
+  <tr><td><code>investigation_only</code></td><td>read-only</td><td>Read-only evidence and diagnosis workflow; no checks or mutation agents</td></tr>
+  <tr><td><code>planning_only</code></td><td>planning-only</td><td>Completes after exploration + approved planning; no checks or mutation</td></tr>
+</table>
+<p class="cite">Source: <a href="../../../README.md">README.md</a> §Workflow routes</p>
+
+<h2>Agent roles</h2>
+<table>
+  <tr><th>Capability</th><th>Roles</th><th>Tools</th></tr>
+  <tr><td>Read-only</td><td>Explorer, Planner, Reviewer, Debugger, Interviewer</td><td><code>read</code>, <code>grep</code>, <code>find</code>, <code>ls</code></td></tr>
+  <tr><td>Mutation (exact-path authorized)</td><td>Tester, Builder, Documenter</td><td>+ <code>write</code>, <code>edit</code>, only on plan-<code>files</code></td></tr>
+</table>
+<ul>
+  <li>Roles run as <strong>in-memory Pi SDK sessions</strong>, not subprocesses; nested extensions/skills/prompt-templates/shell are disabled.</li>
+  <li>Project checks are <strong>orchestrator-owned</strong> <code>pi.exec</code> calls, never agent shell access.</li>
+  <li>Plan <code>files</code> / <code>testSupportFiles</code> are exact repository-relative mutation permissions — not directories, not globs.</li>
+</ul>
+
+<h2>The two UIs</h2>
+<dl>
+  <dt><strong>Mission Control</strong> (TUI overlay)</dt>
+  <dd>Full-screen on-demand overlay via <code>/orchestrator-control</code>; compact one-line footer status always visible. Read-only; Tab selects an agent, Enter inspects the transcript, Esc closes. Auto-closes/reopens at decision points.</dd>
+  <dt><strong>Browser dashboard</strong> (React + SSE)</dt>
+  <dd>Optional, binds <code>127.0.0.1</code>, streams live state over Server-Sent Events. Tabs: Overview, Agents, Timeline, Artifacts. Read-only operations console.</dd>
+</dl>
+<p class="cite">Sources: <a href="../../../README.md">README.md</a> §Mission Control dashboard, §Browser dashboard; <a href="../../../AGENTS.md">AGENTS.md</a> §Architecture</p>
+
+<h2>Front doors</h2>
+<ul>
+  <li><code>/orchestrate</code> — collect route + request, then return immediately; the workflow runs in the background.</li>
+  <li><code>/requirements</code> — interactive interview (question hub + dashboard race) that can hand off into a workflow.</li>
+  <li><code>/orchestrator-resume</code> — continue a paused/failed/cancelled run from its latest validated checkpoint.</li>
+</ul>
+
+<h2>Persistence &amp; safety, in one line each</h2>
+<ul>
+  <li>Run artifacts: <code>.pi/orchestrator/runs/&lt;run-id&gt;/</code> — versioned state, events, transcripts, patches, immutable <code>checkpoint-*.json</code> files.</li>
+  <li>Resume fails closed on any safety binding mismatch (worktree, digest, lease, finalization risk).</li>
+  <li>Worktree isolation: mutation runs in a detached worktree; the main workspace updates only after final checks pass.</li>
+  <li>Fail closed: malformed config, state, memory, or checkpoints are reported, never silently replaced.</li>
+</ul>
+
+<h2>Glossary</h2>
+<dl>
+  <dt><strong>route</strong></dt><dd>A fixed phase template (e.g. <code>implementation</code>); the user picks one; the orchestrator owns its phase sequence.</dd>
+  <dt><strong>phase</strong></dt><dd>A step of the canonical pipeline (Explore, Plan, Baseline, …).</dd>
+  <dt><strong>role session</strong></dt><dd>One in-memory Pi SDK agent session with a fixed capability class and a task envelope.</dd>
+  <dt><strong>task envelope</strong></dt><dd>The versioned JSON contract sent to every role session; its <code>task</code> object is authoritative, <code>memoryContext</code> is advisory.</dd>
+  <dt><strong>human gate</strong></dt><dd>A workflow pause awaiting an explicit human decision (plan approval, check setup, diagnosis, memory).</dd>
+  <dt><strong>check</strong></dt><dd>An orchestrator-owned <code>pi.exec</code> project command (test, typecheck, lint, build).</dd>
+  <dt><strong>baseline</strong></dt><dd>The green check-run the mutation phase must start from.</dd>
+  <dt><strong>checkpoint</strong></dt><dd>Immutable numbered validation boundary enabling <code>/orchestrator-resume</code>.</dd>
+  <dt><strong>worktree isolation</strong></dt><dd>Running mutations in a Git worktree so the main workspace is untouched until final checks pass.</dd>
+  <dt><strong>fail closed</strong></dt><dd>On any invalid/uncertain state: report, refuse, and never guess or overwrite.</dd>
+</dl>
+
+<footer class="lesson-footer">
+  <p>Course: <a href="../lessons/0001-the-one-page-map.html">Lesson 0001 — The one-page map</a>. Mission: <a href="../MISSION.md">MISSION.md</a>. Resources: <a href="../RESOURCES.md">RESOURCES.md</a>.</p>
+  <p class="next">Next reference: this document grows a section per lesson (routes, safety, UIs, persistence, interview).</p>
+</footer>
+
+</main>
+</body>
+</html>

@@ -1,6 +1,7 @@
 import type {
   AgentInspection,
   AgentHistoryResponse,
+  DashboardDecisionQuestion,
   DashboardRunHistoryItem,
   InvocationDiffView,
   OrchestratorViewModel,
@@ -110,14 +111,14 @@ export function getArtifact(
 export async function getDecisionPreview(
   decisionId: string,
   signal?: AbortSignal,
-): Promise<{ format: string; content: string; actions: DashboardDecisionAction[] }> {
+): Promise<{ format: string; content: string; actions: DashboardDecisionAction[]; question: DashboardDecisionQuestion | null }> {
   const res = await fetch(
     `/api/decisions/${encodeURIComponent(decisionId)}/preview`,
     { cache: "no-store", signal },
   );
   if (res.status === 409) throw new DashboardApiError(409, "Decision is no longer active");
   if (!res.ok) throw new DashboardApiError(res.status, `HTTP ${res.status}`);
-  return res.json() as Promise<{ format: string; content: string; actions: DashboardDecisionAction[] }>;
+  return res.json() as Promise<{ format: string; content: string; actions: DashboardDecisionAction[]; question: DashboardDecisionQuestion | null }>;
 }
 
 export async function submitDecision(
@@ -133,6 +134,15 @@ export async function submitDecision(
     headers: { "content-type": "application/json" },
     body: JSON.stringify({ id, action, feedback }),
   });
-  if (!res.ok) throw new DashboardApiError(res.status, `HTTP ${res.status}`);
+  if (!res.ok) {
+    let message = `HTTP ${res.status}`;
+    try {
+      const body = (await res.json()) as { error?: unknown };
+      if (typeof body.error === "string" && body.error.length > 0) message = body.error;
+    } catch {
+      // Response had no parseable JSON body; keep the status-only message.
+    }
+    throw new DashboardApiError(res.status, message);
+  }
   await res.json();
 }

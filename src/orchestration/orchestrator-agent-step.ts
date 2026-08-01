@@ -505,7 +505,7 @@ async function runSpawnedExplorer(
   }
 }
 
-function buildTranscriptArtifact(options: {
+export function buildTranscriptArtifact(options: {
   transcript: AgentTranscript;
   stepId: string;
   agent: AgentName;

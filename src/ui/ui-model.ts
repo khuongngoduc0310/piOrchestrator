@@ -3,7 +3,11 @@ import type {
   AgentStatus,
   AgentSummary,
   ConfigSummary,
+  DashboardInterviewQAndA,
+  InterviewQAndA,
   OrchestratorViewModel,
+  PendingQuestionInfo,
+  RequirementsSummary,
   RunSummary,
   Stage,
   StepRecord,
@@ -60,17 +64,45 @@ export interface RequirementsViewModelInput {
   maxRounds: number;
   waitingFor?: string;
   pendingDecision?: { id: string; kind: string; label: string; requestedAt: string; dashboardAvailable: boolean };
+  pendingQuestions?: PendingQuestionInfo[];
   dashboardUrl?: string;
   message?: string;
   artifactPath?: string;
   interviewerStatus: AgentStatus["status"];
+  interviewerModel?: string;
+  transcriptRevision?: number;
+  qa?: DashboardInterviewQAndA[];
+  artifactNames?: string[];
+  requirement?: RequirementsSummary;
+}
+
+/** Maps the interview Q&A history to the dashboard shape, resolving option ids to labels. */
+export function interviewQaToDashboard(history: readonly InterviewQAndA[]): DashboardInterviewQAndA[] {
+  return history.map(entry => {
+    const picks = entry.answer.selectedOptionIds
+      .map(id => entry.question.options.find(option => option.id === id)?.text ?? id)
+      .join(", ");
+    return {
+      questionText: entry.question.text,
+      kind: entry.question.kind,
+      round: entry.round ?? 1,
+      options: entry.question.options.map(option => ({
+        id: option.id,
+        text: option.text,
+        recommended: option.recommended ?? false,
+        picked: entry.answer.selectedOptionIds.includes(option.id)
+      })),
+      answerText: picks,
+      ...(entry.answer.customText !== undefined ? { customText: entry.answer.customText } : {})
+    };
+  });
 }
 
 /** Mission Control view model for an in-memory requirements-builder session. */
 export function buildRequirementsViewModel(input: RequirementsViewModelInput): OrchestratorViewModel {
   const agents: AgentSummary[] = AGENT_NAMES.map(name => ({
     name,
-    model: "",
+    model: name === "interviewer" ? (input.interviewerModel ?? "") : "",
     status: name === "interviewer" ? input.interviewerStatus : "idle"
   }));
   const runStatus: RunSummary["runStatus"] = input.status === "waiting" ? "paused" : input.status;
@@ -90,7 +122,13 @@ export function buildRequirementsViewModel(input: RequirementsViewModelInput): O
     message: input.message,
     waitingFor: input.waitingFor,
     dashboardUrl: input.dashboardUrl,
-    pendingDecision: input.pendingDecision
+    pendingDecision: input.pendingDecision,
+    ...(input.pendingQuestions && input.pendingQuestions.length > 0 ? { pendingQuestions: input.pendingQuestions } : {}),
+    transcriptRevision: input.transcriptRevision ?? 0,
+    activeAgent: input.status === "running" ? "interviewer" : undefined,
+    qa: input.qa ?? [],
+    ...(input.artifactNames && input.artifactNames.length > 0 ? { artifactNames: input.artifactNames } : {}),
+    ...(input.requirement ? { requirement: input.requirement } : {})
   };
   return {
     mode: input.status,

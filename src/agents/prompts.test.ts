@@ -7,11 +7,20 @@ import {
   LESSON_CATEGORIES
 } from "../types.js";
 import { MAX_EVIDENCE_DETAIL_BYTES } from "../memory/memory-types.js";
+import { validateInterviewerOutput } from "./agent-output-validation.js";
 
 const promptRoot = path.resolve("prompts");
 
 async function prompt(name: string): Promise<string> {
   return readFile(path.join(promptRoot, `${name}.md`), "utf8");
+}
+
+function fencedJsonExamples(text: string): string[] {
+  const examples: string[] = [];
+  const fence = /```(?:json)?\s*\n([\s\S]*?)\n?```/g;
+  let match: RegExpExecArray | null;
+  while ((match = fence.exec(text)) !== null) examples.push(match[1].trim());
+  return examples;
 }
 
 describe("role prompt contracts", () => {
@@ -144,6 +153,17 @@ describe("role prompt contracts", () => {
     expect(child).toContain("read-only repository Explorer sub-agent");
     expect(child).toContain("plain prose findings");
     expect(child).toContain("No JSON object");
+  });
+
+  it("documents the interviewer assess contract that the validator accepts", async () => {
+    const interviewer = await prompt("interviewer");
+    const assessExamples = fencedJsonExamples(interviewer)
+      .filter(example => example.includes('"action": "assess"'));
+    expect(assessExamples.length).toBeGreaterThanOrEqual(2);
+    for (const example of assessExamples) {
+      expect(validateInterviewerOutput(JSON.parse(example) as unknown)).toMatchObject({ action: "assess" });
+    }
+    expect(interviewer).toContain('"assessment": {');
   });
 
   it("documents repository evidence detail byte limits", async () => {

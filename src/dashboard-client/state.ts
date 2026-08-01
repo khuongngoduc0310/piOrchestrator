@@ -2,8 +2,9 @@ import type {
   DashboardRunHistoryItem,
   OrchestratorViewModel,
   PendingDecisionInfo,
+  PendingQuestionInfo,
 } from "../dashboard-types.js";
-import type { DashboardDecisionAction } from "../dashboard-types.js";
+import type { DashboardDecisionAction, DashboardDecisionQuestion } from "../dashboard-types.js";
 
 export type ConnectionState = "connecting" | "live" | "reconnecting" | "disconnected";
 export type AgentMode = "auto" | "pinned" | "closed";
@@ -28,6 +29,12 @@ export interface DashboardState {
   pendingDecision: PendingDecisionInfo | null;
   currentDecisionId: string | null;
   allowedActions: DashboardDecisionAction[];
+  decisionQuestion: DashboardDecisionQuestion | null;
+  questionSet: PendingQuestionInfo[];
+  questionSetUpdated: number;
+  questionFocusIndex: number | null;
+  questionSubmissions: Record<string, SubmissionStatus>;
+  questionErrors: Record<string, string>;
   planMarkdown: string | null;
   previewStatus: PreviewStatus;
   previewError: string | null;
@@ -52,6 +59,12 @@ export const INITIAL_STATE: DashboardState = {
   pendingDecision: null,
   currentDecisionId: null,
   allowedActions: [],
+  decisionQuestion: null,
+  questionSet: [],
+  questionSetUpdated: 0,
+  questionFocusIndex: null,
+  questionSubmissions: {},
+  questionErrors: {},
   planMarkdown: null,
   previewStatus: "idle",
   previewError: null,
@@ -78,8 +91,14 @@ export type DashboardAction =
   | { type: "artifactClosed" }
   | { type: "viewSelected"; view: DashboardView }
   | { type: "pendingDecisionUpdated"; decision: PendingDecisionInfo | null }
+  | { type: "questionSetUpdated"; questions: PendingQuestionInfo[] }
+  | { type: "questionFocusMoved"; index: number }
+  | { type: "questionSubmitting"; decisionId: string }
+  | { type: "questionSubmitted"; decisionId: string }
+  | { type: "questionError"; decisionId: string; error: string }
+  | { type: "questionDismissed"; decisionId: string }
   | { type: "planPreviewRetryRequested" }
-  | { type: "planPreviewLoaded"; decisionId: string; markdown: string; actions: DashboardDecisionAction[] }
+  | { type: "planPreviewLoaded"; decisionId: string; markdown: string; actions: DashboardDecisionAction[]; question: DashboardDecisionQuestion | null }
   | { type: "planPreviewError"; decisionId: string; error: string }
   | { type: "decisionSubmitting" }
   | { type: "decisionSubmitted"; decisionId: string }
@@ -206,6 +225,7 @@ export function dashboardReducer(
           pendingDecision: null,
           currentDecisionId: null,
           allowedActions: [],
+          decisionQuestion: null,
           planMarkdown: null,
           previewStatus: "idle",
           previewError: null,
@@ -224,6 +244,7 @@ export function dashboardReducer(
         currentDecisionId: decisionId,
         pendingDecision: action.decision,
         allowedActions: [],
+        decisionQuestion: null,
         planMarkdown: null,
         previewStatus: "loading",
         previewError: null,
@@ -231,12 +252,82 @@ export function dashboardReducer(
         submissionError: null,
       };
     }
+    case "questionSetUpdated": {
+      const next = action.questions;
+      if (next.length === 0) {
+        return {
+          ...state,
+          questionSet: [],
+          questionSetUpdated: state.questionSetUpdated + 1,
+          questionFocusIndex: null,
+          questionSubmissions: {},
+          questionErrors: {},
+        };
+      }
+      const previous = state.questionSet;
+      const previousFocusId = state.questionFocusIndex === null
+        ? null
+        : previous[state.questionFocusIndex]?.questionId ?? null;
+      const focusIndex = previousFocusId === null
+        ? 0
+        : (() => {
+            const kept = next.findIndex(question => question.questionId === previousFocusId);
+            if (kept >= 0) return kept;
+            // The focused question was answered: auto-advance to the entry that follows it.
+            return Math.min(state.questionFocusIndex ?? 0, next.length - 1);
+          })();
+      const liveIds = new Set(next.map(question => question.decisionId));
+      const questionSubmissions: Record<string, SubmissionStatus> = {};
+      const questionErrors: Record<string, string> = {};
+      for (const [id, status] of Object.entries(state.questionSubmissions) as Array<[string, SubmissionStatus]>) {
+        if (liveIds.has(id)) questionSubmissions[id] = status;
+      }
+      for (const [id, error] of Object.entries(state.questionErrors)) {
+        if (liveIds.has(id)) questionErrors[id] = error;
+      }
+      return {
+        ...state,
+        questionSet: next,
+        questionSetUpdated: state.questionSetUpdated + 1,
+        questionFocusIndex: focusIndex,
+        questionSubmissions,
+        questionErrors,
+      };
+    }
+    case "questionFocusMoved": {
+      if (state.questionSet.length === 0) return state;
+      return { ...state, questionFocusIndex: action.index };
+    }
+    case "questionSubmitting": {
+      const questionSubmissions: Record<string, SubmissionStatus> = { ...state.questionSubmissions, [action.decisionId]: "submitting" };
+      const questionErrors = { ...state.questionErrors };
+      delete questionErrors[action.decisionId];
+      return { ...state, questionSubmissions, questionErrors };
+    }
+    case "questionSubmitted": {
+      return { ...state, questionSubmissions: { ...state.questionSubmissions, [action.decisionId]: "submitted" } };
+    }
+    case "questionError": {
+      return {
+        ...state,
+        questionSubmissions: { ...state.questionSubmissions, [action.decisionId]: "error" },
+        questionErrors: { ...state.questionErrors, [action.decisionId]: action.error },
+      };
+    }
+    case "questionDismissed": {
+      const questionSubmissions = { ...state.questionSubmissions };
+      const questionErrors = { ...state.questionErrors };
+      delete questionSubmissions[action.decisionId];
+      delete questionErrors[action.decisionId];
+      return { ...state, questionSubmissions, questionErrors };
+    }
     case "planPreviewRetryRequested": {
       if (!state.currentDecisionId) return state;
       return {
         ...state,
         planMarkdown: null,
         allowedActions: [],
+        decisionQuestion: null,
         previewStatus: "loading",
         previewError: null,
       };
@@ -247,6 +338,7 @@ export function dashboardReducer(
         ...state,
         planMarkdown: action.markdown,
         allowedActions: action.actions,
+        decisionQuestion: action.question,
         previewStatus: "loaded",
         previewError: null,
       };

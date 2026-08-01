@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import type { OrchestratorViewModel, PendingDecisionInfo } from "../dashboard-types.js";
+import type { OrchestratorViewModel, PendingDecisionInfo, PendingQuestionInfo } from "../dashboard-types.js";
+import type { HumanDecisionAction } from "../orchestration/human-decision-types.js";
 import { dashboardReducer, INITIAL_STATE, isSelectedLiveRun, isViewingLiveRun } from "./state.js";
 
 function snapshot(runId: string): OrchestratorViewModel {
@@ -24,6 +25,23 @@ function snapshot(runId: string): OrchestratorViewModel {
     agents: [],
     recentSteps: [],
     commands: []
+  };
+}
+
+function questionInfo(questionId: string, decisionId: string): PendingQuestionInfo {
+  return {
+    decisionId,
+    questionId,
+    kind: "single",
+    label: `Question ${questionId}?`,
+    content: "**Goal:** Build a CLI",
+    actions: [{ value: `opt:${questionId}:yes` as HumanDecisionAction, label: "Yes", requiresFeedback: false }],
+    question: {
+      id: questionId,
+      kind: "single",
+      options: [{ id: "yes", text: "Yes", recommended: true, picked: false }],
+    },
+    answered: false,
   };
 }
 
@@ -151,5 +169,111 @@ describe("dashboard state", () => {
     let state = dashboardReducer(INITIAL_STATE, { type: "liveSnapshotReceived", snapshot: completed });
     state = dashboardReducer(state, { type: "runSelected", runId: "run-live" });
     expect(state.view).toBe("report");
+  });
+
+  it("resets the question focus to the first question when a new set arrives", () => {
+    let state = dashboardReducer(INITIAL_STATE, {
+      type: "questionSetUpdated",
+      questions: [questionInfo("q1", "d1"), questionInfo("q2", "d2"), questionInfo("q3", "d3")],
+    });
+    expect(state.questionSet.map(question => question.questionId)).toEqual(["q1", "q2", "q3"]);
+    expect(state.questionFocusIndex).toBe(0);
+    expect(state.questionSetUpdated).toBe(1);
+  });
+
+  it("keeps the focus on the same question when the set is re-presented", () => {
+    let state = dashboardReducer(INITIAL_STATE, {
+      type: "questionSetUpdated",
+      questions: [questionInfo("q1", "d1"), questionInfo("q2", "d2"), questionInfo("q3", "d3")],
+    });
+    state = dashboardReducer(state, { type: "questionFocusMoved", index: 2 });
+    state = dashboardReducer(state, {
+      type: "questionSetUpdated",
+      questions: [questionInfo("q1", "d1"), questionInfo("q2", "d2"), questionInfo("q3", "d3")],
+    });
+    expect(state.questionFocusIndex).toBe(2);
+  });
+
+  it("auto-advances focus to the entry that follows an answered focused question", () => {
+    let state = dashboardReducer(INITIAL_STATE, {
+      type: "questionSetUpdated",
+      questions: [questionInfo("q1", "d1"), questionInfo("q2", "d2"), questionInfo("q3", "d3")],
+    });
+    state = dashboardReducer(state, { type: "questionFocusMoved", index: 1 });
+    state = dashboardReducer(state, {
+      type: "questionSetUpdated",
+      questions: [questionInfo("q1", "d1"), questionInfo("q3", "d3")],
+    });
+    expect(state.questionFocusIndex).toBe(1);
+    expect(state.questionSet[1].questionId).toBe("q3");
+  });
+
+  it("follows the focused question to its new index when earlier questions are answered", () => {
+    let state = dashboardReducer(INITIAL_STATE, {
+      type: "questionSetUpdated",
+      questions: [questionInfo("q1", "d1"), questionInfo("q2", "d2"), questionInfo("q3", "d3")],
+    });
+    state = dashboardReducer(state, { type: "questionFocusMoved", index: 2 });
+    state = dashboardReducer(state, {
+      type: "questionSetUpdated",
+      questions: [questionInfo("q2", "d2"), questionInfo("q3", "d3")],
+    });
+    expect(state.questionFocusIndex).toBe(1);
+    expect(state.questionSet[1].questionId).toBe("q3");
+  });
+
+  it("clears the question set state when the round ends", () => {
+    let state = dashboardReducer(INITIAL_STATE, {
+      type: "questionSetUpdated",
+      questions: [questionInfo("q1", "d1")],
+    });
+    state = dashboardReducer(state, { type: "questionError", decisionId: "d1", error: "HTTP 500" });
+    state = dashboardReducer(state, {
+      type: "questionSetUpdated",
+      questions: [],
+    });
+    expect(state.questionSet).toEqual([]);
+    expect(state.questionFocusIndex).toBeNull();
+    expect(state.questionSubmissions).toEqual({});
+    expect(state.questionErrors).toEqual({});
+    expect(state.questionSetUpdated).toBe(2);
+  });
+
+  it("tracks submission status per question decision", () => {
+    let state = dashboardReducer(INITIAL_STATE, {
+      type: "questionSetUpdated",
+      questions: [questionInfo("q1", "d1")],
+    });
+    state = dashboardReducer(state, { type: "questionSubmitting", decisionId: "d1" });
+    expect(state.questionSubmissions).toEqual({ d1: "submitting" });
+    state = dashboardReducer(state, { type: "questionSubmitted", decisionId: "d1" });
+    expect(state.questionSubmissions).toEqual({ d1: "submitted" });
+  });
+
+  it("drops submission state for decisions that leave the set", () => {
+    let state = dashboardReducer(INITIAL_STATE, {
+      type: "questionSetUpdated",
+      questions: [questionInfo("q1", "d1")],
+    });
+    state = dashboardReducer(state, { type: "questionError", decisionId: "d1", error: "HTTP 500" });
+    state = dashboardReducer(state, { type: "questionDismissed", decisionId: "d1" });
+    expect(state.questionSubmissions).toEqual({});
+    expect(state.questionErrors).toEqual({});
+  });
+
+  it("prunes submissions for answered decisions while keeping live ones", () => {
+    let state = dashboardReducer(INITIAL_STATE, {
+      type: "questionSetUpdated",
+      questions: [questionInfo("q1", "d1"), questionInfo("q2", "d2")],
+    });
+    state = dashboardReducer(state, { type: "questionError", decisionId: "d1", error: "HTTP 500" });
+    state = dashboardReducer(state, { type: "questionSubmitting", decisionId: "d2" });
+    state = dashboardReducer(state, {
+      type: "questionSetUpdated",
+      questions: [questionInfo("q2", "d2")],
+    });
+    expect(state.questionSubmissions).toEqual({ d2: "submitting" });
+    expect(state.questionErrors).toEqual({});
+    expect(state.questionFocusIndex).toBe(0);
   });
 });

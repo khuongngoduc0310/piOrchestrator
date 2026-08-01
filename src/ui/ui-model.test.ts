@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { buildIdleViewModel, buildRequirementsViewModel, buildRunViewModel, elapsedText, phaseProgress } from "./ui-model.js";
+import { buildIdleViewModel, buildRequirementsViewModel, buildRunViewModel, elapsedText, interviewQaToDashboard, phaseProgress } from "./ui-model.js";
 import type { ConfigSummary, WorkflowState, StepRecord } from "../types.js";
 import { AGENT_NAMES, SCHEMA_VERSION } from "../types.js";
 
@@ -444,6 +444,189 @@ describe("UiModel", () => {
       expect(buildRequirementsViewModel(base).commands).toEqual(["/orchestrator-cancel"]);
       expect(buildRequirementsViewModel({ ...base, status: "waiting" }).commands).toEqual(["/orchestrator-cancel"]);
       expect(buildRequirementsViewModel({ ...base, status: "failed" }).commands).toEqual([]);
+    });
+
+    it("carries the interviewer model, transcript revision, and active agent", () => {
+      const vm = buildRequirementsViewModel({
+        ...base,
+        interviewerModel: "anthropic/claude-sonnet-4-5",
+        transcriptRevision: 7
+      });
+      expect(vm.agents.find(agent => agent.name === "interviewer")?.model).toBe("anthropic/claude-sonnet-4-5");
+      expect(vm.run?.transcriptRevision).toBe(7);
+      expect(vm.run?.activeAgent).toBe("interviewer");
+      const idle = buildRequirementsViewModel({ ...base, status: "completed", interviewerStatus: "succeeded" });
+      expect(idle.run?.activeAgent).toBeUndefined();
+    });
+
+    it("publishes the answered Q&A record and openable artifact names", () => {
+      const vm = buildRequirementsViewModel({
+        ...base,
+        status: "completed",
+        interviewerStatus: "succeeded",
+        qa: [
+          {
+            questionText: "Which platforms?",
+            kind: "multiple",
+            round: 1,
+            options: [
+              { id: "windows", text: "Windows", recommended: true, picked: true },
+              { id: "macos", text: "macOS", recommended: false, picked: false }
+            ],
+            answerText: "Windows"
+          },
+          {
+            questionText: "Any constraints?",
+            kind: "single",
+            round: 1,
+            options: [{ id: "yes", text: "Yes", recommended: true, picked: false }],
+            answerText: "",
+            customText: "Keep it small"
+          }
+        ],
+        artifactNames: ["requirements.md", "requirements.json"]
+      });
+      expect(vm.run?.qa).toEqual([
+        {
+          questionText: "Which platforms?",
+          kind: "multiple",
+          round: 1,
+          options: [
+            { id: "windows", text: "Windows", recommended: true, picked: true },
+            { id: "macos", text: "macOS", recommended: false, picked: false }
+          ],
+          answerText: "Windows"
+        },
+        {
+          questionText: "Any constraints?",
+          kind: "single",
+          round: 1,
+          options: [{ id: "yes", text: "Yes", recommended: true, picked: false }],
+          answerText: "",
+          customText: "Keep it small"
+        }
+      ]);
+      expect(vm.run?.artifactNames).toEqual(["requirements.md", "requirements.json"]);
+    });
+
+    it("carries the structured requirement report when provided", () => {
+      const vm = buildRequirementsViewModel({
+        ...base,
+        status: "completed",
+        interviewerStatus: "succeeded",
+        requirement: {
+          goal: "Build a CLI",
+          summary: "A small CLI that prints help",
+          scope: ["src"],
+          constraints: ["No new dependencies"],
+          acceptanceCriteria: ["CLI prints help"],
+          openQuestions: []
+        }
+      });
+      expect(vm.run?.requirement).toEqual({
+        goal: "Build a CLI",
+        summary: "A small CLI that prints help",
+        scope: ["src"],
+        constraints: ["No new dependencies"],
+        acceptanceCriteria: ["CLI prints help"],
+        openQuestions: []
+      });
+    });
+
+    it("defaults the Q&A record to an empty list when no history is provided", () => {
+      expect(buildRequirementsViewModel(base).run?.qa).toEqual([]);
+      expect(buildRequirementsViewModel(base).run?.artifactNames).toBeUndefined();
+      expect(buildRequirementsViewModel(base).run?.requirement).toBeUndefined();
+    });
+  });
+
+  describe("interviewQaToDashboard", () => {
+    const question = {
+      id: "q1",
+      kind: "multiple" as const,
+      text: "Which platforms?",
+      options: [
+        { id: "windows", text: "Windows", recommended: true },
+        { id: "macos", text: "macOS" },
+        { id: "linux", text: "Linux" }
+      ]
+    };
+
+    it("resolves picked option ids to labels and marks the picked options", () => {
+      expect(interviewQaToDashboard([
+        { question, answer: { questionId: "q1", selectedOptionIds: ["windows", "linux"] }, round: 2 }
+      ])).toEqual([
+        {
+          questionText: "Which platforms?",
+          kind: "multiple",
+          round: 2,
+          options: [
+            { id: "windows", text: "Windows", recommended: true, picked: true },
+            { id: "macos", text: "macOS", recommended: false, picked: false },
+            { id: "linux", text: "Linux", recommended: false, picked: true }
+          ],
+          answerText: "Windows, Linux"
+        }
+      ]);
+    });
+
+    it("defaults the round to 1 when the history entry has none", () => {
+      expect(interviewQaToDashboard([
+        { question, answer: { questionId: "q1", selectedOptionIds: ["macos"] } }
+      ])).toEqual([
+        {
+          questionText: "Which platforms?",
+          kind: "multiple",
+          round: 1,
+          options: [
+            { id: "windows", text: "Windows", recommended: true, picked: false },
+            { id: "macos", text: "macOS", recommended: false, picked: true },
+            { id: "linux", text: "Linux", recommended: false, picked: false }
+          ],
+          answerText: "macOS"
+        }
+      ]);
+    });
+
+    it("keeps the custom text and reports an empty answer text for custom answers", () => {
+      expect(interviewQaToDashboard([
+        { question, answer: { questionId: "q1", selectedOptionIds: [], customText: "All of them" } }
+      ])).toEqual([
+        {
+          questionText: "Which platforms?",
+          kind: "multiple",
+          round: 1,
+          options: [
+            { id: "windows", text: "Windows", recommended: true, picked: false },
+            { id: "macos", text: "macOS", recommended: false, picked: false },
+            { id: "linux", text: "Linux", recommended: false, picked: false }
+          ],
+          answerText: "",
+          customText: "All of them"
+        }
+      ]);
+    });
+
+    it("falls back to the raw option id when a label is unknown", () => {
+      expect(interviewQaToDashboard([
+        { question, answer: { questionId: "q1", selectedOptionIds: ["missing"] } }
+      ])).toEqual([
+        {
+          questionText: "Which platforms?",
+          kind: "multiple",
+          round: 1,
+          options: [
+            { id: "windows", text: "Windows", recommended: true, picked: false },
+            { id: "macos", text: "macOS", recommended: false, picked: false },
+            { id: "linux", text: "Linux", recommended: false, picked: false }
+          ],
+          answerText: "missing"
+        }
+      ]);
+    });
+
+    it("returns an empty record for an empty history", () => {
+      expect(interviewQaToDashboard([])).toEqual([]);
     });
   });
 });

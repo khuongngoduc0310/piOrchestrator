@@ -361,13 +361,13 @@ describe("interviewer output validation", () => {
   it("validates an assess payload", () => {
     const output = validateInterviewerOutput({
       action: "assess",
-      assessment: { goal: "Build a CLI", clarity: "more_information_needed", summary: "Scope is vague", openQuestions: ["Where does it run?"] }
+      assessment: { goal: "Build a CLI", summary: "Scope is vague", openQuestions: ["Where does it run?"] }
     });
     expect(output.action).toBe("assess");
     if (output.action !== "assess") throw new Error("expected assess");
-    expect(output.assessment.clarity).toBe("more_information_needed");
-    expect(() => validateInterviewerOutput({ action: "assess", assessment: { goal: "Build a CLI", clarity: "maybe", summary: "?" } }))
-      .toThrow("expected one of");
+    expect(output.assessment.summary).toBe("Scope is vague");
+    expect(output.assessment.openQuestions).toEqual(["Where does it run?"]);
+    expect(() => validateInterviewerOutput({ action: "assess", assessment: { goal: "Build a CLI", summary: "?" } })).not.toThrow();
   });
 
   it("validates a finalize report and its recorded Q&A", () => {

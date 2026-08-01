@@ -22,10 +22,69 @@ export interface DashboardDecisionAction {
   requiresFeedback: boolean;
 }
 
+export interface DashboardDecisionQuestionOption {
+  id: string;
+  text: string;
+  recommended: boolean;
+  picked: boolean;
+}
+
+export interface DashboardDecisionQuestion {
+  id: string;
+  kind: "single" | "multiple";
+  options: DashboardDecisionQuestionOption[];
+}
+
 export interface DashboardDecisionPresentation {
   format: "markdown";
   content: string;
   actions: readonly DashboardDecisionAction[];
+  /** Structured question surface for interview questions; gates omit it. */
+  question?: DashboardDecisionQuestion;
+}
+
+/** One unanswered question of the round's question set, rendered as a dashboard hub entry. */
+export interface PendingQuestionInfo {
+  decisionId: string;
+  questionId: string;
+  kind: "single" | "multiple";
+  label: string;
+  content: string;
+  actions: DashboardDecisionAction[];
+  question: DashboardDecisionQuestion;
+  answered: boolean;
+}
+
+/** One answered interview question, rendered on the dashboard. */
+export interface DashboardInterviewQOption {
+  id: string;
+  text: string;
+  recommended: boolean;
+  picked: boolean;
+}
+
+/** One answered interview question, rendered on the dashboard. */
+export interface DashboardInterviewQAndA {
+  questionText: string;
+  kind: "single" | "multiple";
+  /** Interview round this question was answered in. */
+  round: number;
+  /** The question's options with their picked/recommended state. */
+  options: DashboardInterviewQOption[];
+  /** Picked option labels joined with ", "; empty when the user typed a custom answer. */
+  answerText: string;
+  /** Present only when the user typed a custom answer. */
+  customText?: string;
+}
+
+/** Structured sections of the final requirements report. */
+export interface RequirementsSummary {
+  goal: string;
+  summary: string;
+  scope: string[];
+  constraints: string[];
+  acceptanceCriteria: string[];
+  openQuestions: string[];
 }
 
 export interface ConfigSummary {
@@ -69,10 +128,18 @@ export interface RunSummary {
   extensionVersion?: string;
   transcriptRevision?: number;
   pendingDecision?: PendingDecisionInfo;
+  /** Pending interview question set (all questions of the round at once) for requirements sessions. */
+  pendingQuestions?: PendingQuestionInfo[];
   checkpoint?: { number: number; cursor: string; createdAt: string };
   resumeCommand?: string;
   resumeCount?: number;
   resumeBlockedReason?: string;
+  /** Answered interview Q&A for requirements sessions; workflow runs omit it. */
+  qa?: DashboardInterviewQAndA[];
+  /** Structured final requirements report for completed requirements sessions. */
+  requirement?: RequirementsSummary;
+  /** Repository-relative artifact names openable for this run. */
+  artifactNames?: string[];
 }
 
 export interface AgentSummary {

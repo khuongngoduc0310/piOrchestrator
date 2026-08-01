@@ -11,6 +11,7 @@ export function useDashboardStream(dispatch: React.Dispatch<DashboardAction>): v
     dispatch({ type: "liveSnapshotReceived", snapshot: data });
     const decision = data.run?.pendingDecision ?? null;
     dispatch({ type: "pendingDecisionUpdated", decision });
+    dispatch({ type: "questionSetUpdated", questions: data.run?.pendingQuestions ?? [] });
   }
 
   useEffect(() => {
