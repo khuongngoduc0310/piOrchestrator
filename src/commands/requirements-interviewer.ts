@@ -56,12 +56,11 @@ export async function interviewerCall(
   session: RequirementsSession,
   executor: AgentExecutor,
   config: OrchestratorConfig,
-  deadlineStartedAt: number,
   task: InterviewerTask
 ): Promise<InterviewerOutput> {
   const expectedAction = task.action;
   let attempt = 0;
-  let text = (await runInterviewer(session, executor, config, deadlineStartedAt, "execute", task, undefined)).text;
+  let text = (await runInterviewer(session, executor, config, "execute", task, undefined)).text;
   for (;;) {
     try {
       const parsed = parseInterviewerOutput(text);
@@ -73,7 +72,7 @@ export async function interviewerCall(
       }
       attempt += 1;
       const fieldPath = error instanceof ValidationError && /^[a-zA-Z0-9_.\[\]-]+$/.test(error.path) ? error.path : undefined;
-      const corrected = await runInterviewer(session, executor, config, deadlineStartedAt, "correct_output", task, {
+      const corrected = await runInterviewer(session, executor, config, "correct_output", task, {
         attempt: attempt as 1 | 2,
         reason: "schema_validation_failed",
         ...(fieldPath ? { fieldPath } : {}),
@@ -94,11 +93,11 @@ async function runInterviewer(
   session: RequirementsSession,
   executor: AgentExecutor,
   config: OrchestratorConfig,
-  deadlineStartedAt: number,
   mode: "execute" | "correct_output",
   task: InterviewerTask,
   correction: InterviewerCorrectionInfo | undefined
 ) {
+  const deadlineStartedAt = Date.now();
   const remaining = agentRemainingTimeoutMs(config.limits.agentTimeoutMs, deadlineStartedAt);
   const envelope: AgentTaskEnvelope<InterviewerTask> = mode === "correct_output"
     ? {
@@ -169,7 +168,7 @@ async function runInterviewer(
       // A truncated response is common for long JSON and cheap to retry
       // (read-only): ask once for the complete output. A truncated
       // correction run is not retried; the session fails closed.
-      return runInterviewer(session, executor, config, deadlineStartedAt, "correct_output", task, {
+      return runInterviewer(session, executor, config, "correct_output", task, {
         attempt: 1,
         reason: "incomplete_response",
         validationError: cappedCorrectionError(message)

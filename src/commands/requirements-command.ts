@@ -36,7 +36,6 @@ export async function runRequirementsCommand(
   session.goal = goal.trim();
   const executor = deps.executor ?? new PiSdkAgentExecutor();
   const startedAt = deps.now?.() ?? new Date();
-  const deadlineStartedAt = Date.now();
   try {
     const config = await (deps.loadConfig ?? defaultLoadConfig)(cwd);
     session.interviewerModel = config.agents.interviewer?.model ?? "";
@@ -62,7 +61,7 @@ export async function runRequirementsCommand(
       session.waitingFor = "Interviewer is preparing questions";
       session.interviewerStatus = "running";
       session.publish();
-      const asked = await interviewerCall(session, executor, config, deadlineStartedAt, {
+      const asked = await interviewerCall(session, executor, config, {
         action: "ask_questions",
         goal: session.goal,
         round,
@@ -75,7 +74,7 @@ export async function runRequirementsCommand(
       session.waitingFor = "Interviewer is summarizing what it learned";
       session.interviewerStatus = "running";
       session.publish();
-      const assessed = await interviewerCall(session, executor, config, deadlineStartedAt, {
+      const assessed = await interviewerCall(session, executor, config, {
         action: "assess",
         goal: session.goal,
         round,
@@ -108,7 +107,7 @@ export async function runRequirementsCommand(
     session.waitingFor = "Interviewer is finalizing the requirements report";
     session.interviewerStatus = "running";
     session.publish();
-    const finalized = await interviewerCall(session, executor, config, deadlineStartedAt, {
+    const finalized = await interviewerCall(session, executor, config, {
       action: "finalize",
       goal: session.goal,
       history: session.history,

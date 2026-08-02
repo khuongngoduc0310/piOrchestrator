@@ -353,6 +353,29 @@ describe("runRequirementsCommand", () => {
     });
   });
 
+  it("gives every interviewer run a fresh full agent timeout", async () => {
+    const cwd = await temporaryDirectory();
+    const insightsLog: string[][] = [];
+    const executor = new ScriptedExecutor(successScript(insightsLog));
+    const deps = await testDeps(executor);
+    const { ctx, selects, inputs } = uiContext();
+
+    inputs.push("Build a CLI");
+    selects.push(...hubSequence(QUESTIONS, allYes(QUESTIONS)));
+    selects.push(REVIEW_NO_LABEL);
+    selects.push(...hubSequence(QUESTIONS, allYes(QUESTIONS)));
+    selects.push(REVIEW_YES_LABEL);
+    selects.push("Start a workflow with these requirements");
+    selects.push(WORKFLOW_ROUTE_CHOICES[0].label);
+
+    await runRequirementsCommand(cwd, ctx, deps);
+
+    expect(executor.runs).toHaveLength(5);
+    for (const run of executor.runs) {
+      expect(run.options.timeoutMs).toBe(DEFAULT_CONFIG.limits.agentTimeoutMs);
+    }
+  });
+
   it("records multiple selections for a multi-select question", async () => {
     const cwd = await temporaryDirectory();
     const executor = new ScriptedExecutor(envelope => {
