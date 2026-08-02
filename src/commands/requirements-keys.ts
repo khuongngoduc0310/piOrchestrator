@@ -1,5 +1,5 @@
 import type { ExtensionCommandContext, TerminalInputHandler } from "@earendil-works/pi-coding-agent";
-import type { QuestionChannel } from "./requirements-command.js";
+import type { QuestionChannel } from "./requirements-channel-types.js";
 
 const ARROW_UP = "\x1b[A";
 const ARROW_DOWN = "\x1b[B";

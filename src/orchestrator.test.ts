@@ -215,6 +215,7 @@ async function scenario(
 }
 
 describe("Orchestrator", () => {
+  describe("route execution", () => {
   it("approves discovered checks and continues the same invocation", async () => {
     const cwd = await mkdtemp(path.join(os.tmpdir(), "pi-orchestrator-setup-"));
     directories.push(cwd);
@@ -715,7 +716,9 @@ describe("Orchestrator", () => {
     expect(engine.getState()?.status).toBe("completed");
     expect(agent.calls.map(call => call.name)).not.toContain("tester");
   });
+  });
 
+  describe("bug fix route", () => {
   it("diagnoses a bug before regression tests and implementation", async () => {
     const { engine, agent } = await scenario(
       [explorer, routePlan("bug_fix"), approved, debuggerOutput, tester, builder, approved, documenter, approved],
@@ -1172,7 +1175,9 @@ describe("Orchestrator", () => {
     expect(engine.getState()?.status).toBe("failed");
     expect(agent.calls.map(call => call.name)).toEqual(["explorer", "planner"]);
   });
+  });
 
+  describe("mutation phase and worktree", () => {
   it("completes an immediate first-pass flow with ordered unique artifacts", async () => {
     const { engine, cwd } = await scenario(
       [explorer, plan, approved, tester, builder, approved, documenter, approved],
@@ -1386,7 +1391,9 @@ describe("Orchestrator", () => {
     expect(documenterTask.approvalSource).toBe("reviewer");
     expect(documenterTask.action).toBe("document");
   });
+  });
 
+  describe("plan revision and baseline repair", () => {
   it("exhausts plan revisions without mutating agents", async () => {
     const { engine, agent } = await scenario([explorer, plan, changes], [], config => { config.limits.planRevisions = 0; });
     expect(engine.getState()?.status).toBe("failed");
@@ -1479,7 +1486,9 @@ describe("Orchestrator", () => {
     expect(editor).not.toHaveBeenCalled();
     expect(resumedAgent.calls.map(call => call.name)).toEqual(["builder", "tester", "builder", "reviewer", "documenter", "reviewer"]);
   });
+  });
 
+  describe("dashboard and browser", () => {
   it("opens browser dashboard when enabled", async () => {
     const cwd = await mkdtemp(path.join(os.tmpdir(), "pi-orchestrator-dashboard-"));
     directories.push(cwd);
@@ -1654,7 +1663,9 @@ describe("Orchestrator", () => {
     expect(engine2.getState()?.dashboardUrl).toBeUndefined();
     expect(openBrowser2).not.toHaveBeenCalled();
   });
+  });
 
+  describe("session messages", () => {
   it("publishes curated session messages on a successful run", async () => {
     const { engine, sendMessage } = await scenario(
       [explorer, plan, approved, tester, builder, approved, documenter, approved],
@@ -1713,7 +1724,9 @@ describe("Orchestrator", () => {
     expect(agent.calls.filter(call => call.name === "builder")).toHaveLength(2);
     expect(agent.calls.filter(call => call.name === "debugger")).toHaveLength(1);
   });
+  });
 
+  describe("scope revision", () => {
   it("revises approved scope when diagnosis identifies an omitted integration test", async () => {
     const diagnosis = json({
       category: "test_defect",
@@ -2030,7 +2043,9 @@ describe("Orchestrator", () => {
     expect(resumedAgent.calls.map(call => call.name)).toEqual(["builder", "reviewer", "documenter", "reviewer"]);
     expect(JSON.parse(resumedAgent.calls[0].task).task.attempt).toBe(2);
   });
+  });
 
+  describe("final delivery and review fixes", () => {
   it("routes a final delivery change request through planning, implementation, checks, and review", async () => {
     const initial = await scenario(
       [explorer, plan, approved, tester, builder, approved, documenter, approved],
@@ -2142,7 +2157,9 @@ describe("Orchestrator", () => {
     expect(resumedAgent.calls.map(call => call.name)).toEqual(["documenter", "reviewer"]);
     expect(select).toHaveBeenCalledTimes(2);
   });
+  });
 
+  describe("malformed output recovery", () => {
   it("stores malformed agent output separately and fails the stage", async () => {
     const { engine, agent } = await scenario([explorer, "not json", "not json"], []);
     const state = engine.getState()!;
@@ -2409,7 +2426,9 @@ describe("Orchestrator", () => {
     expect(engine.getState()?.status).toBe("completed");
     expect(engine.getState()?.warning).toContain("lessons were rejected");
   });
+  });
 
+  describe("failure diagnostics", () => {
   it("marks a failed agent and its step accurately", async () => {
     const { engine } = await scenario([new Error("explorer crashed")], []);
     const state = engine.getState()!;
@@ -2495,7 +2514,9 @@ describe("Orchestrator", () => {
       messages: partialTranscript.messages
     });
   });
+  });
 
+  describe("lifecycle concurrency and settings", () => {
   it("rejects concurrent starts before either can replace shared state", async () => {
     const cwd = await mkdtemp(path.join(os.tmpdir(), "pi-orchestrator-concurrent-"));
     directories.push(cwd);
@@ -2621,7 +2642,9 @@ describe("Orchestrator", () => {
     expect(notifications.mock.calls.some(call => String(call[0]).includes("workflow completed"))).toBe(false);
     expect(sendMessage.mock.calls.some(call => String(call[0]?.content).startsWith("## Workflow completed"))).toBe(false);
   });
+  });
 
+  describe("human gates", () => {
   it("human approves plan when planApproval is enabled", async () => {
     const cwd = await mkdtemp(path.join(os.tmpdir(), "pi-orchestrator-human-approve-"));
     directories.push(cwd);
@@ -3051,7 +3074,9 @@ describe("Orchestrator", () => {
     expect(setStatus).toHaveBeenLastCalledWith("pi-orchestrator", undefined);
     expect(setWidget).toHaveBeenLastCalledWith("pi-orchestrator", undefined);
   });
+  });
 
+  describe("review limit extra fixes", () => {
   it("builds after user grants one more targeted fix when review limit is exhausted", async () => {
     const cwd = await mkdtemp(path.join(os.tmpdir(), "pi-orchestrator-extra-fix-"));
     directories.push(cwd);
@@ -3230,7 +3255,9 @@ describe("Orchestrator", () => {
     expect(codeReviewTasks[0].implementationChecks).toEqual(initialChecks);
     expect(codeReviewTasks[1].implementationChecks).toEqual(fix1Checks);
   });
+  });
 
+  describe("resume from checkpoints", () => {
   it("resumes after verified implementation without replaying completed mutation agents", async () => {
     const initial = await scenario(
       [explorer, plan, approved, tester, builder, new Error("review service unavailable")],
@@ -3427,6 +3454,7 @@ describe("Orchestrator", () => {
     expect(JSON.parse(resumedAgent.calls[2].task).task.plan.tasks).toEqual(expect.arrayContaining([
       expect.objectContaining({ files: ["README.md"] })
     ]));
+  });
   });
 });
 

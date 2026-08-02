@@ -7,7 +7,9 @@ import type { AgentResult, InterviewAnswer, InterviewQuestion, InterviewerAssess
 import type { AgentHistoryResponse, AgentInspection, AgentTranscript, AgentTranscriptArtifact } from "../types.js";
 import { MAX_INTERVIEW_ROUNDS } from "../types.js";
 import { DEFAULT_CONFIG } from "../config/config.js";
-import { runRequirementsCommand, questionPresentation, reviewPresentation, commitPresentation, mapTuiChoice, type RequirementsCommandDependencies } from "./requirements-command.js";
+import { runRequirementsCommand } from "./requirements-command.js";
+import { commitPresentation, mapTuiChoice, questionPresentation, reviewPresentation } from "./requirements-presentation.js";
+import type { RequirementsCommandDependencies } from "./requirements-session.js";
 import { WORKFLOW_ROUTE_CHOICES } from "./route-selection.js";
 import { CONFIG_DIR_NAME } from "@earendil-works/pi-coding-agent";
 import { mkdtemp, readFile, rm, stat } from "node:fs/promises";
@@ -311,6 +313,7 @@ function singleRoundScript(questions: InterviewQuestion[]) {
 }
 
 describe("runRequirementsCommand", () => {
+  describe("rounds and answers", () => {
   it("interviews for multiple rounds and writes the requirements artifact", async () => {
     const cwd = await temporaryDirectory();
     const insightsLog: string[][] = [];
@@ -420,7 +423,9 @@ describe("runRequirementsCommand", () => {
     expect(markdown).toContain("- Answer: custom answer");
     expect(markdown).toContain("- Custom: Cross-platform support");
   });
+  });
 
+  describe("dashboard channel", () => {
   it("answers interview questions through the live dashboard endpoint", async () => {
     const cwd = await temporaryDirectory();
     const executor = new ScriptedExecutor(envelope => {
@@ -969,7 +974,9 @@ describe("runRequirementsCommand", () => {
     const sessionDir = path.join(cwd, CONFIG_DIR_NAME, "orchestrator", "requirements", "test-session");
     expect(await exists(path.join(sessionDir, "requirements.json"))).toBe(false);
   });
+  });
 
+  describe("interviewer corrections", () => {
   it("retries once with a correction field path when the interviewer returns the wrong action", async () => {
     const cwd = await temporaryDirectory();
     let call = 0;
@@ -1140,7 +1147,9 @@ describe("runRequirementsCommand", () => {
     });
     expect(executor.runs[1].options.task).toContain('"reason": "incomplete_response"');
   });
+  });
 
+  describe("TUI hub navigation", () => {
   it("cancels when the user picks Cancel interview and writes no artifact", async () => {
     const cwd = await temporaryDirectory();
     const executor = new ScriptedExecutor(envelope =>
@@ -1422,7 +1431,9 @@ describe("runRequirementsCommand", () => {
     expect(last.filter(option => option.startsWith("✓ "))).toHaveLength(5);
     expect(last).not.toContain("Continue");
   });
+  });
 
+  describe("cancellation and handoff", () => {
   it("maps an aborted agent call to cancelled rather than failed", async () => {
     const cwd = await temporaryDirectory();
     const executor = new ScriptedExecutor(() => {
@@ -1554,7 +1565,9 @@ describe("runRequirementsCommand", () => {
     const sessionDir = path.join(cwd, CONFIG_DIR_NAME, "orchestrator", "requirements", "test-session");
     expect(await exists(path.join(sessionDir, "requirements.json"))).toBe(true);
   });
+  });
 
+  describe("input validation and failure modes", () => {
   it("rejects a blank goal", async () => {
     const executor = new ScriptedExecutor(() => ({ text: "{}" }));
     const deps = await testDeps(executor);
@@ -1593,7 +1606,9 @@ describe("runRequirementsCommand", () => {
     expect(notify).toHaveBeenCalledWith(expect.stringContaining("requires a TUI dialog or the interview dashboard"), "error");
     expect(executor.runs).toHaveLength(0);
   });
+  });
 
+  describe("dashboard persistence and gating", () => {
   it("exposes interviewer calls through the dashboard providers and persists transcript artifacts", async () => {
     const cwd = await temporaryDirectory();
     const insightsLog: string[][] = [];
@@ -1806,6 +1821,7 @@ describe("runRequirementsCommand", () => {
     expect((await fetch(`${url}/api/runs/other-run/steps/step-1/invocations/1/transcript`)).status).toBe(404);
 
     await session.dashboard.stop();
+  });
   });
 });
 

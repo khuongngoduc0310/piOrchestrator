@@ -1,6 +1,16 @@
 import type { AgentName, SupportedHandoffRole } from "./agent-types.js";
 import type { MemoryContext } from "./memory/memory-types.js";
 import type { BaselineReviewContext, CheckResult } from "./workflow-types.js";
+import {
+  DEBUGGER_CATEGORIES,
+  WORKFLOW_ROUTES,
+  type DebuggerCategory,
+  type DebuggerOutput,
+  type RepositoryEvidence,
+  type WorkflowRoute
+} from "./workflow-shared.js";
+export { DEBUGGER_CATEGORIES, WORKFLOW_ROUTES };
+export type { DebuggerCategory, DebuggerOutput, RepositoryEvidence, WorkflowRoute } from "./workflow-shared.js";
 
 export const AGENT_TASK_SCHEMA_VERSION = 4 as const;
 
@@ -18,16 +28,6 @@ export type InterviewQuestionKind = (typeof INTERVIEW_QUESTION_KINDS)[number];
 
 export const COMMAND_STATUSES = ["passed", "failed", "timed_out", "cancelled"] as const;
 export type CommandStatus = (typeof COMMAND_STATUSES)[number];
-
-export const DEBUGGER_CATEGORIES = [
-  "implementation_defect",
-  "test_defect",
-  "configuration_error",
-  "environment_error",
-  "tooling_error",
-  "unknown"
-] as const;
-export type DebuggerCategory = (typeof DEBUGGER_CATEGORIES)[number];
 
 export const ACCEPTANCE_COVERAGE_STATUSES = ["covered", "partially_covered", "not_covered"] as const;
 export type AcceptanceCoverageStatus = (typeof ACCEPTANCE_COVERAGE_STATUSES)[number];
@@ -48,26 +48,10 @@ export const LESSON_CATEGORIES = [
 export type LessonCategory = (typeof LESSON_CATEGORIES)[number];
 
 export type ReviewApprovalSource = "reviewer" | "user_override";
-export const WORKFLOW_ROUTES = [
-  "implementation",
-  "review_only",
-  "documentation_only",
-  "tests_only",
-  "investigation_only",
-  "bug_fix",
-  "quick_implementation",
-  "planning_only"
-] as const;
-export type WorkflowRoute = (typeof WORKFLOW_ROUTES)[number];
 
 export interface WorkflowRequest {
   route: WorkflowRoute;
   request: string;
-}
-
-export interface RepositoryEvidence {
-  path: string;
-  detail: string;
 }
 
 export type AgentTaskEnvelope<T> =
@@ -318,15 +302,6 @@ export type BuilderTask =
       checks?: CheckResult[];
       diagnosis?: DebuggerOutput;
     };
-
-export interface DebuggerOutput {
-  category: DebuggerCategory;
-  rootCause: string;
-  evidence: RepositoryEvidence[];
-  recommendedFix: string;
-  affectedFiles: string[];
-  confidence: "low" | "medium" | "high";
-}
 
 export type DebuggerTask =
   | { action: "diagnose_baseline"; request: string; checks: CheckResult[] }

@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import type { ExtensionCommandContext, TerminalInputHandler } from "@earendil-works/pi-coding-agent";
-import type { QuestionChannel } from "./requirements-command.js";
+import type { QuestionChannel } from "./requirements-channel-types.js";
 import { RequirementsArrowTranslator } from "./requirements-keys.js";
 
 const ARROW_UP = "\x1b[A";

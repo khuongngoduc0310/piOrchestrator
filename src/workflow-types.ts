@@ -1,6 +1,7 @@
 import type { AgentInvocationRecord, AgentName, AgentStatus } from "./agent-types.js";
 import type { WorkflowTermination } from "./orchestration/workflow-errors.js";
 import type { HumanDecisionKind, PendingHumanDecision } from "./orchestration/human-decision-types.js";
+import type { DebuggerOutput, WorkflowRoute } from "./workflow-shared.js";
 
 export const SCHEMA_VERSION = 2;
 
@@ -77,7 +78,7 @@ export interface WorkflowState {
   extensionVersion: string;
   runId: string;
   request: string;
-  route?: import("./agent-task-types.js").WorkflowRoute;
+  route?: WorkflowRoute;
   cwd: string;
   runDir: string;
   stage: Stage;
@@ -163,14 +164,14 @@ export interface HumanReviewDecision {
 
 export interface CompletionSummary {
   request: string;
-  route: import("./agent-task-types.js").WorkflowRoute;
+  route: WorkflowRoute;
   planSummary: string;
   changedFiles: string[];
   testsAdded: string[];
   checks: CheckResult[];
   attempts: number;
   baselineRepaired: boolean;
-  diagnosis?: import("./agent-task-types.js").DebuggerOutput;
+  diagnosis?: DebuggerOutput;
   review: {
     outcome: "reviewer_approved" | "accepted_by_user" | "no_findings" | "findings_reported" | "not_run";
     evidenceCount: number;
