@@ -166,6 +166,15 @@ describe("role prompt contracts", () => {
     expect(interviewer).toContain('"assessment": {');
   });
 
+  it("documents the interviewer correct_output correction envelope", async () => {
+    const interviewer = await prompt("interviewer");
+    expect(interviewer).toContain("`correction`");
+    expect(interviewer).toContain("schema_validation_failed");
+    expect(interviewer).toContain("incomplete_response");
+    expect(interviewer).toContain("validationError");
+    expect(interviewer).toContain("fieldPath");
+  });
+
   it("documents repository evidence detail byte limits", async () => {
     const expectedLimits = [
       ["explorer", "`evidence[].detail`"],

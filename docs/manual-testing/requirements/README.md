@@ -281,6 +281,10 @@ select-many (`multiple` kind — the prompt text says to pick all that apply):
   answered; a custom answer also counts.
 - A single-choice question answers on the first pick; the dialog re-presents
   with the pick marked `✓`, and picking another option replaces it.
+- On the dashboard question wizard, picking an option of a multi-select
+  question never advances to the next question: the wizard stays on it so
+  further options can be picked (navigate with **← Back** / **Next →** when
+  you are done).
 - The custom-answer path opens an input prompt ("Your own answer for: …").
   On a single-choice question a custom answer replaces any picked option;
   on a multi-select question it is recorded alongside the current picks.
@@ -304,6 +308,8 @@ select-many (`multiple` kind — the prompt text says to pick all that apply):
 - The multi-select question answers on the first pick (picks that are never
   confirmed still count — this is expected; a *stale* pick from a
   switched-away dialog is not).
+- The dashboard question wizard advances to another question when an option
+  of a multi-select question is picked (it must stay on the question).
 - The custom text is missing from `customText` / the markdown `Custom` line.
 
 ---
@@ -602,9 +608,12 @@ unavailable.
 
 Check the error toast. Common causes:
 
-- The interviewer returned invalid output twice (schema or action
-  mismatch) — a retry with a correction path runs once, then the session
-  fails.
+- The interviewer returned invalid output on the run and both schema
+  corrections (a retry with the validation error and correction path runs
+  up to two times, then the session fails).
+- The interviewer's response was cut off (incomplete) twice — a truncated
+  run is retried once with an `incomplete_response` correction, then the
+  session fails. A truncated correction run is never retried.
 - The interviewer ran out of timeout budget; raise `agentTimeoutMs` in
   settings.
 - A question answer failed validation (e.g. a custom answer over the byte

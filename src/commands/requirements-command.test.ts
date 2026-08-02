@@ -2,7 +2,7 @@ import path from "node:path";
 import { describe, expect, it, vi, afterEach } from "vitest";
 import type { ExtensionCommandContext, TerminalInputHandler } from "@earendil-works/pi-coding-agent";
 import type { AgentExecutor, AgentRunOptions } from "../agents/agent-runner-contracts.js";
-import { AgentCancelledError } from "../agents/agent-runner.js";
+import { AgentCancelledError, AgentIncompleteResponseError } from "../agents/agent-runner.js";
 import type { AgentResult, InterviewAnswer, InterviewQuestion, InterviewerAssessment, OrchestratorConfig } from "../types.js";
 import type { AgentHistoryResponse, AgentInspection, AgentTranscript, AgentTranscriptArtifact } from "../types.js";
 import { MAX_INTERVIEW_ROUNDS } from "../types.js";
@@ -80,7 +80,7 @@ interface Envelope {
   taskSchemaVersion: number;
   mode: string;
   task: { action: string; goal: string; round?: number; history: unknown[]; insights: string[] };
-  correction?: { attempt: number; reason: string; fieldPath?: string };
+  correction?: { attempt: number; reason: string; fieldPath?: string; validationError?: string };
 }
 
 class ScriptedExecutor implements AgentExecutor {
@@ -587,6 +587,138 @@ describe("runRequirementsCommand", () => {
     expect(viewModel.run?.artifactNames).toEqual(["requirements.md", "requirements.json"]);
   });
 
+  it("never drops a multiple-answer question from the published set after a pick", async () => {
+    const cwd = await temporaryDirectory();
+    const executor = new ScriptedExecutor(envelope => {
+      if (envelope.task.action === "ask_questions") {
+        return { text: JSON.stringify({ action: "ask_questions", questions: MULTI_QUESTIONS }) };
+      }
+      if (envelope.task.action === "assess") {
+        return { text: JSON.stringify({ action: "assess", assessment: { goal: "Build a CLI", summary: "ok" } }) };
+      }
+      const history = envelope.task.history as unknown as Array<{ question: InterviewQuestion; answer: InterviewAnswer }>;
+      return { text: JSON.stringify({ action: "finalize", report: { ...REPORT, qa: history } }) };
+    });
+    const deps = (await testDeps(executor)) as RequirementsCommandDependencies;
+    deps.loadConfig = async (): Promise<OrchestratorConfig> => ({ ...structuredClone(DEFAULT_CONFIG), dashboard: { enabled: true, port: 0 } });
+    let dashboardUrl = "";
+    deps.openBrowser = (url: string): void => { dashboardUrl = url; };
+    const { ctx, inputs } = uiContext();
+    (ctx as { mode: string }).mode = "print";
+    inputs.push("Build a CLI");
+
+    const running = runRequirementsCommand(cwd, ctx, deps);
+
+    async function currentQuestions(): Promise<Array<{ questionId: string; decisionId?: string }>> {
+      if (!dashboardUrl) return [];
+      try {
+        const state = await (await fetch(`${dashboardUrl}/api/state`)).json() as { run?: { pendingQuestions?: Array<{ questionId: string; decisionId?: string }> } };
+        return state.run?.pendingQuestions ?? [];
+      } catch {
+        return [];
+      }
+    }
+
+    async function waitForQuestion(questionId: string): Promise<{ id: string }> {
+      for (let attempt = 0; attempt < 500; attempt++) {
+        const decisionId = (await currentQuestions()).find(question => question.questionId === questionId)?.decisionId;
+        if (decisionId) return { id: decisionId };
+        await new Promise(resolve => setTimeout(resolve, 10));
+      }
+      throw new Error(`Timed out waiting for question ${questionId}`);
+    }
+
+    async function waitForDecision(): Promise<{ id: string }> {
+      for (let attempt = 0; attempt < 500; attempt++) {
+        if (dashboardUrl) {
+          try {
+            const state = await (await fetch(`${dashboardUrl}/api/state`)).json() as { run?: { pendingDecision?: { id: string } } };
+            if (state.run?.pendingDecision) return state.run.pendingDecision;
+          } catch {
+            // dashboard not ready yet
+          }
+        }
+        await new Promise(resolve => setTimeout(resolve, 10));
+      }
+      throw new Error("Timed out waiting for a pending interview decision");
+    }
+
+    async function post(id: string, action: string, feedback?: string): Promise<number> {
+      const response = await fetch(`${dashboardUrl}/api/decision`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ id, action, feedback })
+      });
+      return response.status;
+    }
+
+    const q1 = await waitForQuestion("q1");
+
+    interface PendingQuestion { questionId: string; answered: boolean; question?: { options?: Array<{ id: string; picked: boolean }> } }
+    type PublishedState = { run?: { pendingQuestions?: PendingQuestion[] } };
+
+    const controller = new AbortController();
+    const stream = await fetch(`${dashboardUrl}/events`, { signal: controller.signal });
+    const reader = stream.body!.getReader();
+    const decoder = new TextDecoder();
+    let buffer = "";
+
+    async function nextEvent(): Promise<PublishedState | null> {
+      for (;;) {
+        const blockEnd = buffer.indexOf("\n\n");
+        if (blockEnd !== -1) {
+          const block = buffer.slice(0, blockEnd);
+          buffer = buffer.slice(blockEnd + 2);
+          const dataLine = block.split("\n").find(line => line.startsWith("data: "));
+          if (dataLine) return JSON.parse(dataLine.slice(6)) as PublishedState;
+          continue;
+        }
+        const { value, done } = await reader.read();
+        if (done) return null;
+        buffer += decoder.decode(value, { stream: true });
+      }
+    }
+
+    await post(q1.id, "opt:q1:windows");
+
+    const published: PublishedState[] = [];
+    const deadline = Date.now() + 10_000;
+    let reflected = false;
+    while (Date.now() < deadline) {
+      const event = await nextEvent();
+      if (event === null) throw new Error("SSE stream closed unexpectedly");
+      published.push(event);
+      const q1Entry = event.run?.pendingQuestions?.find(question => question.questionId === "q1");
+      if (q1Entry?.answered && q1Entry.question?.options?.some(option => option.id === "windows" && option.picked)) {
+        reflected = true;
+        break;
+      }
+    }
+    expect(reflected).toBe(true);
+
+    // The transient publish after a pick must never omit the answered channel:
+    // every event up to and including the one reflecting the pick still lists q1.
+    for (const event of published) {
+      expect(event.run?.pendingQuestions?.some(question => question.questionId === "q1")).toBe(true);
+    }
+
+    // The reflected event carries the pick.
+    const reflectedQ1 = published.at(-1)!.run!.pendingQuestions!.find(question => question.questionId === "q1")!;
+    expect(reflectedQ1.question?.options?.find(option => option.id === "windows")?.picked).toBe(true);
+
+    controller.abort();
+    await post((await waitForQuestion("q1"))!.id, "opt:q1:macos");
+    await post((await waitForQuestion("q2"))!.id, "custom:q2", "Cross-platform support");
+    await post((await waitForQuestion("q3"))!.id, "opt:q3:no");
+    await post((await waitForQuestion("q4"))!.id, "opt:q4:yes");
+    await post((await waitForQuestion("q5"))!.id, "opt:q5:yes");
+    await post((await waitForQuestion("commit"))!.id, "opt:commit:finish-round");
+    await post((await waitForDecision())!.id, "opt:review:yes");
+
+    const session = (await running)!;
+    expect(session.status).toBe("completed");
+  }, 20_000);
+
   it("records dashboard answers that arrive out of question order", async () => {
     const cwd = await temporaryDirectory();
     const executor = new ScriptedExecutor(singleRoundScript(QUESTIONS));
@@ -870,10 +1002,47 @@ describe("runRequirementsCommand", () => {
     expect(executor.runs[0].envelope.mode).toBe("execute");
     expect(executor.runs[1].envelope.mode).toBe("correct_output");
     expect(executor.runs[1].envelope.correction).toMatchObject({ attempt: 1, reason: "schema_validation_failed", fieldPath: "action" });
+    expect(executor.runs[1].envelope.correction?.validationError).toContain("expected ask_questions but interviewer returned finalize");
     expect(executor.runs[1].options.task).toContain('"fieldPath": "action"');
   });
 
-  it("fails the session when corrected output is still invalid", async () => {
+  it("retries with a validation error and no field path when the interviewer output is not JSON", async () => {
+    const cwd = await temporaryDirectory();
+    let call = 0;
+    const executor = new ScriptedExecutor(envelope => {
+      call++;
+      if (envelope.task.action === "ask_questions" && call === 1) {
+        return { text: "{ broken" };
+      }
+      switch (envelope.task.action) {
+        case "ask_questions":
+          return { text: JSON.stringify({ action: "ask_questions", questions: QUESTIONS }) };
+        case "assess":
+          return { text: JSON.stringify({ action: "assess", assessment: { goal: "Build a CLI", summary: "ok" } }) };
+        case "finalize":
+          return { text: JSON.stringify({ action: "finalize", report: REPORT }) };
+        default:
+          throw new Error(`unexpected action ${envelope.task.action}`);
+      }
+    });
+    const deps = await testDeps(executor);
+    const { ctx, selects, inputs } = uiContext();
+
+    inputs.push("Build a CLI");
+    selects.push(...hubSequence(QUESTIONS, allYes(QUESTIONS)));
+    selects.push(REVIEW_YES_LABEL);
+    selects.push("Done");
+
+    await runRequirementsCommand(cwd, ctx, deps);
+
+    expect(executor.runs[1].envelope.mode).toBe("correct_output");
+    expect(executor.runs[1].envelope.correction).toMatchObject({ attempt: 1, reason: "schema_validation_failed" });
+    expect(executor.runs[1].envelope.correction?.validationError).toContain("invalid JSON");
+    expect(executor.runs[1].envelope.correction).not.toHaveProperty("fieldPath");
+    expect(executor.runs[1].options.task).toContain('"validationError":');
+  });
+
+  it("fails the session after two schema corrections when output stays invalid", async () => {
     const cwd = await temporaryDirectory();
     const executor = new ScriptedExecutor(() => ({ text: "{ broken" }));
     const deps = await testDeps(executor);
@@ -883,9 +1052,93 @@ describe("runRequirementsCommand", () => {
 
     await runRequirementsCommand(cwd, ctx, deps);
 
-    expect(executor.runs).toHaveLength(2);
+    expect(executor.runs).toHaveLength(3);
+    expect(executor.runs[1].envelope.correction).toMatchObject({ attempt: 1, reason: "schema_validation_failed" });
+    expect(executor.runs[1].envelope.correction?.validationError).toContain("invalid JSON");
+    expect(executor.runs[1].envelope.correction).not.toHaveProperty("fieldPath");
+    expect(executor.runs[2].envelope.correction).toMatchObject({ attempt: 2, reason: "schema_validation_failed" });
+    expect(executor.runs[2].envelope.correction?.validationError).toContain("invalid JSON");
     expect(notify).toHaveBeenCalledWith(expect.stringContaining("Interviewer returned invalid output"), "error");
     expect(await exists(path.join(cwd, CONFIG_DIR_NAME, "orchestrator", "requirements", "test-session", "requirements.json"))).toBe(false);
+  });
+
+  it("retries with the previous failure details and succeeds on the second correction attempt", async () => {
+    const cwd = await temporaryDirectory();
+    let call = 0;
+    const executor = new ScriptedExecutor(envelope => {
+      call++;
+      if (envelope.task.action === "ask_questions" && call <= 2) {
+        return { text: JSON.stringify({ action: "finalize", report: REPORT }) };
+      }
+      switch (envelope.task.action) {
+        case "ask_questions":
+          return { text: JSON.stringify({ action: "ask_questions", questions: QUESTIONS }) };
+        case "assess":
+          return { text: JSON.stringify({ action: "assess", assessment: { goal: "Build a CLI", summary: "ok" } }) };
+        case "finalize":
+          return { text: JSON.stringify({ action: "finalize", report: REPORT }) };
+        default:
+          throw new Error(`unexpected action ${envelope.task.action}`);
+      }
+    });
+    const deps = await testDeps(executor);
+    const { ctx, selects, inputs } = uiContext();
+
+    inputs.push("Build a CLI");
+    selects.push(...hubSequence(QUESTIONS, allYes(QUESTIONS)));
+    selects.push(REVIEW_YES_LABEL);
+    selects.push("Done");
+
+    await runRequirementsCommand(cwd, ctx, deps);
+
+    expect(executor.runs).toHaveLength(5);
+    expect(executor.runs[1].envelope.correction).toMatchObject({ attempt: 1, reason: "schema_validation_failed" });
+    expect(executor.runs[2].envelope.correction).toMatchObject({ attempt: 2, reason: "schema_validation_failed" });
+    expect(executor.runs[2].envelope.correction?.validationError).toContain("expected ask_questions but interviewer returned finalize");
+    expect(executor.runs[3].envelope.mode).toBe("execute");
+  });
+
+  it("retries once with an incomplete_response correction when the interviewer output is truncated", async () => {
+    const cwd = await temporaryDirectory();
+    let call = 0;
+    const executor = new ScriptedExecutor(envelope => {
+      call++;
+      if (call === 1) {
+        throw new AgentIncompleteResponseError({
+          agent: "interviewer",
+          stopReason: "length",
+          usage: { input: 10, output: 5, cacheRead: 0, cacheWrite: 0, cost: 0 }
+        });
+      }
+      switch (envelope.task.action) {
+        case "ask_questions":
+          return { text: JSON.stringify({ action: "ask_questions", questions: QUESTIONS }) };
+        case "assess":
+          return { text: JSON.stringify({ action: "assess", assessment: { goal: "Build a CLI", summary: "ok" } }) };
+        case "finalize":
+          return { text: JSON.stringify({ action: "finalize", report: REPORT }) };
+        default:
+          throw new Error(`unexpected action ${envelope.task.action}`);
+      }
+    });
+    const deps = await testDeps(executor);
+    const { ctx, selects, inputs } = uiContext();
+
+    inputs.push("Build a CLI");
+    selects.push(...hubSequence(QUESTIONS, allYes(QUESTIONS)));
+    selects.push(REVIEW_YES_LABEL);
+    selects.push("Done");
+
+    await runRequirementsCommand(cwd, ctx, deps);
+
+    expect(executor.runs[0].envelope.mode).toBe("execute");
+    expect(executor.runs[1].envelope.mode).toBe("correct_output");
+    expect(executor.runs[1].envelope.correction).toMatchObject({
+      attempt: 1,
+      reason: "incomplete_response",
+      validationError: expect.stringContaining("incomplete response")
+    });
+    expect(executor.runs[1].options.task).toContain('"reason": "incomplete_response"');
   });
 
   it("cancels when the user picks Cancel interview and writes no artifact", async () => {
@@ -1510,6 +1763,7 @@ describe("runRequirementsCommand", () => {
     const task = JSON.parse(await readFile(taskFile, "utf8"));
     expect(task.mode).toBe("correct_output");
     expect(task.correction).toMatchObject({ attempt: 1, reason: "schema_validation_failed", fieldPath: "action" });
+    expect(task.correction.validationError).toContain("expected ask_questions but interviewer returned finalize");
     expect(await exists(path.join(sessionDir, "step-1-interviewer-ask_questions-invocation-1-task.json"))).toBe(false);
 
     const inspection = (await session.inspectAgent("interviewer")) as AgentInspection | undefined;
@@ -1558,7 +1812,7 @@ describe("runRequirementsCommand", () => {
 describe("questionPresentation", () => {
   it("builds a goal header and structured options for a first-round question", () => {
     const presentation = questionPresentation(
-      { goal: "Build a CLI", round: 1, lastAssessmentNote: undefined },
+      { goal: "Build a CLI" },
       MULTI_QUESTIONS[0],
       []
     );
@@ -1579,16 +1833,17 @@ describe("questionPresentation", () => {
     expect(presentation.actions.map(action => action.value)).toEqual(["opt:q1:windows", "opt:q1:macos", "opt:q1:linux", "custom:q1", "cancel"]);
   });
 
-  it("adds round and follow-up context for later rounds and marks picks", () => {
+  it("presents later-round questions with the same body as the first round and marks picks", () => {
     const presentation = questionPresentation(
-      { goal: "Build a CLI", round: 2, lastAssessmentNote: "Scope is vague; Where does it run?" },
+      { goal: "Build a CLI" },
       QUESTIONS[0],
       ["yes"]
     );
 
     expect(presentation.content).toContain("**Goal:** Build a CLI");
-    expect(presentation.content).toContain("Round 2 of 6");
-    expect(presentation.content).toContain("**Follow-up:** Scope is vague; Where does it run?");
+    expect(presentation.content).not.toContain("Round ");
+    expect(presentation.content).not.toContain("Follow-up");
+    expect(presentation.content).toContain("## Question 1?");
     expect(presentation.question?.kind).toBe("single");
     expect(presentation.question?.options).toEqual([
       { id: "yes", text: "Yes", recommended: true, picked: true },

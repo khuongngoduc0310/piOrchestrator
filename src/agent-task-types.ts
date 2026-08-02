@@ -84,9 +84,10 @@ export type AgentTaskEnvelope<T> =
       memoryContext: MemoryContext | null;
       correction:
         | {
-            attempt: 1;
+            attempt: 1 | 2;
             reason: "schema_validation_failed";
             fieldPath?: string;
+            validationError?: string;
             expectedChangedFiles?: string[];
           }
         | {
@@ -94,6 +95,11 @@ export type AgentTaskEnvelope<T> =
             reason: "reported_changed_files_mismatch";
             fieldPath: "changedFiles";
             expectedChangedFiles: string[];
+          }
+        | {
+            attempt: 1;
+            reason: "incomplete_response";
+            validationError?: string;
           };
     };
 

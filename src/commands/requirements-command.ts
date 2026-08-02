@@ -118,6 +118,14 @@ const COMMIT_QUESTION: InterviewQuestion = {
 const COMMIT_FINISH_ACTION = `opt:${COMMIT_QUESTION.id}:finish-round`;
 const COMMIT_KEEP_ACTION = `opt:${COMMIT_QUESTION.id}:keep-working`;
 
+/**
+ * The interviewer is read-only, so a failed output is cheap to retry: schema
+ * failures get up to two `correct_output` attempts before the session fails.
+ */
+const MAX_INTERVIEWER_CORRECTIONS = 2;
+/** Byte cap for `correction.validationError`, which is embedded in the retry envelope. */
+const MAX_CORRECTION_ERROR_BYTES = 500;
+
 interface InterviewActionResult {
   action: string;
   feedback?: string;
@@ -679,6 +687,29 @@ export async function runRequirementsCommand(
   return session;
 }
 
+/** Why a previous interviewer call failed; carried by the `correct_output` retry envelope. */
+type InterviewerCorrectionInfo =
+  | {
+      attempt: 1 | 2;
+      reason: "schema_validation_failed";
+      fieldPath?: string;
+      validationError?: string;
+    }
+  | {
+      attempt: 1;
+      reason: "incomplete_response";
+      validationError?: string;
+    };
+
+function cappedCorrectionError(message: string): string {
+  if (Buffer.byteLength(message, "utf8") <= MAX_CORRECTION_ERROR_BYTES) return message;
+  let truncated = message;
+  while (Buffer.byteLength(truncated, "utf8") > MAX_CORRECTION_ERROR_BYTES - "… (truncated)".length) {
+    truncated = truncated.slice(0, -1);
+  }
+  return `${truncated}… (truncated)`;
+}
+
 async function interviewerCall(
   session: RequirementsSession,
   executor: AgentExecutor,
@@ -686,25 +717,29 @@ async function interviewerCall(
   deadlineStartedAt: number,
   task: InterviewerTask
 ): Promise<InterviewerOutput> {
-  const first = await runInterviewer(session, executor, config, deadlineStartedAt, "execute", task, undefined);
   const expectedAction = task.action;
-  let output: InterviewerOutput;
-  try {
-    const parsed = parseInterviewerOutput(first.text);
-    assertRequestedAction(parsed, expectedAction);
-    output = parsed;
-  } catch (error) {
-    const fieldPath = error instanceof ValidationError && /^[a-zA-Z0-9_.\[\]-]+$/.test(error.path) ? error.path : undefined;
-    const corrected = await runInterviewer(session, executor, config, deadlineStartedAt, "correct_output", task, fieldPath);
+  let attempt = 0;
+  let text = (await runInterviewer(session, executor, config, deadlineStartedAt, "execute", task, undefined)).text;
+  for (;;) {
     try {
-      const parsed = parseInterviewerOutput(corrected.text);
+      const parsed = parseInterviewerOutput(text);
       assertRequestedAction(parsed, expectedAction);
-      output = parsed;
-    } catch (retryError) {
-      throw new Error(`Interviewer returned invalid output: ${messageOf(retryError)}`);
+      return parsed;
+    } catch (error) {
+      if (attempt >= MAX_INTERVIEWER_CORRECTIONS) {
+        throw new Error(`Interviewer returned invalid output: ${messageOf(error)}`);
+      }
+      attempt += 1;
+      const fieldPath = error instanceof ValidationError && /^[a-zA-Z0-9_.\[\]-]+$/.test(error.path) ? error.path : undefined;
+      const corrected = await runInterviewer(session, executor, config, deadlineStartedAt, "correct_output", task, {
+        attempt: attempt as 1 | 2,
+        reason: "schema_validation_failed",
+        ...(fieldPath ? { fieldPath } : {}),
+        validationError: cappedCorrectionError(messageOf(error))
+      });
+      text = corrected.text;
     }
   }
-  return output;
 }
 
 function assertRequestedAction(output: InterviewerOutput, expected: InterviewerTask["action"]): void {
@@ -720,7 +755,7 @@ async function runInterviewer(
   deadlineStartedAt: number,
   mode: "execute" | "correct_output",
   task: InterviewerTask,
-  fieldPath: string | undefined
+  correction: InterviewerCorrectionInfo | undefined
 ) {
   const remaining = agentRemainingTimeoutMs(config.limits.agentTimeoutMs, deadlineStartedAt);
   const envelope: AgentTaskEnvelope<InterviewerTask> = mode === "correct_output"
@@ -729,11 +764,7 @@ async function runInterviewer(
         mode,
         task,
         memoryContext: null,
-        correction: {
-          attempt: 1,
-          reason: "schema_validation_failed",
-          ...(fieldPath ? { fieldPath } : {})
-        }
+        correction: correction!
       }
     : {
         taskSchemaVersion: AGENT_TASK_SCHEMA_VERSION,
@@ -792,6 +823,16 @@ async function runInterviewer(
         stopReason: error.stopReason
       } : {})
     });
+    if (error instanceof AgentIncompleteResponseError && mode === "execute") {
+      // A truncated response is common for long JSON and cheap to retry
+      // (read-only): ask once for the complete output. A truncated
+      // correction run is not retried; the session fails closed.
+      return runInterviewer(session, executor, config, deadlineStartedAt, "correct_output", task, {
+        attempt: 1,
+        reason: "incomplete_response",
+        validationError: cappedCorrectionError(message)
+      });
+    }
     throw error;
   }
 }
@@ -838,7 +879,7 @@ interface InterviewPresentation {
 }
 
 type InterviewPresent = (
-  session: Pick<RequirementsSession, "goal" | "round" | "lastAssessmentNote">,
+  session: Pick<RequirementsSession, "goal">,
   question: InterviewQuestion,
   picked: readonly string[]
 ) => InterviewPresentation;
@@ -873,16 +914,11 @@ function presentationBody(
 }
 
 export function questionPresentation(
-  session: Pick<RequirementsSession, "goal" | "round" | "lastAssessmentNote">,
+  session: Pick<RequirementsSession, "goal">,
   question: InterviewQuestion,
   picked: readonly string[]
 ): InterviewPresentation {
-  const lines: string[] = [`**Goal:** ${session.goal}`];
-  if (session.round > 1) {
-    lines.push(`Round ${session.round} of ${MAX_INTERVIEW_ROUNDS}`);
-    if (session.lastAssessmentNote) lines.push(`**Follow-up:** ${session.lastAssessmentNote}`);
-  }
-  lines.push("", `## ${question.text}`);
+  const lines: string[] = [`**Goal:** ${session.goal}`, "", `## ${question.text}`];
   return {
     content: lines.join("\n"),
     ...presentationBody(question, picked)
@@ -891,7 +927,7 @@ export function questionPresentation(
 
 export function reviewPresentation(
   assessment: InterviewerAssessment,
-  session: Pick<RequirementsSession, "goal" | "round" | "lastAssessmentNote">,
+  session: Pick<RequirementsSession, "goal">,
   question: InterviewQuestion,
   picked: readonly string[]
 ): InterviewPresentation {
@@ -1181,6 +1217,13 @@ async function driveQuestion(
       if (question.kind === "single") channel.picked = [];
       channel.customText = result.feedback;
       refreshCompleted(channel);
+      // Re-publish this channel with the race that just answered it so the set
+      // never transiently drops a presented question (the shared clear below
+      // the race already ran; the re-present publish in the same tick replaces
+      // this pre-pick presentation).
+      channel.decisionId = race.decisionId;
+      channel.label = label;
+      channel.presentation = presented;
       resolveWake(channel);
       publishQuestionSet(session, channels, driver.round);
       driver.armCommit();
@@ -1200,6 +1243,11 @@ async function driveQuestion(
         }
       }
       refreshCompleted(channel);
+      // See the custom-action handler above: re-set the answered race's fields
+      // so this channel is never omitted from the published set.
+      channel.decisionId = race.decisionId;
+      channel.label = label;
+      channel.presentation = presented;
       resolveWake(channel);
       publishQuestionSet(session, channels, driver.round);
       driver.armCommit();
