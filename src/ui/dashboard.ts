@@ -298,14 +298,6 @@ export class DashboardServer {
               res.end(JSON.stringify({ ok: false, error: `Action ${parsed.action} requires nonblank feedback` }));
               return;
             }
-            if (parsed.action.startsWith("done:") && presentation.question?.kind === "multiple") {
-              const pickedCount = presentation.question.options.filter(option => option.picked).length;
-              if (pickedCount === 0) {
-                res.statusCode = 400;
-                res.end(JSON.stringify({ ok: false, error: "must pick at least one option before Done" }));
-                return;
-              }
-            }
             const accepted = this.submitDecision(parsed.id, descriptor.value, feedback);
             if (!accepted) {
               res.statusCode = 409;

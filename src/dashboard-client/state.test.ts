@@ -276,4 +276,103 @@ describe("dashboard state", () => {
     expect(state.questionErrors).toEqual({});
     expect(state.questionFocusIndex).toBe(0);
   });
+
+  it("tracks whether the questions panel was dismissed and reopens it", () => {
+    let state = dashboardReducer(INITIAL_STATE, {
+      type: "questionSetUpdated",
+      questions: [questionInfo("q1", "d1")],
+    });
+    state = dashboardReducer(state, { type: "questionPanelDismissed" });
+    expect(state.questionPanelDismissed).toBe(true);
+    state = dashboardReducer(state, { type: "questionPanelOpened" });
+    expect(state.questionPanelDismissed).toBe(false);
+  });
+
+  it("resets the dismissed flag when the question set empties", () => {
+    let state = dashboardReducer(INITIAL_STATE, {
+      type: "questionSetUpdated",
+      questions: [questionInfo("q1", "d1")],
+    });
+    state = dashboardReducer(state, { type: "questionPanelDismissed" });
+    state = dashboardReducer(state, {
+      type: "questionSetUpdated",
+      questions: [],
+    });
+    expect(state.questionPanelDismissed).toBe(false);
+  });
+
+  it("jumps focus to the commit question when it first appears after the last real question", () => {
+    let state = dashboardReducer(INITIAL_STATE, {
+      type: "questionSetUpdated",
+      questions: [questionInfo("q1", "d1"), questionInfo("q2", "d2"), questionInfo("q3", "d3")],
+    });
+    state = dashboardReducer(state, { type: "questionFocusMoved", index: 2 });
+    state = dashboardReducer(state, {
+      type: "questionSetUpdated",
+      questions: [questionInfo("q1", "d1"), questionInfo("q2", "d2"), questionInfo("q3", "d3"), questionInfo("commit", "d-commit")],
+    });
+    expect(state.questionFocusIndex).toBe(3);
+    expect(state.questionSet[3].questionId).toBe("commit");
+  });
+
+  it("does not jump focus to the commit question when it sits elsewhere", () => {
+    let state = dashboardReducer(INITIAL_STATE, {
+      type: "questionSetUpdated",
+      questions: [questionInfo("q1", "d1"), questionInfo("q2", "d2"), questionInfo("q3", "d3")],
+    });
+    state = dashboardReducer(state, { type: "questionFocusMoved", index: 0 });
+    state = dashboardReducer(state, {
+      type: "questionSetUpdated",
+      questions: [questionInfo("q1", "d1"), questionInfo("q2", "d2"), questionInfo("q3", "d3"), questionInfo("commit", "d-commit")],
+    });
+    expect(state.questionFocusIndex).toBe(0);
+  });
+
+  it("does not re-jump focus on later updates once the commit question is present", () => {
+    let state = dashboardReducer(INITIAL_STATE, {
+      type: "questionSetUpdated",
+      questions: [questionInfo("q1", "d1"), questionInfo("q2", "d2"), questionInfo("q3", "d3")],
+    });
+    state = dashboardReducer(state, { type: "questionFocusMoved", index: 2 });
+    state = dashboardReducer(state, {
+      type: "questionSetUpdated",
+      questions: [questionInfo("q1", "d1"), questionInfo("q2", "d2"), questionInfo("q3", "d3"), questionInfo("commit", "d-commit")],
+    });
+    expect(state.questionFocusIndex).toBe(3);
+    state = dashboardReducer(state, { type: "questionFocusMoved", index: 1 });
+    state = dashboardReducer(state, {
+      type: "questionSetUpdated",
+      questions: [questionInfo("q1", "d1"), questionInfo("q2", "d2"), questionInfo("q3", "d3"), questionInfo("commit", "d-commit")],
+    });
+    expect(state.questionFocusIndex).toBe(1);
+  });
+
+  it("keeps focus on a multi-select last question when the commit question appears", () => {
+    const multi = { ...questionInfo("q-multi", "d-multi"), kind: "multiple" as const };
+    let state = dashboardReducer(INITIAL_STATE, {
+      type: "questionSetUpdated",
+      questions: [questionInfo("q1", "d1"), questionInfo("q2", "d2"), multi],
+    });
+    state = dashboardReducer(state, { type: "questionFocusMoved", index: 2 });
+    state = dashboardReducer(state, {
+      type: "questionSetUpdated",
+      questions: [questionInfo("q1", "d1"), questionInfo("q2", "d2"), multi, questionInfo("commit", "d-commit")],
+    });
+    expect(state.questionFocusIndex).toBe(2);
+    expect(state.questionSet[2].questionId).toBe("q-multi");
+  });
+
+  it("still jumps focus to the commit question after a single-choice last question", () => {
+    const multi = { ...questionInfo("q-multi", "d-multi"), kind: "multiple" as const };
+    let state = dashboardReducer(INITIAL_STATE, {
+      type: "questionSetUpdated",
+      questions: [multi, questionInfo("q2", "d2"), questionInfo("q3", "d3")],
+    });
+    state = dashboardReducer(state, { type: "questionFocusMoved", index: 2 });
+    state = dashboardReducer(state, {
+      type: "questionSetUpdated",
+      questions: [multi, questionInfo("q2", "d2"), questionInfo("q3", "d3"), questionInfo("commit", "d-commit")],
+    });
+    expect(state.questionFocusIndex).toBe(3);
+  });
 });

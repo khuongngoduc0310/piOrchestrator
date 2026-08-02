@@ -7,6 +7,16 @@ import type { PreviewStatus, SubmissionStatus } from "../state.js";
 const CUSTOM_BYTE_CAP = 2000;
 const ANSWERED_ELSEWHERE = /(no longer active|already resolved|HTTP 409)/i;
 
+export interface InterviewDecisionNav {
+  questionIndex: number;
+  questionTotal: number;
+  answeredCount: number;
+  onPrev: () => void;
+  onNext: () => void;
+  onDismiss: () => void;
+  nextDisabled: boolean;
+}
+
 export interface InterviewDecisionPanelProps {
   decisionId: string;
   label: string;
@@ -21,6 +31,7 @@ export interface InterviewDecisionPanelProps {
   onRetryPreview: () => void;
   onSubmitAction: (action: HumanDecisionAction, feedback?: string) => void;
   onDismissError: () => void;
+  nav?: InterviewDecisionNav;
 }
 
 export function InterviewDecisionPanel({
@@ -37,6 +48,7 @@ export function InterviewDecisionPanel({
   onRetryPreview,
   onSubmitAction,
   onDismissError,
+  nav,
 }: InterviewDecisionPanelProps) {
   const [feedback, setFeedback] = useState("");
   const [showCustom, setShowCustom] = useState(false);
@@ -112,7 +124,22 @@ export function InterviewDecisionPanel({
     if (!panel) return;
     function handleKey(event: KeyboardEvent) {
       const target = event.target as HTMLElement | null;
-      if (target && target !== panel && !(target instanceof HTMLElement && target.closest(".interview-option"))) return;
+      if (target && target !== panel && !(target instanceof HTMLElement && target.closest(".interview-option, .interview-wizard-nav, .interview-wizard-close"))) return;
+      if (event.key === "ArrowLeft" && nav) {
+        event.preventDefault();
+        nav.onPrev();
+        return;
+      }
+      if (event.key === "ArrowRight" && nav) {
+        event.preventDefault();
+        nav.onNext();
+        return;
+      }
+      if (event.key === "Escape" && nav?.onDismiss) {
+        event.preventDefault();
+        nav.onDismiss();
+        return;
+      }
       if (event.key === "ArrowDown" || event.key === "ArrowUp") {
         event.preventDefault();
         const count = optionActions.length;
@@ -155,7 +182,26 @@ export function InterviewDecisionPanel({
           <div className="decision-badge">Interview question</div>
           <h2 id="interview-decision-heading">{label}</h2>
         </div>
+        {nav && (
+          <button type="button" className="icon-btn interview-wizard-close" onClick={nav.onDismiss} aria-label="Close questions panel">
+            x
+          </button>
+        )}
       </div>
+
+      {nav && (
+        <div className="interview-wizard-nav">
+          <button type="button" className="decision-btn" onClick={nav.onPrev} disabled={nav.questionIndex <= 1}>
+            ← Back
+          </button>
+          <span className="muted">
+            Question {nav.questionIndex} of {nav.questionTotal} · {nav.answeredCount} answered
+          </span>
+          <button type="button" className="decision-btn" onClick={nav.onNext} disabled={nav.nextDisabled}>
+            Next →
+          </button>
+        </div>
+      )}
 
       {previewStatus === "loading" && (
         <div className="decision-loading">

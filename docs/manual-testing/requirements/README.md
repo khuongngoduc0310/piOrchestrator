@@ -118,9 +118,12 @@ Answer each of the 5–7 questions through the question-set hub: the TUI
 shows a select dialog listing every question in the round, marked `○` when
 unanswered and `✓` when answered. Use the arrow keys to move to a question
 (Up/Down move one row; while the hub is open, Right also moves down and
-Left moves up), press Enter to open its answer dialog, and after each
-answer you return to the hub. Once every question is answered the round
-auto-completes — there is no **Continue** button. Prefer the recommended
+Left moves up), press Enter to open its answer dialog, and step back with
+**← Back to questions** (or Escape) after an answer. The answer dialog
+stays open after an answer so you can revise it in place before moving on.
+Once every question is answered, the set ends only when you answer the
+**Finish round** question ("All questions are answered. Finish this
+round?") — answers stay changeable until then. Prefer the recommended
 option on most questions; choose a non-recommended option on at least one.
 On the completion dialog choose **Done** (decline the handoff — Scenario 5
 covers it).
@@ -129,7 +132,19 @@ covers it).
 
 - A browser dashboard tab opens (dashboard enabled by default); the session
   appears as an active run with status `running` and, while a question is
-  pending, `waiting` with a pending-decision panel.
+  pending, `waiting`.
+- While questions are pending, the dashboard shows a **question wizard
+  pop-up** in the bottom-right corner: one question at a time. Picking a
+  single-choice option (or submitting a typed custom answer) auto-advances
+  to the next question; multi-select toggles never advance, so use
+  **Next →**. **← Back** returns to earlier questions (answered ones stay
+  revisable and show `✓`). The header shows "Question N of M · A answered".
+  The pop-up can be closed with ✕ or Escape and reopened from the floating
+  "Answer questions (A/M)" pill (which reads "Finish round" once the set is
+  armed). When the **Finish round** question appears, the wizard lands on it
+  automatically if you were on the last real question and it was a
+  single-choice question; a multi-select last question keeps its focus so you
+  can keep picking options (use **Next →** to reach **Finish round**).
 - As questions are answered, the dashboard's **Interview record** section
   grows live, grouped under **Round 1 / Round 2** headings. Each entry shows
   the question and its options as a filled-in questionnaire: picked options
@@ -140,20 +155,26 @@ covers it).
   for unanswered and `✓ N. <question> — <answer summary>` for answered
   ones, plus **Cancel interview**. Arrow keys navigate the list (Up/Down
   and, while the hub is open, also Left/Right — they are rewritten to
-  Up/Down); Enter opens the chosen question's answer dialog; after an
-  answer you return to the hub. The round ends as soon as every question
-  is answered — the hub never offers **Continue**.
+  Up/Down, clamped at the ends so Right on the last question never lands on
+  Cancel); Enter opens the chosen question's answer dialog. The set never
+  auto-closes: once every question is answered, the hub additionally lists
+  the **Finish round** question, and the round ends only when it is
+  answered (hub, answer dialog, or dashboard — first responder wins).
 - While an answer dialog is open, Right and Left switch to the next or
-  previous question: the dialog closes softly, the hub reopens, and
-  pressing Enter on the same row re-opens the *target* question's dialog.
-  Right on the last question or Left on the first one is a no-op (the
-  dialog closes and the hub reopens).
-- Answer dialogs list the question options with `(recommended)` markers,
-  plus **✏️ Type my own answer** and **Cancel interview**; dismissing an
-  answer dialog with Escape returns to the hub (nothing is lost).
-- Before the round is done, return to an already-answered question from the
-  hub (`✓`-marked) and change the answer — the record keeps exactly one
-  entry per question, in set order, with the revised answer.
+  previous question: the dialog closes softly and the *target* question's
+  dialog opens. Right on the last question (the Finish-round question) or
+  Left on the first one is a no-op. While typing a custom answer, the
+  arrows move the text caret instead of switching.
+- Answer dialogs list the question options with `(recommended)` markers and
+  a `✓` on the current pick (both single- and multi-choice), plus
+  **✏️ Type my own answer**, **← Back to questions**, and **Cancel
+  interview**; dismissing with Escape or Back returns to the hub (nothing
+  is lost). After an answer the dialog stays open on the same question —
+  pick again to revise in place, switch with Right/Left, or step back to
+  the hub.
+- Before the set is finished, revise any answered question (in place in
+  its dialog, or by reopening it from the hub) — the record keeps exactly
+  one entry per question, in set order, with the revised answer.
 - The assessment after the round returns `clear`; the session finalizes
   without a second round.
 - A "Requirements saved to …" info toast appears.
@@ -244,25 +265,27 @@ Run an interview (any goal). Watch for a question the interviewer marks as
 select-many (`multiple` kind — the prompt text says to pick all that apply):
 
 - Pick two options, verify the dialog label updates ("… (2 selected)") and
-  that picked options are prefixed with `✓` on re-presentation, then choose
-  **Done**.
+  that picked options are prefixed with `✓` on re-presentation. There is no
+  **Done** action: any non-empty selection answers the question.
 - Choose an already-picked option again — it is **un-picked** (the `✓`
-  disappears and the selection count drops).
+  disappears and the selection count drops); un-picking everything marks
+  the question unanswered again.
 - On a different question, choose **✏️ Type my own answer** and type a short
   custom answer.
 
 #### Expected behavior
 
-- A multi-select question loops until **Done**: each pick is recorded in the
-  dialog's "Selected so far" line and the "Done" action only appears for
-  multi-select questions (and only after at least one pick; the dashboard
-  disables **Done** until a pick is made). Re-picking a `✓`-marked option
-  un-picks it; un-picking everything hides **Done** again.
-- A single-choice question answers on the first pick; re-answering it from
-  the hub replaces the previous pick.
+- A multi-select question stays open while picks are toggled: each pick is
+  recorded in the dialog's "Selected so far" line, and re-picking a
+  `✓`-marked option un-picks it. Any non-empty selection counts as
+  answered; a custom answer also counts.
+- A single-choice question answers on the first pick; the dialog re-presents
+  with the pick marked `✓`, and picking another option replaces it.
 - The custom-answer path opens an input prompt ("Your own answer for: …").
   On a single-choice question a custom answer replaces any picked option;
   on a multi-select question it is recorded alongside the current picks.
+  While the custom input is open, arrow keys move the caret and do not
+  switch questions.
 - The final `requirements.json` `qa` entry for the multi-select question has
   both picked option IDs in `selectedOptionIds`; the custom question has an
   empty `selectedOptionIds` and the typed text in `customText`.
@@ -278,8 +301,9 @@ select-many (`multiple` kind — the prompt text says to pick all that apply):
 
 #### Failure indicators
 
-- The multi-select question answers on the first pick without a **Done**
-  action.
+- The multi-select question answers on the first pick (picks that are never
+  confirmed still count — this is expected; a *stale* pick from a
+  switched-away dialog is not).
 - The custom text is missing from `customText` / the markdown `Custom` line.
 
 ---
@@ -294,21 +318,21 @@ wins and the other channel is closed.
 Start an interview with the dashboard open. When the first question is
 pending:
 
-1. Answer **one question from the dashboard** (pending-decision panel —
+1. Answer **one question from the dashboard** (the question wizard pop-up —
    choose an option, or choose the custom action and submit feedback) while
    the TUI select dialog is still open. The TUI dialog should disappear.
 2. On the next question, answer **from the TUI** while the dashboard still
-   shows the same question. The dashboard's pending decision should
-   disappear.
+   shows the same question. The dashboard's question should disappear from
+   the wizard.
 
 #### Expected behavior
 
 - A dashboard submission wins the race: the TUI prompt is cancelled, the
   question is recorded once, and the interview continues.
-- A TUI answer wins the race: the dashboard decision is removed, and the
+- A TUI answer wins the race: the dashboard question is removed, and the
   question is recorded once (no duplicate `qa` entry).
-- While a question is pending, the dashboard shows the session with a
-  pending-decision panel and the option list, including the same
+- While a question is pending, the dashboard shows the session with the
+  question wizard pop-up and the option list, including the same
   recommended markers as the TUI.
 
 #### Pass criteria
@@ -486,24 +510,33 @@ Start an interview. While the question hub is open:
 
 1. Press **Right** — the selection moves down one row; press **Left** — it
    moves back up. (This mirrors pressing Down/Up; the select-list only
-   binds Up/Down natively.)
+   binds Up/Down natively.) On the last question, Right does nothing —
+   it never moves onto **Cancel interview**.
 2. Open a question's answer dialog. With the dialog open, press **Right** —
-   the dialog closes and the hub reopens. Press Enter on the same row: the
-   *next* question's dialog opens (the current question is left unanswered
-   `○`-marked). Press **Left** inside a dialog to jump to the *previous*
-   question instead.
+   the dialog closes and the *next* question's dialog opens (the current
+   question stays unanswered). Press **Left** inside a dialog to jump to the
+   *previous* question instead.
 3. Open the first question's dialog and press **Left** (nothing before it):
    the dialog closes, the hub reopens, and the question stays unanswered.
    Do the same with **Right** on the last question.
+4. Answer every question, then keep pressing **Right** from the last
+   question's dialog: the Finish-round question ("All questions are
+   answered. Finish this round?") opens, and answering **Finish round**
+   ends the set.
 
 #### Expected behavior
 
-- In the hub, Right/Left behave exactly like Down/Up (including list
-  wrapping if the TUI select-list wraps).
+- In the hub, Right/Left behave exactly like Down/Up, clamped at the ends
+  (Right on the last question is consumed, never landing on the trailing
+  **Cancel interview** entry).
 - A Right/Left press inside an answer dialog never submits an answer: it
-  soft-closes the dialog, returns to the hub, and the switch target is
-  followed on the next Enter. The original question remains `○`-marked
-  until actually answered.
+  soft-closes the dialog and the switch target's dialog opens. The original
+  question remains `○`-marked until actually answered.
+- The Finish-round question is the last navigation target (via dialog
+  Right or the hub); it carries **Finish round / Keep working** and no
+  custom-answer option, and only appears once every question is answered.
+- While the custom-answer input is open, Right/Left move the text caret and
+  never switch questions.
 - No partial answer is recorded from a switched-away dialog; the final
   `qa` entries reflect only completed answers.
 

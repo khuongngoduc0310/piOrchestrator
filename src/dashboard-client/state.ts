@@ -33,6 +33,7 @@ export interface DashboardState {
   questionSet: PendingQuestionInfo[];
   questionSetUpdated: number;
   questionFocusIndex: number | null;
+  questionPanelDismissed: boolean;
   questionSubmissions: Record<string, SubmissionStatus>;
   questionErrors: Record<string, string>;
   planMarkdown: string | null;
@@ -63,6 +64,7 @@ export const INITIAL_STATE: DashboardState = {
   questionSet: [],
   questionSetUpdated: 0,
   questionFocusIndex: null,
+  questionPanelDismissed: false,
   questionSubmissions: {},
   questionErrors: {},
   planMarkdown: null,
@@ -93,6 +95,8 @@ export type DashboardAction =
   | { type: "pendingDecisionUpdated"; decision: PendingDecisionInfo | null }
   | { type: "questionSetUpdated"; questions: PendingQuestionInfo[] }
   | { type: "questionFocusMoved"; index: number }
+  | { type: "questionPanelDismissed" }
+  | { type: "questionPanelOpened" }
   | { type: "questionSubmitting"; decisionId: string }
   | { type: "questionSubmitted"; decisionId: string }
   | { type: "questionError"; decisionId: string; error: string }
@@ -260,6 +264,7 @@ export function dashboardReducer(
           questionSet: [],
           questionSetUpdated: state.questionSetUpdated + 1,
           questionFocusIndex: null,
+          questionPanelDismissed: false,
           questionSubmissions: {},
           questionErrors: {},
         };
@@ -276,6 +281,13 @@ export function dashboardReducer(
             // The focused question was answered: auto-advance to the entry that follows it.
             return Math.min(state.questionFocusIndex ?? 0, next.length - 1);
           })();
+      // One-shot landing on the commit question: when it first appears in the set and
+      // the focus sits on the question right before it, move onto it. A multi-select
+      // question stays put: its first pick completes it, but more picks may follow.
+      const commitIndex = next.findIndex(question => question.questionId === "commit");
+      const commitAppeared = !previous.some(question => question.questionId === "commit") && commitIndex >= 0;
+      const lastRealQuestion = commitIndex >= 0 ? next[commitIndex - 1] : undefined;
+      const resolvedFocus = commitAppeared && lastRealQuestion?.kind !== "multiple" && focusIndex === commitIndex - 1 ? commitIndex : focusIndex;
       const liveIds = new Set(next.map(question => question.decisionId));
       const questionSubmissions: Record<string, SubmissionStatus> = {};
       const questionErrors: Record<string, string> = {};
@@ -289,7 +301,7 @@ export function dashboardReducer(
         ...state,
         questionSet: next,
         questionSetUpdated: state.questionSetUpdated + 1,
-        questionFocusIndex: focusIndex,
+        questionFocusIndex: resolvedFocus,
         questionSubmissions,
         questionErrors,
       };
@@ -297,6 +309,12 @@ export function dashboardReducer(
     case "questionFocusMoved": {
       if (state.questionSet.length === 0) return state;
       return { ...state, questionFocusIndex: action.index };
+    }
+    case "questionPanelDismissed": {
+      return { ...state, questionPanelDismissed: true };
+    }
+    case "questionPanelOpened": {
+      return { ...state, questionPanelDismissed: false };
     }
     case "questionSubmitting": {
       const questionSubmissions: Record<string, SubmissionStatus> = { ...state.questionSubmissions, [action.decisionId]: "submitting" };

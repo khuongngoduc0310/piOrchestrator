@@ -13,14 +13,19 @@ const ARROW_LEFT = ["\x1b[D", "\x1bOD"];
  *
  * - Answer dialog open: Right/Left are consumed entirely and turned into
  *   next/previous question-switch requests. The dialog's select-list only
- *   binds Up/Down, so the keys would otherwise do nothing.
+ *   binds Up/Down, so the keys would otherwise do nothing. While the
+ *   custom-answer input is open the keys pass through untouched so they
+ *   move the text caret.
  * - Question hub open: Right/Left are rewritten to Down/Up so the hub's
- *   select-list moves to the next/previous question.
+ *   select-list moves to the next/previous question. Navigation clamps at
+ *   the ends and never lands on the trailing Cancel entry.
  */
 export class RequirementsArrowTranslator {
   private unsubscribe: (() => void) | undefined;
   private hubOpen = false;
   private dialogChannel: QuestionChannel | undefined;
+  private hubListCount = 0;
+  private hubPosition = 0;
 
   constructor(
     private readonly ctx: ExtensionCommandContext,
@@ -41,6 +46,8 @@ export class RequirementsArrowTranslator {
     this.unsubscribe = undefined;
     this.hubOpen = false;
     this.dialogChannel = undefined;
+    this.hubListCount = 0;
+    this.hubPosition = 0;
   }
 
   /** Marks the round's question hub as open (or closed). */
@@ -54,9 +61,20 @@ export class RequirementsArrowTranslator {
     this.dialogChannel = channel;
   }
 
+  /** Sets how many question entries the hub's select list shows. */
+  setHubListCount(count: number): void {
+    this.hubListCount = count;
+  }
+
+  /** Sets the hub select's currently highlighted question index. */
+  setHubPosition(index: number): void {
+    this.hubPosition = index;
+  }
+
   private translate(data: string): ReturnType<TerminalInputHandler> {
     const channel = this.dialogChannel;
     if (channel !== undefined) {
+      if (channel.customInputOpen) return undefined;
       if (ARROW_RIGHT.includes(data)) {
         this.requestSwitchAction(channel, "next");
         return { consume: true };
@@ -68,8 +86,14 @@ export class RequirementsArrowTranslator {
       return undefined;
     }
     if (this.hubOpen) {
-      if (ARROW_RIGHT.includes(data)) return { data: ARROW_DOWN };
-      if (ARROW_LEFT.includes(data)) return { data: ARROW_UP };
+      if (ARROW_RIGHT.includes(data)) {
+        if (this.hubPosition < this.hubListCount - 1) return { data: ARROW_DOWN };
+        return { consume: true };
+      }
+      if (ARROW_LEFT.includes(data)) {
+        if (this.hubPosition > 0) return { data: ARROW_UP };
+        return { consume: true };
+      }
     }
     return undefined;
   }

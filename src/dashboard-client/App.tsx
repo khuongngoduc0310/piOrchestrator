@@ -24,7 +24,7 @@ import { CommandPalette, type PaletteCommand } from "./components/CommandPalette
 import { CompletionReport } from "./components/CompletionReport.js";
 import { DecisionPanel } from "./components/DecisionPanel.js";
 import { InterviewDecisionPanel } from "./components/InterviewDecisionPanel.js";
-import { InterviewSetPanel } from "./components/InterviewSetPanel.js";
+import { InterviewWizard } from "./components/InterviewWizard.js";
 import { InterviewRecord } from "./components/InterviewRecord.js";
 import { RequirementReport } from "./components/RequirementReport.js";
 
@@ -162,6 +162,8 @@ export function App() {
   ];
 
   const showDecision = isSelectedLiveRun(state) && state.pendingDecision?.dashboardAvailable && state.pendingDecision && state.submissionStatus !== "submitted";
+  const questionSetArmed = state.questionSet.some(question => question.questionId === "commit");
+  const realQuestions = state.questionSet.filter(question => question.questionId !== "commit");
 
   return <div className="mission-shell">
     <a href="#mission-main" className="skip-link">Skip to mission workspace</a>
@@ -193,7 +195,7 @@ export function App() {
     </div>
     {state.view === "run" && isViewingLiveRun(state) && <LiveConsole snapshot={snap} />}
     {!approvalActive && <CommandPalette open={paletteOpen} commands={commands} onClose={() => setPaletteOpen(false)} />}
-    {isSelectedLiveRun(state) && state.questionSet.length > 0 && <InterviewSetPanel key={runId} runId={runId} questions={state.questionSet} focusIndex={state.questionFocusIndex} onFocus={(index) => dispatchAction({ type: "questionFocusMoved", index })} submissions={state.questionSubmissions} errors={state.questionErrors} onSubmitAction={submitQuestion} onDismissError={(decisionId) => dispatchAction({ type: "questionDismissed", decisionId })} />}
+    {isSelectedLiveRun(state) && state.questionSet.length > 0 && (state.questionPanelDismissed ? <button type="button" className="interview-reopen-pill" onClick={() => dispatchAction({ type: "questionPanelOpened" })}>{questionSetArmed ? "Finish round" : `Answer questions (${realQuestions.filter(question => question.answered).length}/${realQuestions.length})`}</button> : <InterviewWizard key={runId} runId={runId} questions={state.questionSet} focusIndex={state.questionFocusIndex} onFocus={(index) => dispatchAction({ type: "questionFocusMoved", index })} submissions={state.questionSubmissions} errors={state.questionErrors} onSubmitAction={submitQuestion} onDismissError={(decisionId) => dispatchAction({ type: "questionDismissed", decisionId })} onDismiss={() => dispatchAction({ type: "questionPanelDismissed" })} />)}
     {showDecision && <div className="decision-overlay">{state.pendingDecision!.kind === "requirements_question" ? <InterviewDecisionPanel key={state.currentDecisionId!} decisionId={state.currentDecisionId!} label={state.pendingDecision!.label} content={state.planMarkdown} question={state.decisionQuestion} allowedActions={state.allowedActions} previewStatus={state.previewStatus} previewError={state.previewError} submissionStatus={state.submissionStatus} submissionError={state.submissionError} currentDecisionId={state.currentDecisionId} onRetryPreview={() => dispatchAction({ type: "planPreviewRetryRequested" })} onSubmitAction={submit} onDismissError={() => dispatchAction({ type: "decisionDismissed" })} /> : <DecisionPanel key={state.currentDecisionId!} decisionId={state.currentDecisionId!} kind={state.pendingDecision!.kind} label={state.pendingDecision!.label} planMarkdown={state.planMarkdown} allowedActions={state.allowedActions} previewStatus={state.previewStatus} previewError={state.previewError} submissionStatus={state.submissionStatus} submissionError={state.submissionError} onRetryPreview={() => dispatchAction({ type: "planPreviewRetryRequested" })} onSubmitAction={submit} onDismissError={() => dispatchAction({ type: "decisionDismissed" })} />}</div>}
     {isSelectedLiveRun(state) && state.submissionStatus === "submitted" && <div className="decision-overlay"><div className="decision-submitted" role="status"><strong>Decision submitted</strong><p>The server accepted the decision. Waiting for workflow continuation.</p></div></div>}
   </div>;

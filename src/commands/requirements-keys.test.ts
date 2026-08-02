@@ -50,10 +50,25 @@ describe("RequirementsArrowTranslator", () => {
     const { handlers, translator } = fixture();
     translator.register();
     translator.setHubOpen(true);
+    translator.setHubListCount(3);
+    translator.setHubPosition(1);
     expect(handlers[0](ARROW_RIGHT)).toEqual({ data: ARROW_DOWN });
     expect(handlers[0](APP_ARROW_RIGHT)).toEqual({ data: ARROW_DOWN });
     expect(handlers[0](ARROW_LEFT)).toEqual({ data: ARROW_UP });
     expect(handlers[0](APP_ARROW_LEFT)).toEqual({ data: ARROW_UP });
+  });
+
+  it("clamps hub arrows at the ends so they never reach the trailing Cancel entry", () => {
+    const { handlers, translator } = fixture();
+    translator.register();
+    translator.setHubOpen(true);
+    translator.setHubListCount(2);
+    translator.setHubPosition(1);
+    expect(handlers[0](ARROW_RIGHT)).toEqual({ consume: true });
+    expect(handlers[0](ARROW_LEFT)).toEqual({ data: ARROW_UP });
+    translator.setHubPosition(0);
+    expect(handlers[0](ARROW_LEFT)).toEqual({ consume: true });
+    expect(handlers[0](ARROW_RIGHT)).toEqual({ data: ARROW_DOWN });
   });
 
   it("does not rewrite arrows when neither hub nor dialog is open", () => {
@@ -72,6 +87,18 @@ describe("RequirementsArrowTranslator", () => {
     expect(requestSwitchAction).toHaveBeenCalledWith(answered, "next");
     expect(handlers[0](APP_ARROW_LEFT)).toEqual({ consume: true });
     expect(requestSwitchAction).toHaveBeenCalledWith(answered, "previous");
+  });
+
+  it("leaves arrows native while the custom-answer input is open", () => {
+    const { handlers, translator, requestSwitchAction } = fixture();
+    translator.register();
+    const answered = channel();
+    answered.customInputOpen = true;
+    translator.setDialogChannel(answered);
+    expect(handlers[0](ARROW_RIGHT)).toBeUndefined();
+    expect(handlers[0](ARROW_LEFT)).toBeUndefined();
+    expect(handlers[0](APP_ARROW_RIGHT)).toBeUndefined();
+    expect(requestSwitchAction).not.toHaveBeenCalled();
   });
 
   it("lets Up/Down and other keys pass through while the answer dialog is open", () => {
@@ -98,6 +125,8 @@ describe("RequirementsArrowTranslator", () => {
     const { handlers, translator } = fixture();
     translator.register();
     translator.setHubOpen(true);
+    translator.setHubListCount(3);
+    translator.setHubPosition(1);
     translator.setDialogChannel(channel());
     translator.setDialogChannel(undefined);
     expect(handlers[0](ARROW_RIGHT)).toEqual({ data: ARROW_DOWN });

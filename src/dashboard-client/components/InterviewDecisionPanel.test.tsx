@@ -240,4 +240,97 @@ describe("InterviewDecisionPanel", () => {
 
     expect((screen.getByRole("button", { name: /Done \(1 selected\)/ }) as HTMLButtonElement).disabled).toBe(false);
   });
+
+  it("renders wizard navigation chrome when a nav is provided", () => {
+    const onPrev = vi.fn();
+    const onNext = vi.fn();
+    renderPanel({
+      nav: {
+        questionIndex: 2,
+        questionTotal: 4,
+        answeredCount: 3,
+        onPrev,
+        onNext,
+        onDismiss: vi.fn(),
+        nextDisabled: false,
+      },
+    });
+
+    expect(screen.getByText(/Question 2 of 4/)).not.toBeNull();
+    expect(screen.getByText(/3 answered/)).not.toBeNull();
+    expect(screen.getByRole("button", { name: "← Back" })).not.toBeNull();
+    expect(screen.getByRole("button", { name: "Next →" })).not.toBeNull();
+    expect(screen.getByRole("button", { name: "Close questions panel" })).not.toBeNull();
+  });
+
+  it("navigates questions with the arrow keys through the nav", () => {
+    const onPrev = vi.fn();
+    const onNext = vi.fn();
+    renderPanel({
+      nav: {
+        questionIndex: 2,
+        questionTotal: 4,
+        answeredCount: 1,
+        onPrev,
+        onNext,
+        onDismiss: vi.fn(),
+        nextDisabled: false,
+      },
+    });
+
+    const dialog = screen.getByRole("dialog");
+    fireEvent.keyDown(dialog, { key: "ArrowLeft" });
+    expect(onPrev).toHaveBeenCalled();
+    fireEvent.keyDown(dialog, { key: "ArrowRight" });
+    expect(onNext).toHaveBeenCalled();
+  });
+
+  it("dismisses the wizard with Escape or the close button", () => {
+    const onDismiss = vi.fn();
+    renderPanel({
+      nav: {
+        questionIndex: 1,
+        questionTotal: 3,
+        answeredCount: 0,
+        onPrev: vi.fn(),
+        onNext: vi.fn(),
+        onDismiss,
+        nextDisabled: false,
+      },
+    });
+
+    fireEvent.keyDown(screen.getByRole("dialog"), { key: "Escape" });
+    expect(onDismiss).toHaveBeenCalledTimes(1);
+    fireEvent.click(screen.getByRole("button", { name: "Close questions panel" }));
+    expect(onDismiss).toHaveBeenCalledTimes(2);
+  });
+
+  it("disables Back on the first question and Next at the end", () => {
+    renderPanel({
+      nav: {
+        questionIndex: 1,
+        questionTotal: 3,
+        answeredCount: 0,
+        onPrev: vi.fn(),
+        onNext: vi.fn(),
+        onDismiss: vi.fn(),
+        nextDisabled: false,
+      },
+    });
+    expect((screen.getByRole("button", { name: "← Back" }) as HTMLButtonElement).disabled).toBe(true);
+
+    cleanup();
+    renderPanel({
+      nav: {
+        questionIndex: 3,
+        questionTotal: 3,
+        answeredCount: 2,
+        onPrev: vi.fn(),
+        onNext: vi.fn(),
+        onDismiss: vi.fn(),
+        nextDisabled: true,
+      },
+    });
+    expect((screen.getByRole("button", { name: "Next →" }) as HTMLButtonElement).disabled).toBe(true);
+  });
 });

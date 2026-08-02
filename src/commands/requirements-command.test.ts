@@ -7,7 +7,7 @@ import type { AgentResult, InterviewAnswer, InterviewQuestion, InterviewerAssess
 import type { AgentHistoryResponse, AgentInspection, AgentTranscript, AgentTranscriptArtifact } from "../types.js";
 import { MAX_INTERVIEW_ROUNDS } from "../types.js";
 import { DEFAULT_CONFIG } from "../config/config.js";
-import { runRequirementsCommand, questionPresentation, reviewPresentation, mapTuiChoice, type RequirementsCommandDependencies } from "./requirements-command.js";
+import { runRequirementsCommand, questionPresentation, reviewPresentation, commitPresentation, mapTuiChoice, type RequirementsCommandDependencies } from "./requirements-command.js";
 import { WORKFLOW_ROUTE_CHOICES } from "./route-selection.js";
 import { CONFIG_DIR_NAME } from "@earendil-works/pi-coding-agent";
 import { mkdtemp, readFile, rm, stat } from "node:fs/promises";
@@ -185,22 +185,73 @@ const REVIEW_TITLE = "Was the goal clear?";
 const REVIEW_YES_LABEL = "Yes — the goal is clear, proceed (recommended)";
 const REVIEW_NO_LABEL = "No — I still have doubts";
 
+const BACK_ACTION_LABEL = "← Back to questions";
+const COMMIT_QUESTION_TEXT = "All questions are answered. Finish this round?";
+const COMMIT_FINISH_LABEL = "Finish round (recommended)";
+
 interface HubAnswer {
   /** Select labels consumed while answering this question (may span re-presented dialogs). */
   selects: string[];
 }
 
+/**
+ * Drives a full round through the hub: pick each question, answer it in its
+ * dialog, step back to the hub, then finish the round via the commit question.
+ */
 function hubSequence(questions: InterviewQuestion[], answers: HubAnswer[]): string[] {
   const queue: string[] = [];
   for (let index = 0; index < questions.length; index++) {
     queue.push(`○ ${index + 1}. ${questions[index].text}`);
     queue.push(...answers[index].selects);
+    queue.push(BACK_ACTION_LABEL);
   }
+  queue.push(`○ ${questions.length + 1}. ${COMMIT_QUESTION_TEXT}`);
+  queue.push(COMMIT_FINISH_LABEL);
   return queue;
 }
 
 function allYes(questions: InterviewQuestion[]): HubAnswer[] {
   return questions.map(() => ({ selects: ["Yes (recommended)"] }));
+}
+
+/** Returned by a hub-walker onFirst hook to dismiss the dialog instead of answering. */
+const DISMISS = Symbol("dismiss");
+
+/**
+ * Resolver that walks a round without pre-queued labels: pick the first open
+ * question in the hub, answer it once, step back, and finish via the commit
+ * question. `onFirst` lets a test intercept a question's first dialog visit
+ * (returning DISMISS dismisses the dialog without answering it).
+ */
+function hubWalkerResolver(options: {
+  review?: string;
+  onFirst?: (title: string) => string | typeof DISMISS | undefined;
+  onHub?: (title: string, options: string[]) => string | undefined;
+} = {}) {
+  const answered = new Set<string>();
+  let currentRound = -1;
+  return (title: string, choices: string[]): string | undefined => {
+    if (title.startsWith("Questions (round")) {
+      const match = /round (\d+)/.exec(title);
+      const round = match ? Number(match[1]) : -1;
+      if (round !== currentRound) {
+        currentRound = round;
+        answered.clear();
+      }
+      const result = options.onHub
+        ? options.onHub(title, choices)
+        : choices.find(choice => choice.startsWith("○ ")) ?? "Cancel interview";
+      return result;
+    }
+    if (title === REVIEW_TITLE) return options.review ?? REVIEW_YES_LABEL;
+    if (title === COMMIT_QUESTION_TEXT) return COMMIT_FINISH_LABEL;
+    if (answered.has(title)) return BACK_ACTION_LABEL;
+    const first = options.onFirst?.(title);
+    if (first === DISMISS) return undefined;
+    answered.add(title);
+    if (first !== undefined) return first;
+    return "Yes (recommended)";
+  };
 }
 
 async function testDeps(executor: AgentExecutor, startWorkflow = vi.fn(async () => undefined)) {
@@ -316,7 +367,7 @@ describe("runRequirementsCommand", () => {
 
     inputs.push("Build a CLI");
     selects.push(...hubSequence(MULTI_QUESTIONS, [
-      { selects: ["Windows (recommended)", "Linux", "Done"] },
+      { selects: ["Windows (recommended)", "Linux"] },
       ...allYes(MULTI_QUESTIONS.slice(1))
     ]));
     selects.push(REVIEW_YES_LABEL);
@@ -444,11 +495,12 @@ describe("runRequirementsCommand", () => {
 
     expect(await post(q1.id, "opt:q1:windows")).toBe(200);
     expect(await post((await waitForQuestion("q1"))!.id, "opt:q1:macos")).toBe(200);
-    expect(await post((await waitForQuestion("q1"))!.id, "done:q1")).toBe(200);
+    expect(await post((await waitForQuestion("q1"))!.id, "done:q1")).toBe(400);
     expect(await post((await waitForQuestion("q2"))!.id, "custom:q2", "  Cross-platform support  ")).toBe(200);
     expect(await post((await waitForQuestion("q3"))!.id, "opt:q3:no")).toBe(200);
     expect(await post((await waitForQuestion("q4"))!.id, "opt:q4:yes")).toBe(200);
     expect(await post((await waitForQuestion("q5"))!.id, "opt:q5:yes")).toBe(200);
+    expect(await post((await waitForQuestion("commit"))!.id, "opt:commit:finish-round")).toBe(200);
     expect(await post((await waitForDecision())!.id, "opt:review:yes")).toBe(200);
 
     const session = (await running)!;
@@ -597,6 +649,7 @@ describe("runRequirementsCommand", () => {
     expect(await post(await waitForQuestion("q2"), "opt:q2:no")).toBe(200);
     expect(await post(await waitForQuestion("q4"), "opt:q4:yes")).toBe(200);
     expect(await post(await waitForQuestion("q5"), "opt:q5:yes")).toBe(200);
+    expect(await post(await waitForQuestion("commit"), "opt:commit:finish-round")).toBe(200);
     expect(await post(await waitForDecision(), "opt:review:yes")).toBe(200);
 
     const session = (await running)!;
@@ -654,6 +707,7 @@ describe("runRequirementsCommand", () => {
     for (const questionId of ["q1", "q2", "q3", "q4", "q5"]) {
       expect(await post(await waitForQuestion(questionId), `opt:${questionId}:yes`)).toBe(200);
     }
+    expect(await post(await waitForQuestion("commit"), "opt:commit:finish-round")).toBe(200);
 
     const session = (await running)!;
     expect(session.status).toBe("completed");
@@ -663,6 +717,79 @@ describe("runRequirementsCommand", () => {
       expect.any(Array),
       expect.objectContaining({ signal: expect.any(AbortSignal) })
     );
+  });
+
+  it("rejects a stale Finish round once a question was un-answered after the commit armed", async () => {
+    const cwd = await temporaryDirectory();
+    const executor = new ScriptedExecutor(singleRoundScript(MULTI_QUESTIONS));
+    const deps = (await testDeps(executor)) as RequirementsCommandDependencies;
+    deps.loadConfig = async (): Promise<OrchestratorConfig> => ({ ...structuredClone(DEFAULT_CONFIG), dashboard: { enabled: true, port: 0 } });
+    let dashboardUrl = "";
+    deps.openBrowser = (url: string): void => { dashboardUrl = url; };
+    const { ctx, inputs } = uiContext();
+    (ctx as { mode: string }).mode = "print";
+    inputs.push("Build a CLI");
+
+    const running = runRequirementsCommand(cwd, ctx, deps);
+
+    async function waitForQuestion(questionId: string): Promise<string> {
+      for (let attempt = 0; attempt < 500; attempt++) {
+        if (dashboardUrl) {
+          try {
+            const state = await (await fetch(`${dashboardUrl}/api/state`)).json() as {
+              run?: { pendingQuestions?: Array<{ questionId: string; decisionId: string }> };
+            };
+            const decisionId = state.run?.pendingQuestions?.find(question => question.questionId === questionId)?.decisionId;
+            if (decisionId) return decisionId;
+          } catch {
+            // dashboard not listening yet
+          }
+        }
+        await new Promise(resolve => setTimeout(resolve, 10));
+      }
+      throw new Error(`Timed out waiting for question ${questionId}`);
+    }
+
+    async function post(id: string, action: string): Promise<number> {
+      const response = await fetch(`${dashboardUrl}/api/decision`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ id, action })
+      });
+      return response.status;
+    }
+
+    async function waitForDecision(): Promise<string> {
+      for (let attempt = 0; attempt < 500; attempt++) {
+        if (dashboardUrl) {
+          try {
+            const state = await (await fetch(`${dashboardUrl}/api/state`)).json() as { run?: { pendingDecision?: { id: string } } };
+            if (state.run?.pendingDecision?.id) return state.run.pendingDecision.id;
+          } catch {
+            // dashboard not listening yet
+          }
+        }
+        await new Promise(resolve => setTimeout(resolve, 10));
+      }
+      throw new Error("Timed out waiting for a pending interview decision");
+    }
+
+    expect(await post(await waitForQuestion("q1"), "opt:q1:windows")).toBe(200);
+    for (const questionId of ["q2", "q3", "q4", "q5"]) {
+      expect(await post(await waitForQuestion(questionId), `opt:${questionId}:yes`)).toBe(200);
+    }
+    const staleFinish = await waitForQuestion("commit");
+    expect(await post(await waitForQuestion("q1"), "opt:q1:windows")).toBe(200);
+    expect(await post(staleFinish, "opt:commit:finish-round")).toBe(200);
+    expect(await post(await waitForQuestion("q1"), "opt:q1:windows")).toBe(200);
+    const freshFinish = await waitForQuestion("commit");
+    expect(freshFinish).not.toBe(staleFinish);
+    expect(await post(freshFinish, "opt:commit:finish-round")).toBe(200);
+    expect(await post(await waitForDecision(), "opt:review:yes")).toBe(200);
+
+    const session = (await running)!;
+    expect(session.status).toBe("completed");
+    expect(session.history.find(entry => entry.question.id === "q1")!.answer.selectedOptionIds).toEqual(["windows"]);
   });
 
   it("cancels the interview when the dashboard submits the cancel action", async () => {
@@ -783,7 +910,7 @@ describe("runRequirementsCommand", () => {
     expect(await exists(path.join(sessionDir, "requirements.md"))).toBe(false);
   });
 
-  it("lets the user revisit and revise an answer within a round", async () => {
+  it("lets the user revise an answer in place within a round", async () => {
     const cwd = await temporaryDirectory();
     const executor = new ScriptedExecutor(singleRoundScript(QUESTIONS));
     const deps = await testDeps(executor);
@@ -793,16 +920,22 @@ describe("runRequirementsCommand", () => {
     selects.push(
       "○ 1. Question 1?",
       "Yes (recommended)",
+      BACK_ACTION_LABEL,
       "○ 2. Question 2?",
       "No",
-      "✓ 2. Question 2? — No",
       "Yes (recommended)",
+      BACK_ACTION_LABEL,
       "○ 3. Question 3?",
       "Yes (recommended)",
+      BACK_ACTION_LABEL,
       "○ 4. Question 4?",
       "Yes (recommended)",
+      BACK_ACTION_LABEL,
       "○ 5. Question 5?",
       "Yes (recommended)",
+      BACK_ACTION_LABEL,
+      `○ 6. ${COMMIT_QUESTION_TEXT}`,
+      COMMIT_FINISH_LABEL,
       REVIEW_YES_LABEL,
       "Done"
     );
@@ -828,7 +961,7 @@ describe("runRequirementsCommand", () => {
     inputs.push("Build a CLI");
     selects.push(
       ...hubSequence(MULTI_QUESTIONS, [
-        { selects: ["Windows (recommended)", "Linux", "✓ Windows (recommended)", "Done"] },
+        { selects: ["Windows (recommended)", "Linux", "✓ Windows (recommended)"] },
         ...allYes(MULTI_QUESTIONS.slice(1))
       ]),
       REVIEW_YES_LABEL,
@@ -844,12 +977,12 @@ describe("runRequirementsCommand", () => {
     expect(saved.qa.find(entry => entry.answer.questionId === "q1")!.answer.selectedOptionIds).toEqual(["linux"]);
     expect(select).toHaveBeenCalledWith(
       "Which platforms? (2 selected)",
-      expect.arrayContaining(["✓ Windows (recommended)", "macOS", "✓ Linux", "Done"]),
+      expect.arrayContaining(["✓ Windows (recommended)", "macOS", "✓ Linux"]),
       expect.objectContaining({ signal: expect.any(AbortSignal) })
     );
   });
 
-  it("restores prior picks when revisiting a multi-select question", async () => {
+  it("keeps prior picks when revising a multi-select question in place", async () => {
     const cwd = await temporaryDirectory();
     const executor = new ScriptedExecutor(singleRoundScript(MULTI_QUESTIONS));
     const deps = await testDeps(executor);
@@ -860,18 +993,22 @@ describe("runRequirementsCommand", () => {
       "○ 1. Which platforms?",
       "Windows (recommended)",
       "macOS",
-      "Done",
+      "Linux",
+      BACK_ACTION_LABEL,
       "○ 2. Question 2?",
       "Yes (recommended)",
-      "✓ 1. Which platforms? — Windows, macOS",
-      "Linux",
-      "Done",
+      BACK_ACTION_LABEL,
       "○ 3. Question 3?",
       "Yes (recommended)",
+      BACK_ACTION_LABEL,
       "○ 4. Question 4?",
       "Yes (recommended)",
+      BACK_ACTION_LABEL,
       "○ 5. Question 5?",
       "Yes (recommended)",
+      BACK_ACTION_LABEL,
+      `○ 6. ${COMMIT_QUESTION_TEXT}`,
+      COMMIT_FINISH_LABEL,
       REVIEW_YES_LABEL,
       "Done"
     );
@@ -891,17 +1028,15 @@ describe("runRequirementsCommand", () => {
     const executor = new ScriptedExecutor(singleRoundScript(QUESTIONS));
     const deps = await testDeps(executor);
     let escaped = false;
-    const resolver = (title: string, options: string[]): string | undefined => {
-      if (title.startsWith("Questions (round")) {
-        return options.find(option => option.startsWith("○ ")) ?? "Cancel interview";
-      }
-      if (title === "Question 1?" && !escaped) {
-        escaped = true;
+    const resolver = hubWalkerResolver({
+      onFirst: (title: string): string | typeof DISMISS | undefined => {
+        if (title === "Question 1?" && !escaped) {
+          escaped = true;
+          return DISMISS;
+        }
         return undefined;
       }
-      if (title === REVIEW_TITLE) return REVIEW_YES_LABEL;
-      return "Yes (recommended)";
-    };
+    });
     const { ctx, inputs } = uiContext(resolver);
 
     inputs.push("Build a CLI");
@@ -928,32 +1063,34 @@ describe("runRequirementsCommand", () => {
       "○ 2. Question 2?",
       "○ 4. Question 4?",
       "○ 5. Question 5?",
-      "○ 2. Question 2?"
+      "○ 2. Question 2?",
+      `○ 6. ${COMMIT_QUESTION_TEXT}`
     ];
     let leftPressed = false;
     let rightPressed = false;
     let terminalPresses = 0;
     let hubSelects = 0;
-    const resolver = (title: string, options: string[]): string | undefined => {
-      if (title.startsWith("Questions (round")) {
+    const resolver = hubWalkerResolver({
+      onHub: (): string | undefined => {
         hubSelects++;
         return picks.shift();
-      }
-      if (title === "Question 1?" && !leftPressed) {
-        leftPressed = true;
-        terminalPresses++;
-        terminalInputs[0]!("\x1b[D");
+      },
+      onFirst: (title: string): string | typeof DISMISS | undefined => {
+        if (title === "Question 1?" && !leftPressed) {
+          leftPressed = true;
+          terminalPresses++;
+          terminalInputs[0]!("\x1b[D");
+          return DISMISS;
+        }
+        if (title === "Question 2?" && !rightPressed) {
+          rightPressed = true;
+          terminalPresses++;
+          terminalInputs[0]!("\x1b[C");
+          return DISMISS;
+        }
         return undefined;
       }
-      if (title === "Question 2?" && !rightPressed) {
-        rightPressed = true;
-        terminalPresses++;
-        terminalInputs[0]!("\x1b[C");
-        return undefined;
-      }
-      if (title === REVIEW_TITLE) return REVIEW_YES_LABEL;
-      return "Yes (recommended)";
-    };
+    });
     const { ctx, inputs, terminalInputs } = uiContext(resolver);
 
     inputs.push("Build a CLI");
@@ -961,7 +1098,7 @@ describe("runRequirementsCommand", () => {
     await runRequirementsCommand(cwd, ctx, deps);
 
     expect(terminalPresses).toBe(2);
-    expect(hubSelects).toBe(8);
+    expect(hubSelects).toBe(9);
     const sessionDir = path.join(cwd, CONFIG_DIR_NAME, "orchestrator", "requirements", "test-session");
     const saved = JSON.parse(await readFile(path.join(sessionDir, "requirements.json"), "utf8")) as {
       qa: Array<{ question: { id: string }; answer: { selectedOptionIds: string[] } }>;
@@ -988,19 +1125,17 @@ describe("runRequirementsCommand", () => {
     expect(await exists(path.join(sessionDir, "requirements.md"))).toBe(false);
   });
 
-  it("marks answered questions in the hub and closes the round once all are answered", async () => {
+  it("keeps the hub open once all questions are answered and finishes via the commit question", async () => {
     const cwd = await temporaryDirectory();
     const executor = new ScriptedExecutor(singleRoundScript(QUESTIONS));
     const deps = await testDeps(executor);
     const hubOptions: string[][] = [];
-    const resolver = (title: string, options: string[]): string | undefined => {
-      if (title.startsWith("Questions (round")) {
+    const resolver = hubWalkerResolver({
+      onHub: (_title: string, options: string[]): string | undefined => {
         hubOptions.push([...options]);
         return options.find(option => option.startsWith("○ ")) ?? "Cancel interview";
       }
-      if (title === REVIEW_TITLE) return REVIEW_YES_LABEL;
-      return "Yes (recommended)";
-    };
+    });
     const { ctx, inputs } = uiContext(resolver);
 
     inputs.push("Build a CLI");
@@ -1008,6 +1143,7 @@ describe("runRequirementsCommand", () => {
     const session = (await runRequirementsCommand(cwd, ctx, deps))!;
     expect(session.status).toBe("completed");
 
+    expect(hubOptions).toHaveLength(6);
     expect(hubOptions[0]).toEqual([
       "○ 1. Question 1?",
       "○ 2. Question 2?",
@@ -1029,7 +1165,8 @@ describe("runRequirementsCommand", () => {
     const last = hubOptions[hubOptions.length - 1];
     expect(last[0]).toBe("✓ 1. Question 1? — Yes");
     expect(last).toContain("Cancel interview");
-    expect(last.filter(option => option.startsWith("✓ "))).toHaveLength(4);
+    expect(last).toContain(`○ 6. ${COMMIT_QUESTION_TEXT}`);
+    expect(last.filter(option => option.startsWith("✓ "))).toHaveLength(5);
     expect(last).not.toContain("Continue");
   });
 
@@ -1148,13 +1285,7 @@ describe("runRequirementsCommand", () => {
       }
     });
     const deps = await testDeps(executor);
-    const resolver = (title: string, options: string[]): string | undefined => {
-      if (title.startsWith("Questions (round")) {
-        return options.find(option => option.startsWith("○ ")) ?? "Cancel interview";
-      }
-      if (title === REVIEW_TITLE) return REVIEW_NO_LABEL;
-      return "Yes (recommended)";
-    };
+    const resolver = hubWalkerResolver({ review: REVIEW_NO_LABEL });
     const { ctx, inputs, notify } = uiContext(resolver);
 
     inputs.push("Build a CLI");
@@ -1445,7 +1576,7 @@ describe("questionPresentation", () => {
         { id: "linux", text: "Linux", recommended: false, picked: false }
       ]
     });
-    expect(presentation.actions.map(action => action.value)).toEqual(["opt:q1:windows", "opt:q1:macos", "opt:q1:linux", "done:q1", "custom:q1", "cancel"]);
+    expect(presentation.actions.map(action => action.value)).toEqual(["opt:q1:windows", "opt:q1:macos", "opt:q1:linux", "custom:q1", "cancel"]);
   });
 
   it("adds round and follow-up context for later rounds and marks picks", () => {
@@ -1537,14 +1668,37 @@ describe("mapTuiChoice", () => {
     expect(mapTuiChoice(question, "✓ Windows (recommended)")).toEqual({ action: "opt:q1:windows" });
   });
 
-  it("maps the Done, custom, and cancel labels to their actions", () => {
-    expect(mapTuiChoice(question, "Done")).toEqual({ action: "done:q1" });
+  it("maps the custom and cancel labels to their actions", () => {
     expect(mapTuiChoice(question, "✏️ Type my own answer")).toEqual({ action: "custom:q1" });
     expect(mapTuiChoice(question, "Cancel interview")).toEqual({ action: "cancel" });
   });
 
-  it("returns undefined for labels that match no option or action", () => {
+  it("returns undefined for dismissed, unknown, and legacy Done labels", () => {
+    expect(mapTuiChoice(question, "← Back to questions")).toBeUndefined();
+    expect(mapTuiChoice(question, "Done")).toBeUndefined();
     expect(mapTuiChoice(question, "Not an option")).toBeUndefined();
     expect(mapTuiChoice(question, "Continue")).toBeUndefined();
+  });
+});
+
+describe("commitPresentation", () => {
+  it("offers Finish round and Keep working without a custom answer", () => {
+    const presentation = commitPresentation({ goal: "Build a CLI" });
+
+    expect(presentation.content).toContain("**Goal:** Build a CLI");
+    expect(presentation.content).toContain("## All questions are answered. Finish this round?");
+    expect(presentation.actions.map(action => action.value)).toEqual([
+      "opt:commit:finish-round",
+      "opt:commit:keep-working",
+      "cancel"
+    ]);
+    expect(presentation.question).toEqual({
+      id: "commit",
+      kind: "single",
+      options: [
+        { id: "finish-round", text: "Finish round", recommended: true, picked: false },
+        { id: "keep-working", text: "Keep working", recommended: false, picked: false }
+      ]
+    });
   });
 });

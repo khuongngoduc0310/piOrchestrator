@@ -88,7 +88,7 @@ function nextDecisionId(): string {
 }
 
 const CUSTOM_ACTION_LABEL = "✏️ Type my own answer";
-const DONE_ACTION_LABEL = "Done";
+const BACK_ACTION_LABEL = "← Back to questions";
 const CANCEL_ACTION_LABEL = "Cancel interview";
 const REVIEW_QUESTION: InterviewQuestion = {
   id: "review",
@@ -100,6 +100,23 @@ const REVIEW_QUESTION: InterviewQuestion = {
   ]
 };
 const REVIEW_YES_OPTION_ID = "yes";
+
+/**
+ * The commit question appended to every set: answering Finish round ends the
+ * set and lets the interviewer assess. It is not an interviewer question; it
+ * never reaches the round history.
+ */
+const COMMIT_QUESTION: InterviewQuestion = {
+  id: "commit",
+  kind: "single",
+  text: "All questions are answered. Finish this round?",
+  options: [
+    { id: "finish-round", text: "Finish round", recommended: true },
+    { id: "keep-working", text: "Keep working" }
+  ]
+};
+const COMMIT_FINISH_ACTION = `opt:${COMMIT_QUESTION.id}:finish-round`;
+const COMMIT_KEEP_ACTION = `opt:${COMMIT_QUESTION.id}:keep-working`;
 
 interface InterviewActionResult {
   action: string;
@@ -158,10 +175,14 @@ export interface QuestionChannel {
   prompt?: TuiPrompt;
   /** Resolved by the driver once it consumed a TUI answer and re-presented or completed. */
   wake?: Deferred<void>;
-  /** Resolved by the hub to re-open a completed question for revision. */
-  reopened: Deferred<void>;
   /** True once the driver ended (set closed); the hub stops waiting on the channel. */
   driverEnded: boolean;
+  /** True for the round's commit question, which ends the set when answered. */
+  isCommit: boolean;
+  /** True once every real question is answered; gates the commit question's presentation. */
+  armed: boolean;
+  /** True while the custom-answer input is open; the TUI translator leaves arrows native then. */
+  customInputOpen?: boolean;
   /** Arrow-key switch request from the TUI translator. */
   switchTarget?: "next" | "previous";
   /** Aborted by the TUI translator to close the answer dialog softly on a switch request. */
@@ -824,17 +845,17 @@ type InterviewPresent = (
 
 function presentationBody(
   question: InterviewQuestion,
-  picked: readonly string[]
+  picked: readonly string[],
+  options: { allowCustom?: boolean } = {}
 ): Pick<InterviewPresentation, "actions" | "question"> {
   const actions: DashboardDecisionAction[] = question.options.map(option => ({
     value: `opt:${question.id}:${option.id}` as HumanDecisionAction,
     label: option.text,
     requiresFeedback: false
   }));
-  if (question.kind === "multiple") {
-    actions.push({ value: `done:${question.id}` as HumanDecisionAction, label: DONE_ACTION_LABEL, requiresFeedback: false });
+  if (options.allowCustom !== false) {
+    actions.push({ value: `custom:${question.id}` as HumanDecisionAction, label: CUSTOM_ACTION_LABEL, requiresFeedback: true });
   }
-  actions.push({ value: `custom:${question.id}` as HumanDecisionAction, label: CUSTOM_ACTION_LABEL, requiresFeedback: true });
   actions.push({ value: "cancel" as HumanDecisionAction, label: CANCEL_ACTION_LABEL, requiresFeedback: false });
   return {
     actions,
@@ -890,14 +911,28 @@ export function reviewPresentation(
   };
 }
 
-function tuiQuestionLabels(question: InterviewQuestion, picked: readonly string[]): string[] {
+/** Presentation for the round's commit question: Finish round / Keep working, no custom answer. */
+export function commitPresentation(
+  session: Pick<RequirementsSession, "goal">
+): InterviewPresentation {
+  const lines: string[] = [
+    `**Goal:** ${session.goal}`,
+    "",
+    `## ${COMMIT_QUESTION.text}`
+  ];
+  return {
+    content: lines.join("\n"),
+    ...presentationBody(COMMIT_QUESTION, [], { allowCustom: false })
+  };
+}
+
+function tuiQuestionLabels(question: InterviewQuestion, picked: readonly string[], allowCustom = true): string[] {
   return [
     ...question.options.map(option => {
       const base = `${option.text}${option.recommended ? " (recommended)" : ""}`;
-      return question.kind === "multiple" && picked.includes(option.id) ? `✓ ${base}` : base;
+      return picked.includes(option.id) ? `✓ ${base}` : base;
     }),
-    ...(question.kind === "multiple" && picked.length > 0 ? [DONE_ACTION_LABEL] : []),
-    CUSTOM_ACTION_LABEL,
+    ...(allowCustom ? [CUSTOM_ACTION_LABEL] : []),
     CANCEL_ACTION_LABEL
   ];
 }
@@ -906,7 +941,6 @@ function tuiQuestionLabels(question: InterviewQuestion, picked: readonly string[
 export function mapTuiChoice(question: InterviewQuestion, choice: string): InterviewActionResult | undefined {
   if (choice === CUSTOM_ACTION_LABEL) return { action: `custom:${question.id}` };
   if (choice === CANCEL_ACTION_LABEL) return { action: "cancel" };
-  if (choice === DONE_ACTION_LABEL) return { action: `done:${question.id}` };
   const option = question.options.find(candidate => candidate.text === choice.replace(/^✓ /, "").replace(/ \(recommended\)$/, ""));
   if (!option) return undefined;
   return { action: `opt:${question.id}:${option.id}` };
@@ -921,6 +955,20 @@ export function requestSwitch(channel: QuestionChannel, target: "next" | "previo
   channel.dialogAbort?.abort();
 }
 
+interface SetDriverContext {
+  round: number;
+  setController: AbortController;
+  /** Re-evaluates the commit question's armed state after every action. */
+  armCommit: () => void;
+  /** Marks the set committed (Finish round) and ends it. */
+  setCommitted: () => void;
+}
+
+/** Shared round-commit flag; the hub and the drivers read it to tell commit aborts from cancels. */
+interface CommittedRef {
+  value: boolean;
+}
+
 async function askSet(
   session: RequirementsSession,
   ctx: ExtensionCommandContext,
@@ -928,50 +976,79 @@ async function askSet(
   round: number
 ): Promise<void> {
   const canPrompt = ctx.hasUI && ctx.mode !== "json" && ctx.mode !== "print";
-  const channels: QuestionChannel[] = questions.map(question => ({
-    question,
-    picked: [],
-    completed: false,
-    generation: 0,
-    reopened: deferred<void>(),
-    driverEnded: false
-  }));
+  const channels: QuestionChannel[] = [
+    ...questions.map(question => ({
+      question,
+      picked: [],
+      completed: false,
+      generation: 0,
+      isCommit: false,
+      armed: false,
+      driverEnded: false
+    })),
+    {
+      question: COMMIT_QUESTION,
+      picked: [],
+      completed: false,
+      generation: 0,
+      isCommit: true,
+      armed: false,
+      driverEnded: false
+    }
+  ];
+  const commitChannel = channels[channels.length - 1];
   const setController = new AbortController();
+  const committedRef: CommittedRef = { value: false };
+  const setCommitted = (): void => {
+    if (committedRef.value) return;
+    committedRef.value = true;
+    if (!setController.signal.aborted) setController.abort(new Error("Round committed"));
+  };
+  const armCommit = (): void => {
+    const allAnswered = channels.every(candidate => candidate.isCommit || candidate.completed);
+    if (allAnswered === commitChannel.armed) return;
+    commitChannel.armed = allAnswered;
+    publishQuestionSet(session, channels, round);
+  };
   const onSessionAbort = (): void => {
     setController.abort(new Error("Requirements session ended"));
   };
   session.controller.signal.addEventListener("abort", onSessionAbort, { once: true });
   const translator = new RequirementsArrowTranslator(ctx, requestSwitch);
   try {
+    armCommit();
+    const driver: SetDriverContext = { round, setController, armCommit, setCommitted };
     const drivers = channels.map(channel =>
-      driveQuestion(session, ctx, channels, channel, round, setController).catch(error => {
+      driveQuestion(session, ctx, channels, channel, driver).catch(error => {
         if (!setController.signal.aborted) setController.abort(error);
         throw error;
       })
     );
     translator.register();
     const hubTask = (canPrompt
-      ? hubLoop(session, ctx, channels, round, setController.signal, translator).catch(error => {
+      ? hubLoop(session, ctx, channels, round, setController.signal, translator, committedRef).catch(error => {
           if (!setController.signal.aborted) setController.abort(error);
           throw error;
         })
       : Promise.resolve()
     ).finally(() => translator.setHubOpen(false));
     const [driversResult, hubResult] = await Promise.allSettled([Promise.all(drivers), hubTask]);
-    if (!channels.every(channel => channel.completed)) {
+    if (!channels.every(channel => channel.isCommit || channel.completed)) {
       if (driversResult.status === "rejected") throw driversResult.reason;
       if (hubResult.status === "rejected") throw hubResult.reason;
       throw new Error("The question set ended without completing every question");
     }
-    session.replaceRound(round, channels.map(channel => ({
-      question: channel.question,
-      answer: {
-        questionId: channel.question.id,
-        selectedOptionIds: channel.picked,
-        ...(channel.customText !== undefined ? { customText: channel.customText } : {})
-      },
-      round
-    })));
+    session.replaceRound(round, channels
+      .filter(channel => !channel.isCommit)
+      .map(channel => ({
+        question: channel.question,
+        answer: {
+          questionId: channel.question.id,
+          selectedOptionIds: channel.picked,
+          ...(channel.customText !== undefined ? { customText: channel.customText } : {})
+        },
+        round
+      })));
     session.publish();
   } finally {
     session.controller.signal.removeEventListener("abort", onSessionAbort);
@@ -982,25 +1059,53 @@ async function askSet(
   }
 }
 
+/** Recomputes whether the channel currently holds an answer. */
+function refreshCompleted(channel: QuestionChannel): void {
+  channel.completed = channel.picked.length > 0 || channel.customText !== undefined;
+}
+
+/** Waits until the channel is armed (commit question) or the set closes. */
+async function waitForArmed(channel: QuestionChannel, setSignal: AbortSignal): Promise<void> {
+  while (!channel.armed && !setSignal.aborted) {
+    await new Promise(resolve => setTimeout(resolve, 0));
+  }
+}
+
 /** Drives one question's presentations until the question is answered or the set closes. */
 async function driveQuestion(
   session: RequirementsSession,
   ctx: ExtensionCommandContext,
   channels: QuestionChannel[],
   channel: QuestionChannel,
-  round: number,
-  setController: AbortController
+  driver: SetDriverContext
 ): Promise<void> {
   const canPrompt = ctx.hasUI && ctx.mode !== "json" && ctx.mode !== "print";
-  const setSignal = setController.signal;
+  const setSignal = driver.setController.signal;
+  if (channel.isCommit) {
+    await waitForArmed(channel, setSignal);
+    if (setSignal.aborted) {
+      channel.driverEnded = true;
+      return;
+    }
+  }
   while (true) {
     if (setSignal.aborted) {
       channel.driverEnded = true;
       return;
     }
+    if (channel.isCommit && !channel.armed) {
+      await waitForArmed(channel, setSignal);
+      if (setSignal.aborted) {
+        channel.driverEnded = true;
+        return;
+      }
+      continue;
+    }
     const question = channel.question;
     const picked = [...channel.picked];
-    const presented = questionPresentation(session, question, picked);
+    const presented = channel.isCommit
+      ? commitPresentation(session)
+      : questionPresentation(session, question, picked);
     const label = question.kind === "multiple" && picked.length > 0
       ? `${question.text} (${picked.length} selected)`
       : question.text;
@@ -1023,7 +1128,7 @@ async function driveQuestion(
     channel.presentation = presented;
     channel.prompt = undefined;
     channel.wake = undefined;
-    publishQuestionSet(session, channels, round);
+    publishQuestionSet(session, channels, driver.round);
     let winner: RaceWinner<InterviewActionResult | undefined>;
     try {
       winner = await race.race(canPrompt, signal => parkTuiPrompt(channel, signal));
@@ -1048,26 +1153,37 @@ async function driveQuestion(
     if (result.action === "cancel") {
       throw new RequirementsCancelledError("Requirements interview cancelled by the user; no artifact was written");
     }
+    if (channel.isCommit) {
+      if (result.action === COMMIT_FINISH_ACTION) {
+        if (!channels.every(candidate => candidate.isCommit || candidate.completed)) {
+          // The gate reopened (e.g. a pick was reverted elsewhere); a stale
+          // Finish round must not commit an incomplete set.
+          resolveWake(channel);
+          publishQuestionSet(session, channels, driver.round);
+          continue;
+        }
+        channel.completed = true;
+        resolveWake(channel);
+        publishQuestionSet(session, channels, driver.round);
+        driver.setCommitted();
+        channel.driverEnded = true;
+        return;
+      }
+      if (result.action === COMMIT_KEEP_ACTION) {
+        resolveWake(channel);
+        publishQuestionSet(session, channels, driver.round);
+        continue;
+      }
+      resolveWake(channel);
+      continue;
+    }
     if (result.action === `custom:${question.id}`) {
       if (question.kind === "single") channel.picked = [];
       channel.customText = result.feedback;
-          channel.completed = true;
-          resolveWake(channel);
-          publishQuestionSet(session, channels, round);
-      if (channels.every(candidate => candidate.completed)) setController.abort(new Error("All questions answered"));
-      if (!(await waitForReopen(channel, setSignal))) return;
-      channel.reopened = deferred<void>();
-      channel.completed = false;
-      continue;
-    }
-    if (result.action === `done:${question.id}`) {
-      channel.completed = true;
+      refreshCompleted(channel);
       resolveWake(channel);
-      publishQuestionSet(session, channels, round);
-      if (channels.every(candidate => candidate.completed)) setController.abort(new Error("All questions answered"));
-      if (!(await waitForReopen(channel, setSignal))) return;
-      channel.reopened = deferred<void>();
-      channel.completed = false;
+      publishQuestionSet(session, channels, driver.round);
+      driver.armCommit();
       continue;
     }
     const prefix = `opt:${question.id}:`;
@@ -1077,20 +1193,16 @@ async function driveQuestion(
         if (question.kind === "single") {
           channel.picked = [optionId];
           channel.customText = undefined;
-      channel.completed = true;
-      resolveWake(channel);
-      publishQuestionSet(session, channels, round);
-          if (channels.every(candidate => candidate.completed)) setController.abort(new Error("All questions answered"));
-          if (!(await waitForReopen(channel, setSignal))) return;
-          channel.reopened = deferred<void>();
-          channel.completed = false;
-          continue;
+        } else {
+          const index = channel.picked.indexOf(optionId);
+          if (index === -1) channel.picked.push(optionId);
+          else channel.picked.splice(index, 1);
         }
-        const index = channel.picked.indexOf(optionId);
-        if (index === -1) channel.picked.push(optionId);
-        else channel.picked.splice(index, 1);
       }
+      refreshCompleted(channel);
       resolveWake(channel);
+      publishQuestionSet(session, channels, driver.round);
+      driver.armCommit();
       continue;
     }
     throw new Error(`Unexpected interview action: ${result.action}`);
@@ -1115,34 +1227,13 @@ function resolveWake(channel: QuestionChannel): void {
   if (wake !== undefined) wake.resolve();
 }
 
-/** Waits for the driver to park a prompt, finish a revision, or end. */
+/** Waits for the driver to park a prompt or end. */
 async function waitForPrompt(channel: QuestionChannel): Promise<TuiPrompt | undefined> {
   while (true) {
     if (channel.driverEnded) return undefined;
-    if (!channel.completed && channel.prompt !== undefined) return channel.prompt;
+    if (channel.prompt !== undefined) return channel.prompt;
     await new Promise(resolve => setTimeout(resolve, 0));
   }
-}
-
-/** Parks the driver until the hub re-opens the completed question, or the set closes. */
-async function waitForReopen(channel: QuestionChannel, setSignal: AbortSignal): Promise<boolean> {
-  return new Promise<boolean>(resolve => {
-    if (setSignal.aborted) {
-      channel.driverEnded = true;
-      resolve(false);
-      return;
-    }
-    const onAbort = (): void => {
-      setSignal.removeEventListener("abort", onAbort);
-      channel.driverEnded = true;
-      resolve(false);
-    };
-    setSignal.addEventListener("abort", onAbort, { once: true });
-    channel.reopened.promise.then(() => {
-      setSignal.removeEventListener("abort", onAbort);
-      resolve(true);
-    });
-  });
 }
 
 /** Runs the TUI answer dialog for a parked prompt, returning the mapped action. */
@@ -1160,13 +1251,22 @@ async function tuiAnswerDialog(
   channel.dialogAbort = dialogController;
   try {
     const dialogSignal = AbortSignal.any([signal, dialogController.signal]);
-    const choice = await ctx.ui.select(label, tuiQuestionLabels(question, picked), { signal: dialogSignal });
+    const labels = [
+      ...tuiQuestionLabels(question, picked, question.id !== COMMIT_QUESTION.id),
+      BACK_ACTION_LABEL
+    ];
+    const choice = await ctx.ui.select(label, labels, { signal: dialogSignal });
     if (choice === undefined) return undefined;
     const mapped = mapTuiChoice(question, choice);
     if (mapped?.action === `custom:${question.id}`) {
-      const text = await ctx.ui.input(`Your own answer for: ${question.text}`, undefined, { signal: dialogSignal });
-      if (text === undefined) return undefined;
-      return { action: `custom:${question.id}`, feedback: text.trim() };
+      channel.customInputOpen = true;
+      try {
+        const text = await ctx.ui.input(`Your own answer for: ${question.text}`, undefined, { signal: dialogSignal });
+        if (text === undefined) return undefined;
+        return { action: `custom:${question.id}`, feedback: text.trim() };
+      } finally {
+        channel.customInputOpen = false;
+      }
     }
     return mapped;
   } catch (error) {
@@ -1180,6 +1280,7 @@ async function tuiAnswerDialog(
 /**
  * Opens the question's TUI answer dialog on behalf of the hub, resolving the
  * parked prompt with the user's answer and awaiting the driver's consumption.
+ * The dialog stays open after an answer so the user can revise it in place.
  */
 async function answerQuestionViaTui(
   session: RequirementsSession,
@@ -1190,7 +1291,6 @@ async function answerQuestionViaTui(
 ): Promise<void> {
   translator?.setDialogChannel(channel);
   try {
-    if (channel.completed) channel.reopened.resolve();
     while (true) {
       const prompt = await waitForPrompt(channel);
       if (prompt === undefined) return;
@@ -1200,39 +1300,54 @@ async function answerQuestionViaTui(
       channel.wake = wake;
       prompt.resolve(result);
       await wake.promise;
-      if (channel.completed) return;
     }
   } finally {
     translator?.setDialogChannel(undefined);
   }
 }
 
-/** The round's question hub: pick a question to answer, or cancel the interview. */
+/** The round's question hub: pick a question to answer, finish the round, or cancel. */
 async function hubLoop(
   session: RequirementsSession,
   ctx: ExtensionCommandContext,
   channels: QuestionChannel[],
   round: number,
   setSignal: AbortSignal,
-  translator?: RequirementsArrowTranslator
+  translator?: RequirementsArrowTranslator,
+  committedRef?: CommittedRef
 ): Promise<void> {
   translator?.setHubOpen(true);
+  let hubPosition = 0;
   while (true) {
-    const answeredCount = channels.filter(channel => channel.completed).length;
-    if (answeredCount === channels.length) return;
+    const realChannels = channels.filter(channel => !channel.isCommit);
+    const answeredCount = realChannels.filter(channel => channel.completed).length;
+    const entries = channels
+      .map((channel, index) => ({ channel, index, label: hubQuestionLabel(channel, index) }))
+      .filter(entry => !entry.channel.isCommit || entry.channel.armed);
+    translator?.setHubListCount(entries.length);
+    translator?.setHubPosition(hubPosition);
     const hubChoices = [
-      ...channels.map((channel, index) => hubQuestionLabel(channel, index)),
+      ...entries.map(entry => entry.label),
       CANCEL_ACTION_LABEL
     ];
-    const choice = await ctx.ui.select(`Questions (round ${round}) — ${answeredCount}/${channels.length} answered`, hubChoices, { signal: setSignal });
+    let choice: string | undefined;
+    try {
+      choice = await ctx.ui.select(`Questions (round ${round}) — ${answeredCount}/${realChannels.length} answered`, hubChoices, { signal: setSignal });
+    } catch (error) {
+      if (committedRef?.value === true) return;
+      throw error;
+    }
     if (choice === undefined || choice === CANCEL_ACTION_LABEL) {
+      if (committedRef?.value === true) return;
       throw new RequirementsCancelledError("Requirements interview cancelled by the user; no artifact was written");
     }
-    const chosenIndex = hubChoices.indexOf(choice);
-    if (chosenIndex === -1 || chosenIndex >= channels.length) continue;
-    const target = followSwitchTarget(channels, channels[chosenIndex]);
+    const chosen = entries.find(entry => entry.label === choice);
+    if (chosen === undefined) continue;
+    hubPosition = chosen.index;
+    const target = followSwitchTarget(channels, channels[chosen.index]);
     if (target === undefined) continue;
     await answerQuestionViaTui(session, ctx, target, round, translator);
+    if (committedRef?.value === true) return;
   }
 }
 
@@ -1247,6 +1362,7 @@ function followSwitchTarget(channels: QuestionChannel[], channel: QuestionChanne
     if (nextIndex < 0 || nextIndex >= channels.length) return undefined;
     current = channels[nextIndex];
   }
+  if (current.isCommit && !current.armed) return undefined;
   return current;
 }
 
@@ -1320,9 +1436,6 @@ async function askQuestion(
         return { questionId: question.id, selectedOptionIds: [], customText: result.feedback };
       }
       return { questionId: question.id, selectedOptionIds: picked, customText: result.feedback };
-    }
-    if (result.action === `done:${question.id}`) {
-      return { questionId: question.id, selectedOptionIds: picked };
     }
     const prefix = `opt:${question.id}:`;
     if (result.action.startsWith(prefix)) {
