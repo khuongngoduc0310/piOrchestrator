@@ -23,6 +23,7 @@ import { filesOutsidePlan, validateFailureScopeRevision, validateFinalPlanRevisi
 import { resolveParticipationPolicy, requiresHumanDecision } from "./participation-policy.js";
 import { reviseImplementationScope, type DocumentationScopePhase } from "./orchestrator-scope-revision.js";
 import { consumeScopeRevision } from "./scope-revision-budget.js";
+import { isReadOnlyRoute } from "./route-manifest.js";
 import { resolveAgentBlocker } from "./orchestrator-resolution.js";
 import { runAgentStepWithResolution } from "./orchestrator-resolution-coordinator.js";
 import { formatPlanForReview } from "./plan-review.js";
@@ -503,7 +504,7 @@ export async function runReadOnlyFinalizationPhase(
   review: ReadOnlyReviewResult | InvestigationResult | PlanningResult
 ): Promise<void> {
   const { request, ctx, store } = workflow;
-  if (!["review_only", "investigation_only", "planning_only"].includes(workflow.route)) {
+  if (!isReadOnlyRoute(workflow.route)) {
     throw new Error(`Route ${workflow.route} cannot use read-only finalization`);
   }
   throwIfAborted(runtime);

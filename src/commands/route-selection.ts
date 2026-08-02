@@ -1,18 +1,11 @@
 import type { ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import { WORKFLOW_ROUTES, type WorkflowRequest, type WorkflowRoute } from "../agent-task-types.js";
+import { routeLabel } from "../orchestration/route-manifest.js";
 
 export const ORCHESTRATE_USAGE = "/orchestrate";
 
-export const WORKFLOW_ROUTE_CHOICES: ReadonlyArray<{ route: WorkflowRoute; label: string }> = [
-  { route: "implementation", label: "implementation - Full test-first implementation and review" },
-  { route: "review_only", label: "review_only - Read-only repository review" },
-  { route: "documentation_only", label: "documentation_only - Documentation changes only" },
-  { route: "tests_only", label: "tests_only - Test and test-support changes only" },
-  { route: "investigation_only", label: "investigation_only - Read-only diagnosis and evidence" },
-  { route: "bug_fix", label: "bug_fix - Diagnose and fix a confirmed bug" },
-  { route: "quick_implementation", label: "quick_implementation - Implementation without test-first generation" },
-  { route: "planning_only", label: "planning_only - Read-only exploration and planning" }
-];
+export const WORKFLOW_ROUTE_CHOICES: ReadonlyArray<{ route: WorkflowRoute; label: string }> =
+  WORKFLOW_ROUTES.map(route => ({ route, label: routeLabel(route) }));
 
 export function isWorkflowRoute(value: unknown): value is WorkflowRoute {
   return typeof value === "string" && (WORKFLOW_ROUTES as readonly string[]).includes(value);

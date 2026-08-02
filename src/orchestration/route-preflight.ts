@@ -1,6 +1,7 @@
 import { AGENT_NAMES, type AgentName, type OrchestratorConfig, type WorkflowRoute } from "../types.js";
 import type { CheckpointCursorKind } from "../persistence/checkpoint-types.js";
 import { resolveParticipationPolicy, requiresHumanDecision } from "./participation-policy.js";
+import { ROUTE_ADDITIONAL_AGENTS } from "./route-manifest.js";
 
 export function requiredAgentsForRoute(route: WorkflowRoute, config: OrchestratorConfig): AgentName[] {
   const required = new Set<AgentName>(["explorer", "planner"]);
@@ -10,37 +11,8 @@ export function requiredAgentsForRoute(route: WorkflowRoute, config: Orchestrato
     required.add("reviewer");
   }
 
-  switch (route) {
-    case "implementation":
-    case "bug_fix":
-      required.add("tester");
-      required.add("builder");
-      required.add("debugger");
-      required.add("reviewer");
-      required.add("documenter");
-      break;
-    case "quick_implementation":
-      required.add("builder");
-      required.add("debugger");
-      required.add("reviewer");
-      required.add("documenter");
-      break;
-    case "tests_only":
-      required.add("tester");
-      required.add("debugger");
-      break;
-    case "documentation_only":
-      required.add("debugger");
-      required.add("documenter");
-      break;
-    case "review_only":
-      required.add("reviewer");
-      break;
-    case "investigation_only":
-      required.add("debugger");
-      break;
-    case "planning_only":
-      break;
+  for (const agent of ROUTE_ADDITIONAL_AGENTS[route]) {
+    required.add(agent);
   }
 
   return AGENT_NAMES.filter(agent => required.has(agent));
