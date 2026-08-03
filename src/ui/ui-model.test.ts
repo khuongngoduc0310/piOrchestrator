@@ -1,7 +1,9 @@
 import { describe, expect, it } from "vitest";
 import { buildIdleViewModel, buildRequirementsViewModel, buildRunViewModel, elapsedText, interviewQaToDashboard, phaseProgress } from "./ui-model.js";
-import type { ConfigSummary, WorkflowState, StepRecord } from "../types.js";
-import { AGENT_NAMES, SCHEMA_VERSION } from "../types.js";
+import type { ConfigSummary } from "../dashboard-types.js";
+import type { WorkflowState, StepRecord } from "../workflow-types.js";
+import { AGENT_NAMES } from "../agent-types.js";
+import { SCHEMA_VERSION } from "../workflow-types.js";
 
 const validConfig: ConfigSummary = {
   status: "valid",

@@ -1,4 +1,4 @@
-import type { AgentUsage } from "../types.js";
+import type { AgentUsage } from "../agent-types.js";
 
 export function addUsage(total: AgentUsage, usage: AgentUsage): AgentUsage {
   total.input += usage.input;

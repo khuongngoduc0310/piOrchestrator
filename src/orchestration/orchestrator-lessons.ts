@@ -2,9 +2,9 @@ import { createCandidateLedger, saveCandidateLedger, setCandidateState } from ".
 import { promoteLessons } from "../memory/memory-store.js";
 import { candidateLessonId, deduplicateAgainstMemory, permanentLessonId, validateCandidates, validateNewLesson } from "../memory/memory-validation.js";
 import { formatDocumentationReport } from "../ui/session-messages.js";
-import { parseDocumenterOutput, parseReviewOutput } from "../validation.js";
+import { parseReviewOutput } from "../validation.js";
 import type { CandidateLesson } from "../memory/memory-types.js";
-import type { DocumenterOutput } from "../types.js";
+import type { DocumenterOutput } from "../agent-task-types.js";
 import type { ReviewResult, WorkflowContext } from "./orchestrator-context.js";
 import type { OrchestratorRuntime } from "./orchestrator-runtime.js";
 import { countCandidateStates, EXTENSION_VERSION, projectTrusted } from "./orchestrator-helpers.js";

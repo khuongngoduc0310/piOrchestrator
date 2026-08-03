@@ -1,6 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type {
-  AgentSummary,
   OrchestratorViewModel,
 } from "../../dashboard-types.js";
 import { getAgentInspection } from "../api.js";

@@ -11,7 +11,7 @@ import type { AgentRunOptions } from "./agent-runner-contracts.js";
 import { SPAWN_EXPLORER_TOOL } from "./agent-runner-contracts.js";
 import { intersectRoleTools } from "./role-capabilities.js";
 import { DEFAULT_CONFIG } from "../config/config.js";
-import type { AgentName } from "../types.js";
+import type { AgentName } from "../agent-types.js";
 
 function runOptions(name: AgentName, spawnExplorer?: AgentRunOptions["spawnExplorer"]): AgentRunOptions {
   return {

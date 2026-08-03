@@ -25,7 +25,7 @@ export function Overview({ snapshot, onSelectAgent }: OverviewProps) {
     );
   }
 
-  const { run, mode, config, commands } = snapshot;
+  const { run, config, commands } = snapshot;
 
   if (!run) {
     return (

@@ -1,12 +1,14 @@
 import { formatDiagnosisForApproval, formatVerifiedImplementation } from "../ui/session-messages.js";
 import { parseBuilderOutput, parseDebuggerOutput, parseTesterOutput } from "../validation.js";
-import type { BuilderOutput, CheckResult, DebuggerOutput, BuilderTask, TesterOutput } from "../types.js";
+import type { BuilderOutput, BuilderTask, TesterOutput } from "../agent-task-types.js";
+import type { CheckResult } from "../workflow-types.js";
+import type { DebuggerOutput } from "../workflow-shared.js";
 import type { ImplementationPlanningResult, ImplementationResult, WorkflowContext } from "./orchestrator-context.js";
 import type { OrchestratorRuntime } from "./orchestrator-runtime.js";
 import { allGreen } from "./orchestrator-helpers.js";
 import { runAgentStep } from "./orchestrator-agent-step.js";
 import { runCheckStep } from "./orchestrator-workspace.js";
-import { publishSessionMessage, transition } from "./orchestrator-state.js";
+import { publishSessionMessage } from "./orchestrator-state.js";
 import { saveWorkflowCheckpoint } from "./orchestrator-checkpoints.js";
 import { deriveMutationPathScope } from "../workspace/workspace-guard.js";
 import { filesOutsidePlan } from "./plan-revision.js";

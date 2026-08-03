@@ -1,14 +1,7 @@
 import type { ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import { loadConfig } from "../config/config.js";
-import {
-  AGENT_NAMES,
-  THINKING_LEVELS,
-  type AgentModelSelection,
-  type AgentModelUpdates,
-  type AgentName,
-  type OrchestratorConfig,
-  type ThinkingLevel
-} from "../types.js";
+import { AGENT_NAMES, THINKING_LEVELS, type AgentModelSelection, type AgentModelUpdates, type AgentName, type ThinkingLevel } from "../agent-types.js";
+import { type OrchestratorConfig } from "../config-types.js";
 
 type RegistryModel = ReturnType<ExtensionCommandContext["modelRegistry"]["getAvailable"]>[number];
 

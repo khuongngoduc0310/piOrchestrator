@@ -1,4 +1,4 @@
-import type { AgentConfig } from "../types.js";
+import type { AgentConfig } from "../agent-types.js";
 import type { AgentRunOptions } from "./agent-runner-contracts.js";
 
 export const EXPLORER_SPAWN_PROMPT = "explorer-spawn.md";

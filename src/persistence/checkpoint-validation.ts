@@ -1,4 +1,8 @@
-import { AGENT_NAMES, RESOLUTION_STATUSES, RESOLUTION_OUTCOME_TYPES, SCHEMA_VERSION, SUPPORTED_HANDOFF_ROLES, WORKFLOW_ROUTES, type CheckResult, type OrchestratorConfig, type ResolutionRecord, type WorkflowState } from "../types.js";
+import { AGENT_NAMES, SUPPORTED_HANDOFF_ROLES } from "../agent-types.js";
+import { RESOLUTION_STATUSES, RESOLUTION_OUTCOME_TYPES, type ResolutionRecord } from "../agent-task-types.js";
+import { SCHEMA_VERSION, type CheckResult, type WorkflowState } from "../workflow-types.js";
+import { WORKFLOW_ROUTES } from "../workflow-shared.js";
+import { type OrchestratorConfig } from "../config-types.js";
 import type { AgentResolutionRequest } from "../agent-task-types.js";
 import { validateOrchestratorConfig } from "../config/config-validation.js";
 import {
@@ -367,7 +371,7 @@ function validateResolutionRequest(value: unknown, path: string): AgentResolutio
       return req as AgentResolutionRequest;
     }
     case "role_handoff": {
-      const role = enumValue(req.requestedRole, `${path}.requestedRole`, SUPPORTED_HANDOFF_ROLES);
+      enumValue(req.requestedRole, `${path}.requestedRole`, SUPPORTED_HANDOFF_ROLES);
       string(req.requestedCapability, `${path}.requestedCapability`);
       string(req.question, `${path}.question`);
       array(req.evidence, `${path}.evidence`, (entry, entryPath) => validateRepositoryEvidence(entry, entryPath));

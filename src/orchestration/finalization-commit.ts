@@ -2,7 +2,7 @@ import { collectWorktreeChanges, preflightWorktreeChanges, applyWorktreeChanges,
 import { computeFinalChecksDigest } from "../memory/memory-validation.js";
 import { canonicalSha256 } from "../workspace/workspace-guard.js";
 import { formatCompletedRun } from "../ui/session-messages.js";
-import type { CompletionSummary, CheckResult } from "../types.js";
+import type { CompletionSummary, CheckResult } from "../workflow-types.js";
 import type { InvestigationResult, PlanningResult, ReadOnlyReviewResult, WorkflowContext } from "./orchestrator-context.js";
 import type { OrchestratorRuntime } from "./orchestrator-runtime.js";
 import { EXTENSION_VERSION, messageOf } from "./orchestrator-helpers.js";
@@ -22,7 +22,7 @@ export async function runReadOnlyFinalizationPhase(
   workflow: WorkflowContext,
   review: ReadOnlyReviewResult | InvestigationResult | PlanningResult
 ): Promise<void> {
-  const { request, ctx, store } = workflow;
+  const { request, store } = workflow;
   if (!isReadOnlyRoute(workflow.route)) {
     throw new Error(`Route ${workflow.route} cannot use read-only finalization`);
   }

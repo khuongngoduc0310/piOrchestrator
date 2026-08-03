@@ -5,7 +5,8 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import { buildAvailableModelCatalog, configureAgentModels, supportedThinkingLevels } from "./agent-settings.js";
 import { DEFAULT_CONFIG, configPath, saveConfig } from "../config/config.js";
-import type { AgentModelUpdates, OrchestratorConfig } from "../types.js";
+import type { AgentModelUpdates } from "../agent-types.js";
+import type { OrchestratorConfig } from "../config-types.js";
 
 const directories: string[] = [];
 afterEach(async () => {

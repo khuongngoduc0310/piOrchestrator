@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { DashboardServer } from "./dashboard.js";
-import type { AgentHistoryResponse, AgentInspection, AgentTranscript, ArtifactContent, DashboardRunHistoryItem, InvocationDiffView, OrchestratorViewModel } from "../types.js";
+import type { AgentHistoryResponse, AgentInspection, ArtifactContent, DashboardRunHistoryItem, InvocationDiffView, OrchestratorViewModel } from "../dashboard-types.js";
+import type { AgentTranscript } from "../agent-types.js";
 
 const emptyProvider = {
   getViewModel: () => undefined,

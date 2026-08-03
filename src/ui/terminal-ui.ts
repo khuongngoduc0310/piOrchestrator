@@ -1,6 +1,6 @@
 import type { ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
-import type { AgentName, OrchestratorViewModel } from "../types.js";
-import { AGENT_NAMES } from "../types.js";
+import type { OrchestratorViewModel } from "../dashboard-types.js";
+import { AGENT_NAMES } from "../agent-types.js";
 import { elapsedText, phaseProgress } from "./ui-model.js";
 import type { AgentSessionEvent, AgentSessionView } from "./agent-session.js";
 
@@ -84,7 +84,6 @@ function bottomBorder(theme: WidgetTheme): string {
   return theme.fg("borderMuted", "\u2514" + "\u2500".repeat(PINNER_INNER) + "\u2518");
 }
 
-function B(theme: WidgetTheme) { return (s: string) => theme.fg("borderMuted", s); }
 function A(theme: WidgetTheme) { return (s: string) => theme.fg("accent", s); }
 function S(theme: WidgetTheme) { return (s: string) => theme.fg("success", s); }
 function E(theme: WidgetTheme) { return (s: string) => theme.fg("error", s); }
@@ -146,7 +145,6 @@ function renderLiveActivity(events: readonly AgentSessionEvent[], theme: WidgetT
 }
 
 export function renderViewModelLines(vm: OrchestratorViewModel, theme: WidgetTheme): string[] {
-  const bn = (s: string) => B(theme)(s);
   const aa = (s: string) => A(theme)(s);
   const ss = (s: string) => S(theme)(s);
   const ee = (s: string) => E(theme)(s);

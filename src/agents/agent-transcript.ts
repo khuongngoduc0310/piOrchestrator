@@ -1,9 +1,5 @@
 import type { AgentSessionEvent } from "@earendil-works/pi-coding-agent";
-import type {
-  AgentTranscript,
-  AgentTranscriptMessage,
-  AgentTranscriptPart
-} from "../types.js";
+import type { AgentTranscript, AgentTranscriptMessage, AgentTranscriptPart } from "../agent-types.js";
 
 export function updateTranscriptMessages(current: unknown[], event: AgentSessionEvent): unknown[] {
   if (event.type === "agent_end") {

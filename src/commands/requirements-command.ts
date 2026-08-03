@@ -4,7 +4,7 @@ import { loadConfig as defaultLoadConfig } from "../config/config.js";
 import { openBrowser as defaultOpenBrowser } from "./open-browser.js";
 import { REQUIREMENTS_JSON, REQUIREMENTS_MARKDOWN, renderRequirementsMarkdown } from "../persistence/requirements-store.js";
 import { selectWorkflowRoute } from "./route-selection.js";
-import { MAX_INTERVIEW_ROUNDS, type InterviewerReport, type RequirementsDocument } from "../types.js";
+import { MAX_INTERVIEW_ROUNDS, type InterviewerReport, type RequirementsDocument } from "../agent-task-types.js";
 import { askReview, askSet } from "./requirements-channels.js";
 import { interviewerCall } from "./requirements-interviewer.js";
 import {

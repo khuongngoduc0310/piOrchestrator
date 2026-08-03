@@ -1,14 +1,7 @@
 import type { ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import { loadConfig, saveConfig } from "./config.js";
-import {
-  AGENT_NAMES,
-  THINKING_LEVELS,
-  type AgentModelSelection,
-  type AgentModelUpdates,
-  type AgentName,
-  type OrchestratorConfig,
-  type ThinkingLevel
-} from "../types.js";
+import { type AgentModelUpdates } from "../agent-types.js";
+import { type OrchestratorConfig } from "../config-types.js";
 import { applyParticipationProfile, inferParticipationProfile, PROFILE_DESCRIPTIONS } from "../orchestration/participation-policy.js";
 
 export type SettingsResult = "saved" | "unchanged" | "cancelled" | "unavailable";
@@ -178,7 +171,6 @@ async function editTimeouts(ctx: ExtensionCommandContext, staged: StagedConfig):
       cfg.limits.maxOutputBytes = value;
       labels[field] = `Max output: ${fmtBytes(value)}`;
     } else {
-      const current = String(cfg.limits[field as keyof typeof cfg.limits]);
       const raw = await ctx.ui.input(`Enter timeout in seconds (current: ${fmtMs(cfg.limits[field as keyof typeof cfg.limits] as number)})`, String(Math.round((cfg.limits[field as keyof typeof cfg.limits] as number) / 1000)));
       if (raw === undefined) continue;
       const seconds = parseInt(raw, 10);

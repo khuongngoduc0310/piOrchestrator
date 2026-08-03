@@ -2,17 +2,10 @@ import { mkdir, readFile } from "node:fs/promises";
 import path from "node:path";
 import { atomicReplace } from "../persistence/atomic-write.js";
 import { CONFIG_DIR_NAME } from "@earendil-works/pi-coding-agent";
-import {
-  AGENT_NAMES,
-  BUILT_IN_TOOLS,
-  SCHEMA_VERSION,
-  THINKING_LEVELS,
-  type AgentModelUpdates,
-  type AgentName,
-  type ConfigSummary,
-  type OrchestratorConfig,
-  type ThinkingLevel
-} from "../types.js";
+import { AGENT_NAMES, BUILT_IN_TOOLS, THINKING_LEVELS, type AgentModelUpdates, type AgentName, type ThinkingLevel } from "../agent-types.js";
+import { SCHEMA_VERSION } from "../workflow-types.js";
+import { type ConfigSummary } from "../dashboard-types.js";
+import { type OrchestratorConfig } from "../config-types.js";
 import { ValidationError, isRecord, validateOrchestratorConfig } from "../validation.js";
 import { intersectRoleTools } from "../agents/role-capabilities.js";
 

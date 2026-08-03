@@ -2,7 +2,8 @@ import { createServer, type Server, type ServerResponse } from "node:http";
 import path from "node:path";
 import fs from "node:fs";
 import { fileURLToPath } from "node:url";
-import type { AgentHistoryResponse, AgentInspection, AgentName, AgentTranscript, ArtifactContent, DashboardDecisionPresentation, DashboardRunHistoryItem, InvocationDiffView, OrchestratorViewModel } from "../types.js";
+import type { AgentHistoryResponse, AgentInspection, ArtifactContent, DashboardDecisionPresentation, DashboardRunHistoryItem, InvocationDiffView, OrchestratorViewModel } from "../dashboard-types.js";
+import type { AgentName, AgentTranscript } from "../agent-types.js";
 import type { HumanDecisionAction } from "../orchestration/human-decision-types.js";
 
 export interface DashboardDataProvider {
@@ -159,7 +160,7 @@ export class DashboardServer {
   }
 
   private rejectAllWaiters(reason: unknown): void {
-    for (const [id, waiter] of this.decisionWaiters) {
+    for (const [, waiter] of this.decisionWaiters) {
       waiter.removeListener();
       waiter.reject(abortError(reason));
     }

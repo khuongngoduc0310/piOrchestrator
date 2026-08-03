@@ -1,12 +1,6 @@
-import {
-  AGENT_NAMES,
-  BUILT_IN_TOOLS,
-  SCHEMA_VERSION,
-  THINKING_LEVELS,
-  type AgentConfig,
-  type AgentName,
-  type OrchestratorConfig
-} from "../types.js";
+import { AGENT_NAMES, BUILT_IN_TOOLS, THINKING_LEVELS, type AgentConfig, type AgentName } from "../agent-types.js";
+import { SCHEMA_VERSION } from "../workflow-types.js";
+import { type OrchestratorConfig } from "../config-types.js";
 import { RoleCapabilityError, validateRoleTools } from "../agents/role-capabilities.js";
 import {
   ValidationError,

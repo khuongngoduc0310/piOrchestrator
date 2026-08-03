@@ -1,19 +1,9 @@
-import type {
-  AgentName,
-  AgentStatus,
-  AgentSummary,
-  ConfigSummary,
-  DashboardInterviewQAndA,
-  InterviewQAndA,
-  OrchestratorViewModel,
-  PendingQuestionInfo,
-  RequirementsSummary,
-  RunSummary,
-  Stage,
-  StepRecord,
-  WorkflowState
-} from "../types.js";
-import { AGENT_NAMES, UI_PHASE_LABELS } from "../types.js";
+import type { AgentStatus } from "../agent-types.js";
+import type { AgentSummary, ConfigSummary, DashboardInterviewQAndA, OrchestratorViewModel, PendingQuestionInfo, RequirementsSummary, RunSummary } from "../dashboard-types.js";
+import type { InterviewQAndA } from "../agent-task-types.js";
+import type { Stage, StepRecord, WorkflowState } from "../workflow-types.js";
+import { AGENT_NAMES } from "../agent-types.js";
+import { UI_PHASE_LABELS } from "../dashboard-types.js";
 
 const COMMANDS = [
   "/orchestrate",

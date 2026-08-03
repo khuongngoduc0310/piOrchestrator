@@ -3,7 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { discoverProjectChecks } from "./check-discovery.js";
-import type { PackageManager } from "../types.js";
+import type { PackageManager } from "../config-types.js";
 
 const directories: string[] = [];
 afterEach(async () => {

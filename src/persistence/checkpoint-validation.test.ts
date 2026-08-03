@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { validateCheckpointPointer, validateCheckResults, validateResolutionLedger, validateWorkflowCheckpoint, validateWorkflowStateForResume } from "./checkpoint-validation.js";
 import { CHECKPOINT_SCHEMA_VERSION } from "./checkpoint-types.js";
-import { SCHEMA_VERSION } from "../types.js";
+import { SCHEMA_VERSION } from "../workflow-types.js";
 import { DEFAULT_CONFIG } from "../config/config.js";
 
 describe("checkpoint validation", () => {

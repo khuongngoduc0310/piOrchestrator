@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { PlannerOutput } from "../types.js";
+import type { PlannerOutput } from "../agent-task-types.js";
 import { filesOutsidePlan, validateFailureScopeRevision, validateFinalPlanRevision } from "./plan-revision.js";
 
 const plan: PlannerOutput = {

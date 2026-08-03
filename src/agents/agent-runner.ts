@@ -18,14 +18,8 @@ import {
 import { createSdkSession, resolvePromptPath } from "./agent-session.js";
 import { normalizeAgentTranscript, updateTranscriptMessages } from "./agent-transcript.js";
 import { addUsage, cloneUsage, sdkUsageToAgentUsage } from "./agent-usage.js";
-import type {
-  AgentConfig,
-  AgentName,
-  AgentResult,
-  AgentTranscript,
-  AgentUsage,
-  OrchestratorConfig
-} from "../types.js";
+import type { AgentConfig, AgentName, AgentResult, AgentTranscript, AgentUsage } from "../agent-types.js";
+import type { OrchestratorConfig } from "../config-types.js";
 
 export {
   AgentCancelledError,
@@ -70,12 +64,11 @@ export class PiSdkAgentExecutor implements AgentExecutor {
   ): Promise<void> {
     if (signal.aborted) throw new Error("Agent preflight cancelled");
     const generation = ++this.preflightGeneration;
-    let timer: NodeJS.Timeout | undefined;
     let rejectStop!: (error: Error) => void;
     const stop = new Promise<never>((_resolve, reject) => { rejectStop = reject; });
     const onAbort = (): void => rejectStop(new Error("Agent preflight cancelled"));
     signal.addEventListener("abort", onAbort, { once: true });
-    timer = setTimeout(() => rejectStop(new Error(`Agent preflight timed out after ${timeoutMs}ms`)), timeoutMs);
+    const timer = setTimeout(() => rejectStop(new Error(`Agent preflight timed out after ${timeoutMs}ms`)), timeoutMs);
     const bounded = <T>(operation: Promise<T>): Promise<T> => Promise.race([operation, stop]);
     try {
       const runtime = await bounded(this.runtime());
@@ -110,7 +103,6 @@ export class PiSdkAgentExecutor implements AgentExecutor {
     let session: AgentSessionLike | undefined;
     let pendingSession: Promise<AgentSessionLike> | undefined;
     let unsubscribe = (): void => undefined;
-    let timer: NodeJS.Timeout | undefined;
     let timedOut = false;
     let callerAborted = false;
     let stopped = false;
@@ -130,7 +122,7 @@ export class PiSdkAgentExecutor implements AgentExecutor {
       rejectStop(new AgentCancelledError(options.name));
     };
     options.signal.addEventListener("abort", onAbort, { once: true });
-    timer = setTimeout(() => {
+    const timer = setTimeout(() => {
       timedOut = true;
       stopped = true;
       requestAbort();

@@ -1,4 +1,4 @@
-import type { AgentName } from "../types.js";
+import type { AgentName } from "../agent-types.js";
 import {
   MAX_SELECTED_LESSONS,
   MAX_SELECTED_LESSONS_BYTES,

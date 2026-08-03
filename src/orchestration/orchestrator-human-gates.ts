@@ -3,7 +3,10 @@ import type { DashboardDecisionAction, DashboardDecisionPresentation } from "../
 import { saveConfig } from "../config/config.js";
 import type { CandidateLesson } from "../memory/memory-types.js";
 import type { CheckpointBindings } from "../persistence/checkpoint-types.js";
-import type { DebuggerOutput, HumanGateState, HumanPlanReviewResult, HumanReviewDecision, OrchestratorConfig, PlannerOutput, ReviewOutput } from "../types.js";
+import type { DebuggerOutput } from "../workflow-shared.js";
+import type { HumanGateState, HumanPlanReviewResult, HumanReviewDecision } from "../workflow-types.js";
+import type { OrchestratorConfig } from "../config-types.js";
+import type { PlannerOutput, ReviewOutput } from "../agent-task-types.js";
 import type { OrchestratorRuntime } from "./orchestrator-runtime.js";
 import type { ImplementationPlanningResult, WorkflowContext } from "./orchestrator-context.js";
 import { formatCandidateForApproval } from "./orchestrator-helpers.js";

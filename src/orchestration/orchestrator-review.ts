@@ -1,6 +1,6 @@
 import { formatApprovedReview } from "../ui/session-messages.js";
 import { parseBuilderOutput, parseDebuggerOutput, parseReviewOutput } from "../validation.js";
-import type { ReviewApprovalSource, ReviewOutput } from "../types.js";
+import type { ReviewApprovalSource, ReviewOutput } from "../agent-task-types.js";
 import type { ImplementationResult, ReviewResult, WorkflowContext } from "./orchestrator-context.js";
 import type { OrchestratorRuntime } from "./orchestrator-runtime.js";
 import { runAgentStep } from "./orchestrator-agent-step.js";
@@ -13,7 +13,8 @@ import { filesOutsidePlan } from "./plan-revision.js";
 import { reviseImplementationScope } from "./orchestrator-scope-revision.js";
 import { consumeScopeRevision } from "./scope-revision-budget.js";
 import { allGreen } from "./orchestrator-helpers.js";
-import type { CheckResult, DebuggerOutput, HumanReviewDecision } from "../types.js";
+import type { CheckResult, HumanReviewDecision } from "../workflow-types.js";
+import type { DebuggerOutput } from "../workflow-shared.js";
 import { resolveParticipationPolicy, requiresHumanDecision } from "./participation-policy.js";
 import { resolveAgentBlocker } from "./orchestrator-resolution.js";
 import { canonicalSha256 } from "../workspace/workspace-guard.js";

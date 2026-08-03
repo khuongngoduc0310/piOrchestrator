@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { ROLE_CAPABILITIES, ROLE_MAXIMUM_TOOLS, intersectRoleTools, validateRoleTools } from "./role-capabilities.js";
-import { AGENT_NAMES } from "../types.js";
+import { AGENT_NAMES } from "../agent-types.js";
 
 describe("role capabilities", () => {
   it("has immutable role maxima with no shell access", () => {

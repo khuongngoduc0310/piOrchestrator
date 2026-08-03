@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { AgentSessionBuffer, MapSessionBuffer, MAX_EVENTS_PER_AGENT } from "./agent-session.js";
-import type { AgentSessionEvent, ToolCallEvent, SystemEvent, AssistantDeltaEvent } from "./agent-session.js";
+import type { ToolCallEvent, SystemEvent, AssistantDeltaEvent } from "./agent-session.js";
 
 function assistantEvent(overrides: Partial<AssistantDeltaEvent> = {}): AssistantDeltaEvent {
   return { id: "a1", type: "assistant", timestamp: 1000, text: "Hello", streaming: true, ...overrides };

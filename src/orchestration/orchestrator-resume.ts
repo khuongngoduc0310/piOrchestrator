@@ -25,7 +25,7 @@ import {
 } from "./participation-policy.js";
 import { automatedCriteria } from "./acceptance-criteria.js";
 import { RunStore, type RunLease } from "../persistence/store.js";
-import type { WorkflowState } from "../types.js";
+import type { WorkflowState } from "../workflow-types.js";
 import {
   validateBuilderOutput,
   validateDebuggerOutput,

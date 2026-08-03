@@ -1,4 +1,6 @@
-import type { AgentName, BuilderOutput, DebuggerOutput, DocumenterOutput, ExplorerOutput, PlannerOutput, ReviewOutput, TesterOutput } from "../types.js";
+import type { AgentName } from "../agent-types.js";
+import type { BuilderOutput, DocumenterOutput, ExplorerOutput, PlannerOutput, ReviewOutput, TesterOutput } from "../agent-task-types.js";
+import type { DebuggerOutput } from "../workflow-shared.js";
 
 export const MAX_EVENTS_PER_AGENT = 500;
 export const MAX_BYTES_PER_AGENT = 1_000_000;

@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import os from "node:os";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import { MAX_MEMORY_BYTES, MEMORY_SCHEMA_VERSION } from "./memory-types.js";
 import type { MemoryLesson } from "./memory-types.js";
 

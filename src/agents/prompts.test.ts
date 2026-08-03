@@ -1,11 +1,9 @@
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import {
-  AGENT_NAMES,
-  DEBUGGER_CATEGORIES,
-  LESSON_CATEGORIES
-} from "../types.js";
+import { AGENT_NAMES } from "../agent-types.js";
+import { DEBUGGER_CATEGORIES } from "../workflow-shared.js";
+import { LESSON_CATEGORIES } from "../agent-task-types.js";
 import { MAX_EVIDENCE_DETAIL_BYTES } from "../memory/memory-types.js";
 import { validateInterviewerOutput } from "./agent-output-validation.js";
 

@@ -4,7 +4,6 @@ import type { BaselineReviewContext, CheckResult } from "./workflow-types.js";
 import {
   DEBUGGER_CATEGORIES,
   WORKFLOW_ROUTES,
-  type DebuggerCategory,
   type DebuggerOutput,
   type RepositoryEvidence,
   type WorkflowRoute

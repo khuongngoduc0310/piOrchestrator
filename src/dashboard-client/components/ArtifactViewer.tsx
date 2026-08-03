@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useRef, useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import { getArtifact } from "../api.js";
 import type { OrchestratorViewModel } from "../../dashboard-types.js";
 import { MarkdownPreview } from "./MarkdownPreview.js";

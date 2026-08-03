@@ -1,7 +1,9 @@
 import path from "node:path";
 import type { ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import { loadConfig } from "../config/config.js";
-import { AGENT_NAMES, SCHEMA_VERSION, type WorkflowRequest } from "../types.js";
+import { AGENT_NAMES } from "../agent-types.js";
+import { SCHEMA_VERSION } from "../workflow-types.js";
+import { type WorkflowRequest } from "../agent-task-types.js";
 import { removeWorktree } from "../workspace/worktree.js";
 import type { WorkflowContext } from "./orchestrator-context.js";
 import type { OrchestratorRuntime } from "./orchestrator-runtime.js";

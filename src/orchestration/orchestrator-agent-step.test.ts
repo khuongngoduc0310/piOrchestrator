@@ -7,7 +7,9 @@ import { AgentCancelledError, type AgentExecutor, type AgentRunOptions } from ".
 import type { SpawnExplorerResult } from "../agents/agent-runner-contracts.js";
 import { DEFAULT_CONFIG } from "../config/config.js";
 import { RunStore } from "../persistence/store.js";
-import { AGENT_NAMES, SCHEMA_VERSION, type PlannerOutput, type PlannerTask, type WorkflowState } from "../types.js";
+import { AGENT_NAMES } from "../agent-types.js";
+import { SCHEMA_VERSION, type WorkflowState } from "../workflow-types.js";
+import { type PlannerOutput, type PlannerTask } from "../agent-task-types.js";
 import { runAgentStep } from "./orchestrator-agent-step.js";
 import { OrchestratorRuntime } from "./orchestrator-runtime.js";
 
@@ -140,7 +142,7 @@ describe("runAgentStep spawn integration", () => {
           : { text: valid, usage: undefined, transcript };
       }
     };
-    const { runtime, store, ctx } = await createRuntime(cwd, executor);
+    const { runtime, ctx } = await createRuntime(cwd, executor);
 
     const output = await runAgentStep(runtime, "planner", "planning", "Plan", plannerTask, cwd, ctx, text => JSON.parse(text) as PlannerOutput);
 
@@ -183,7 +185,7 @@ describe("runAgentStep spawn integration", () => {
         return { text: JSON.stringify(plannerOutput), usage: undefined, transcript };
       }
     };
-    const { runtime, store, ctx } = await createRuntime(cwd, executor);
+    const { runtime, ctx } = await createRuntime(cwd, executor);
 
     await expect(runAgentStep(runtime, "planner", "planning", "Plan", plannerTask, cwd, ctx, text => JSON.parse(text) as PlannerOutput))
       .rejects.toBeInstanceOf(AgentCancelledError);

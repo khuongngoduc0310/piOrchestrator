@@ -3,7 +3,8 @@ import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import type { PlannerOutput, StepRecord } from "../types.js";
+import type { PlannerOutput } from "../agent-task-types.js";
+import type { StepRecord } from "../workflow-types.js";
 import {
   compareWorkspaceSnapshots,
   canonicalSha256,

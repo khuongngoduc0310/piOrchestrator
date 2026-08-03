@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { HumanTouchpoints, OrchestratorConfig } from "../types.js";
+import type { HumanTouchpoints, OrchestratorConfig } from "../config-types.js";
 import {
   PROFILE_DESCRIPTIONS,
   applyParticipationProfile,

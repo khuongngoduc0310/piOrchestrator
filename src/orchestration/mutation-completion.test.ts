@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { assertBuilderComplete, assertDocumenterComplete, assertTesterComplete } from "./mutation-completion.js";
-import type { BuilderOutput, DocumenterOutput, TesterOutput } from "../types.js";
+import type { BuilderOutput, DocumenterOutput, TesterOutput } from "../agent-task-types.js";
 
 const builder: BuilderOutput = { summary: "done", changedFiles: [], commands: [], assumptions: [], unresolvedIssues: [] };
 const tester: TesterOutput = {

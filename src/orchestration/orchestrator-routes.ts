@@ -9,7 +9,7 @@ import { runSpecializedMutationRoute } from "./orchestrator-specialized-routes.j
 import { runAgentStep } from "./orchestrator-agent-step.js";
 import { parseDebuggerOutput } from "../validation.js";
 import { saveWorkflowCheckpoint } from "./orchestrator-checkpoints.js";
-import type { DebuggerOutput } from "../types.js";
+import type { DebuggerOutput } from "../workflow-shared.js";
 import { filesOutsidePlan } from "./plan-revision.js";
 import { reviseImplementationScope } from "./orchestrator-scope-revision.js";
 import { consumeScopeRevision } from "./scope-revision-budget.js";
@@ -32,7 +32,7 @@ export async function runSelectedRoute(
       return;
     }
     case "bug_fix": {
-      let prepared = options.prepared
+      const prepared = options.prepared
         ? planning as ImplementationPlanningResult
         : await prepareImplementationPhase(runtime, workflow, planning, {
             allowBaselineRepair: false,

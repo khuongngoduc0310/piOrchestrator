@@ -1,7 +1,8 @@
 import type { ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import { AgentCancelledError } from "../agents/agent-runner.js";
 import { formatCancelledRun, formatFailedRun } from "../ui/session-messages.js";
-import type { AgentName, Stage, StepRecord, WorkflowMilestone } from "../types.js";
+import type { AgentName } from "../agent-types.js";
+import type { Stage, StepRecord, WorkflowMilestone } from "../workflow-types.js";
 import type { OrchestratorRuntime } from "./orchestrator-runtime.js";
 import { messageOf } from "./orchestrator-helpers.js";
 import { WorkflowCancelledError, WorkflowPausedError, WorkflowTerminationError } from "./workflow-errors.js";

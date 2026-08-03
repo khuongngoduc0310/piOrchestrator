@@ -8,11 +8,13 @@
 ## Toolchain
 
 - Use Node.js `>=22.19.0` and npm; `package-lock.json` is the dependency source of truth.
-- Install with `npm install`. Validate with `npm run typecheck` and `npm test`.
-- For focused type checks, use `npm run typecheck:server` or `npm run typecheck:dashboard`; `npm run prepack` rebuilds the dashboard and runs both type checks plus the full test suite.
+- Install with `npm install`. Validate with `npm run typecheck`, `npm run lint`, and `npm test`; `npm run coverage` runs the test suite with v8 coverage and threshold enforcement (config in `vitest.config.ts`).
+- For focused type checks, use `npm run typecheck:server` or `npm run typecheck:dashboard`; `npm run prepack` rebuilds the dashboard and runs both type checks plus the full test suite (lint and coverage are separate scripts, also run in CI).
 - Run one test file with `npm test -- src/config/config.test.ts`; add `-t "test name"` to select one test.
 - There is no extension build step: Pi loads `src/index.ts` directly. Dashboard source lives in `src/dashboard-client/`; committed `src/dashboard-dist/` assets are what the package ships. Regenerate them with `npm run build:dashboard` after frontend changes.
 - This is ESM with `moduleResolution: NodeNext`; keep `.js` suffixes on relative imports in TypeScript source.
+- Linting uses flat config (`eslint.config.mjs`) with type-aware `@typescript-eslint` rules, `import-x/no-cycle`, and react-hooks rules for `src/dashboard-client/`. Run `npm run lint:fix` for autofixes; underscore-prefixed names are exempt from `no-unused-vars`.
+- CI runs in `.github/workflows/ci.yml` (verify + coverage jobs) on Node 22.
 
 ## Architecture
 
@@ -35,7 +37,7 @@
 <!-- gitnexus:start -->
 # GitNexus — Code Intelligence
 
-This project is indexed by GitNexus as **piOrchestrator** (4566 symbols, 14570 relationships, 300 execution flows). Use the GitNexus MCP tools to understand code, assess impact, and navigate safely.
+This project is indexed by GitNexus as **piOrchestrator** (4569 symbols, 14651 relationships, 300 execution flows). Use the GitNexus MCP tools to understand code, assess impact, and navigate safely.
 
 > Index stale? Run `node .gitnexus/run.cjs analyze` from the project root — it auto-selects an available runner. No `.gitnexus/run.cjs` yet? `npx gitnexus analyze` (npm 11 crash → `npm i -g gitnexus`; #1939).
 

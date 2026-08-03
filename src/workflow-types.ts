@@ -1,7 +1,7 @@
 import type { AgentInvocationRecord, AgentName, AgentStatus } from "./agent-types.js";
 import type { WorkflowTermination } from "./orchestration/workflow-errors.js";
 import type { HumanDecisionKind, PendingHumanDecision } from "./orchestration/human-decision-types.js";
-import type { DebuggerOutput, WorkflowRoute } from "./workflow-shared.js";
+import type { CheckpointCursorKind, DebuggerOutput, WorkflowRoute } from "./workflow-shared.js";
 
 export const SCHEMA_VERSION = 2;
 
@@ -101,12 +101,12 @@ export interface WorkflowState {
   memoryRevision?: number;
   latestCheckpoint?: {
     number: number;
-    cursor: import("./persistence/checkpoint-types.js").CheckpointCursorKind;
+    cursor: CheckpointCursorKind;
     createdAt: string;
   };
   resumeCount?: number;
   resumedAt?: string;
-  resumedFromCheckpoint?: import("./persistence/checkpoint-types.js").CheckpointCursorKind;
+  resumedFromCheckpoint?: CheckpointCursorKind;
   resumeBlockedReason?: string;
   currentTool?: string;
   currentToolArgs?: string;

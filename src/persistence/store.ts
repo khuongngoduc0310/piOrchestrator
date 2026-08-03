@@ -3,7 +3,8 @@ import { appendFile, lstat, mkdir, rename, rm, writeFile } from "node:fs/promise
 import path from "node:path";
 import os from "node:os";
 import { CONFIG_DIR_NAME } from "@earendil-works/pi-coding-agent";
-import type { AgentName, Stage, WorkflowState } from "../types.js";
+import type { AgentName } from "../agent-types.js";
+import type { Stage, WorkflowState } from "../workflow-types.js";
 import { readSafeArtifact } from "./checkpoint-store.js";
 import { atomicReplace as atomicReplaceFile } from "./atomic-write.js";
 

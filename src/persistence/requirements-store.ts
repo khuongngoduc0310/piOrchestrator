@@ -1,7 +1,8 @@
 import { mkdir, readFile } from "node:fs/promises";
 import path from "node:path";
 import { CONFIG_DIR_NAME } from "@earendil-works/pi-coding-agent";
-import type { ArtifactContent, RequirementsDocument } from "../types.js";
+import type { ArtifactContent } from "../dashboard-types.js";
+import type { RequirementsDocument } from "../agent-task-types.js";
 import { atomicReplace } from "./atomic-write.js";
 import { validateRequirementsDocument } from "../validation.js";
 

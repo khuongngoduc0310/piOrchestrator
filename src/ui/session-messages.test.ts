@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
-import type { BuilderOutput, CheckResult, CompletionSummary, DebuggerOutput, DocumenterOutput, PlannerOutput, ReviewOutput } from "../types.js";
-import { AGENT_NAMES } from "../types.js";
+import type { BuilderOutput, DocumenterOutput, PlannerOutput, ReviewOutput } from "../agent-task-types.js";
+import type { CheckResult, CompletionSummary } from "../workflow-types.js";
+import type { DebuggerOutput } from "../workflow-shared.js";
 import {
   CapabilityViolationError,
   GateInteractionError,

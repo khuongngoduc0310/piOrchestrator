@@ -21,7 +21,7 @@ import type {
 import { SPAWN_EXPLORER_TOOL, isSpawningRole } from "./agent-runner-contracts.js";
 import { normalizeRepositoryPath } from "../workspace/path-validation.js";
 import { intersectRoleTools, ROLE_MUTATION_KINDS } from "./role-capabilities.js";
-import type { AgentName } from "../types.js";
+import type { AgentName } from "../agent-types.js";
 
 export async function createSdkSession(options: {
   run: AgentRunOptions;

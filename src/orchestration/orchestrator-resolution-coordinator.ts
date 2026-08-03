@@ -1,5 +1,7 @@
 import { randomUUID } from "node:crypto";
-import type { AgentName, AgentOutputMap, AgentTaskMap, PlannerOutput, Stage } from "../types.js";
+import type { AgentName } from "../agent-types.js";
+import type { AgentOutputMap, AgentTaskMap, PlannerOutput } from "../agent-task-types.js";
+import type { Stage } from "../workflow-types.js";
 import type { AgentResolutionRequest, ResolutionOutcome, ResolutionRecord } from "../agent-task-types.js";
 import type { ImplementationPlanningResult, WorkflowContext } from "./orchestrator-context.js";
 import type { OrchestratorRuntime } from "./orchestrator-runtime.js";

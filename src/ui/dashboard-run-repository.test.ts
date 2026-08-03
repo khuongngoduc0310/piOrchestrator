@@ -4,7 +4,8 @@ import path from "node:path";
 import { CONFIG_DIR_NAME } from "@earendil-works/pi-coding-agent";
 import { afterEach, describe, expect, it } from "vitest";
 import { DashboardRunRepository } from "./dashboard-run-repository.js";
-import { AGENT_NAMES, SCHEMA_VERSION, type AgentTranscriptArtifact, type WorkflowState } from "../types.js";
+import { AGENT_NAMES, type AgentTranscriptArtifact } from "../agent-types.js";
+import { SCHEMA_VERSION, type WorkflowState } from "../workflow-types.js";
 import { CheckpointStore } from "../persistence/checkpoint-store.js";
 import { DEFAULT_CONFIG } from "../config/config.js";
 

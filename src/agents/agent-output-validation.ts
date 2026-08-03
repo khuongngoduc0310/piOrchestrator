@@ -1,40 +1,6 @@
-import {
-  ACCEPTANCE_COVERAGE_STATUSES,
-  AGENT_NAMES,
-  COMMAND_STATUSES,
-  DEBUGGER_CATEGORIES,
-  INTERVIEW_QUESTION_KINDS,
-  LESSON_CATEGORIES,
-  MAX_INTERVIEW_CUSTOM_BYTES,
-  MAX_INTERVIEW_OPTIONS,
-  MAX_INTERVIEW_OPTION_BYTES,
-  MAX_INTERVIEW_QUESTIONS,
-  MAX_INTERVIEW_QUESTION_BYTES,
-  MIN_INTERVIEW_OPTIONS,
-  MIN_INTERVIEW_QUESTIONS,
-  PRE_IMPLEMENTATION_RESULTS,
-  SUPPORTED_HANDOFF_ROLES,
-  WORKFLOW_ROUTES,
-  type AcceptanceCoverage,
-  type BuilderOutput,
-  type CommandReport,
-  type DebuggerOutput,
-  type DocumenterOutput,
-  type ExplorerOutput,
-  type IndexedAcceptanceCriterion,
-  type InterviewAnswer,
-  type InterviewQAndA,
-  type InterviewQuestion,
-  type InterviewerOutput,
-  type InterviewOption,
-  type PlanTask,
-  type PlannerOutput,
-  type ProposedLesson,
-  type RepositoryEvidence,
-  type RequirementsDocument,
-  type ReviewOutput,
-  type TesterOutput
-} from "../types.js";
+import { ACCEPTANCE_COVERAGE_STATUSES, COMMAND_STATUSES, INTERVIEW_QUESTION_KINDS, LESSON_CATEGORIES, MAX_INTERVIEW_CUSTOM_BYTES, MAX_INTERVIEW_OPTIONS, MAX_INTERVIEW_OPTION_BYTES, MAX_INTERVIEW_QUESTIONS, MAX_INTERVIEW_QUESTION_BYTES, MIN_INTERVIEW_OPTIONS, MIN_INTERVIEW_QUESTIONS, PRE_IMPLEMENTATION_RESULTS, type AcceptanceCoverage, type BuilderOutput, type CommandReport, type DocumenterOutput, type ExplorerOutput, type IndexedAcceptanceCriterion, type InterviewAnswer, type InterviewQAndA, type InterviewQuestion, type InterviewerOutput, type InterviewOption, type PlanTask, type PlannerOutput, type ProposedLesson, type RequirementsDocument, type ReviewOutput, type TesterOutput } from "../agent-task-types.js";
+import { AGENT_NAMES, SUPPORTED_HANDOFF_ROLES } from "../agent-types.js";
+import { DEBUGGER_CATEGORIES, WORKFLOW_ROUTES, type DebuggerOutput, type RepositoryEvidence } from "../workflow-shared.js";
 import { validateAutomatedCriterionIndexes } from "../orchestration/acceptance-criteria.js";
 import {
   MAX_CANDIDATES_PER_RUN,

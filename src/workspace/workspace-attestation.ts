@@ -1,4 +1,5 @@
-import type { AgentName, StepRecord } from "../types.js";
+import type { AgentName } from "../agent-types.js";
+import type { StepRecord } from "../workflow-types.js";
 import type { WorkspaceDelta, WorkspaceFileSnapshot, WorkspaceSnapshot } from "./workspace-guard.js";
 import { normalizeRepositoryPath } from "./path-validation.js";
 

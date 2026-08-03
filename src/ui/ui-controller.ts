@@ -1,6 +1,9 @@
 import type { ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
-import type { AgentName, OrchestratorConfig, OrchestratorViewModel, WorkflowState } from "../types.js";
-import { AGENT_NAMES } from "../types.js";
+import type { AgentName } from "../agent-types.js";
+import type { OrchestratorConfig } from "../config-types.js";
+import type { OrchestratorViewModel } from "../dashboard-types.js";
+import type { WorkflowState } from "../workflow-types.js";
+import { AGENT_NAMES } from "../agent-types.js";
 import { inspectConfig } from "../config/config.js";
 import { buildIdleViewModel, buildRunViewModel } from "./ui-model.js";
 import { statusText } from "./terminal-ui.js";
@@ -17,8 +20,6 @@ export interface UiControllerDependencies {
   sessionBuffers: () => MapSessionBuffer;
 }
 
-type McCloseReason = "user" | "waiting" | "shutdown" | "run_changed";
-
 export class UiController {
   private viewModel?: OrchestratorViewModel;
   private mcDone: ((result: void) => void) | undefined;
@@ -32,7 +33,7 @@ export class UiController {
 
   async attach(ctx: Ctx | TuiAwareCtx): Promise<void> {
     if (!ctx.hasUI) return;
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+
     const cwd = (ctx as any).cwd ?? process.cwd();
     const config = await inspectConfig(cwd);
     this.viewModel = buildIdleViewModel(cwd, config);
@@ -51,7 +52,7 @@ export class UiController {
 
   async refreshConfig(ctx: TuiAwareCtx): Promise<void> {
     if (!ctx.hasUI) return;
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+
     const cwd = (ctx as any).cwd ?? process.cwd();
     const config = await inspectConfig(cwd);
     const old = this.viewModel;
@@ -67,7 +68,7 @@ export class UiController {
     ctx: TuiAwareCtx,
   ): void {
     if (!ctx.hasUI) return;
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+
     const cwd = (ctx as any).cwd ?? process.cwd();
     const configSummary = {
       status: "valid" as const,

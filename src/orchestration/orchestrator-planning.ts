@@ -2,7 +2,10 @@ import { ensureChecksConfigured } from "../checks/check-setup.js";
 import { formatApprovedPlan, formatBaselineReport } from "../ui/session-messages.js";
 import { formatPlanForReview } from "./plan-review.js";
 import { parseBuilderOutput, parseDebuggerOutput, parseExplorerOutput, parsePlannerOutput, parseReviewOutput } from "../validation.js";
-import type { CheckResult, DebuggerOutput, HumanPlanReviewResult, OrchestratorConfig, PlannerOutput } from "../types.js";
+import type { CheckResult, HumanPlanReviewResult } from "../workflow-types.js";
+import type { DebuggerOutput } from "../workflow-shared.js";
+import type { OrchestratorConfig } from "../config-types.js";
+import type { PlannerOutput } from "../agent-task-types.js";
 import type { ImplementationPlanningResult, PlanningResult, WorkflowContext } from "./orchestrator-context.js";
 import type { OrchestratorRuntime } from "./orchestrator-runtime.js";
 import { allGreen } from "./orchestrator-helpers.js";
@@ -154,7 +157,7 @@ export async function prepareImplementationPhase(
   planning: PlanningResult,
   options: { allowBaselineRepair?: boolean; deferMutation?: boolean } = {}
 ): Promise<ImplementationPlanningResult> {
-  const { request, ctx, cwd, store } = workflow;
+  const { request, ctx, cwd } = workflow;
   await runtime.agents.preflight(
     workflow.config,
     cwd,
@@ -183,7 +186,7 @@ export async function prepareImplementationPhase(
     plan: planning.plan
   });
 
-  let baseline = await runCheckStep(runtime, "baseline", "Run green baseline", cwd, ctx, { requireGreen: false });
+  const baseline = await runCheckStep(runtime, "baseline", "Run green baseline", cwd, ctx, { requireGreen: false });
   let baselineDiagnosis;
   if (!allGreen(baseline, config.checks.length)) {
     if (options.allowBaselineRepair === false) throw new Error(`${workflow.route} requires a green baseline before mutation`);

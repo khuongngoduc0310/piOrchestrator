@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { copyFile, realpath, rm } from "node:fs/promises";
 import path from "node:path";
+import type { InvocationFileChange, InvocationFileDiff } from "../dashboard-types.js";
 import { GitError, gitText, runGit } from "./git.js";
 import { normalizeRepositoryPath } from "./path-validation.js";
 
@@ -8,30 +9,6 @@ export interface GitTreeSnapshot {
   repositoryRoot: string;
   projectRelativePath: string;
   tree: string;
-}
-
-export interface InvocationFileChange {
-  status: string;
-  oldPath?: string;
-  newPath?: string;
-  oldMode: string;
-  newMode: string;
-  oldBlob: string;
-  newBlob: string;
-  binary: boolean;
-}
-
-export interface InvocationFileDiff {
-  schemaVersion: 1;
-  status: "available" | "unavailable";
-  unavailableReason?: string;
-  beforeTree?: string;
-  afterTree?: string;
-  changedFiles: string[];
-  files: InvocationFileChange[];
-  patchArtifact?: string;
-  patchBytes: number;
-  patchDigest?: string;
 }
 
 export interface GitTreeDiffResult {

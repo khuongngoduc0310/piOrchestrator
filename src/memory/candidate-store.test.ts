@@ -100,8 +100,8 @@ describe("candidate-store", () => {
   it("rejects a stale concurrent ledger replacement", async () => {
     const cwd = await tempProject();
     await runDir(cwd, "run-abc");
-    let initial = createCandidateLedger(cwd, "run-abc", [candidate()], "checks-123", "1.2.3");
-    initial = await saveCandidateLedger(cwd, initial);
+    const initial = createCandidateLedger(cwd, "run-abc", [candidate()], "checks-123", "1.2.3");
+    await saveCandidateLedger(cwd, initial);
     const first = (await loadCandidateLedger(cwd, "run-abc")).ledger!;
     const second = structuredClone(first);
     const approved = setCandidateState(first, "c01", "machine_approved");

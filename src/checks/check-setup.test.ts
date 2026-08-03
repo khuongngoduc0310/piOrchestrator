@@ -5,7 +5,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import { ensureChecksConfigured, normalizeCommands } from "./check-setup.js";
 import { DEFAULT_CONFIG, loadConfig, saveConfig } from "../config/config.js";
-import type { CheckDiscoveryResult } from "../types.js";
+import type { CheckDiscoveryResult } from "../config-types.js";
 
 const directories: string[] = [];
 afterEach(async () => {

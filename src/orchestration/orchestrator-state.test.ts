@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import type { OrchestratorRuntime } from "./orchestrator-runtime.js";
 import { publishMilestone, recordMarkdownMilestone, recordMilestone } from "./orchestrator-state.js";
-import type { WorkflowState } from "../types.js";
+import type { WorkflowState } from "../workflow-types.js";
 
 describe("recordMilestone", () => {
   it("records and publishes canonical milestone Markdown at separate durability boundaries", () => {

@@ -1,4 +1,5 @@
-import type { BuilderOutput, DocumenterOutput, TesterOutput, WorkflowRoute } from "../types.js";
+import type { BuilderOutput, DocumenterOutput, TesterOutput } from "../agent-task-types.js";
+import type { WorkflowRoute } from "../workflow-shared.js";
 
 export type MutationOutput = BuilderOutput | TesterOutput | DocumenterOutput;
 

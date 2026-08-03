@@ -6,7 +6,8 @@ import { CONFIG_DIR_NAME } from "@earendil-works/pi-coding-agent";
 import { afterEach, describe, expect, it } from "vitest";
 import { DEFAULT_CONFIG } from "../config/config.js";
 import { CheckpointStore } from "../persistence/checkpoint-store.js";
-import { AGENT_NAMES, SCHEMA_VERSION, type WorkflowState } from "../types.js";
+import { AGENT_NAMES } from "../agent-types.js";
+import { SCHEMA_VERSION, type WorkflowState } from "../workflow-types.js";
 import { OrchestratorRuntime } from "./orchestrator-runtime.js";
 
 const roots: string[] = [];

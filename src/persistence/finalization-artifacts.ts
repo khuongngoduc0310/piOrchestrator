@@ -1,5 +1,4 @@
 import { createHash } from "node:crypto";
-import type { WorkflowCheckpoint } from "./checkpoint-types.js";
 
 export type FinalizationOperation =
   | "synchronize_and_promote"

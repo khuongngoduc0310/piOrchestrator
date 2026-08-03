@@ -1,4 +1,4 @@
-import type { PlannerOutput, PlanTask } from "../types.js";
+import type { PlannerOutput, PlanTask } from "../agent-task-types.js";
 
 export function topologicalSort(tasks: PlanTask[]): PlanTask[] {
   const visited = new Set<string>();

@@ -14,7 +14,9 @@ import {
   type WorkspaceSnapshot
 } from "../workspace/workspace-guard.js";
 import { createFileAttestations, validateAttestedWorkspaceFiles } from "../workspace/workspace-attestation.js";
-import type { AgentName, AgentOutputMap, CheckResult, PlannerOutput, Stage, StepRecord } from "../types.js";
+import type { AgentName } from "../agent-types.js";
+import type { AgentOutputMap, PlannerOutput } from "../agent-task-types.js";
+import type { CheckResult, Stage, StepRecord } from "../workflow-types.js";
 import type { OrchestratorRuntime } from "./orchestrator-runtime.js";
 import { allGreen, messageOf } from "./orchestrator-helpers.js";
 import { beginStep, persist, throwIfAborted, transition } from "./orchestrator-state.js";

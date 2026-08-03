@@ -1,9 +1,4 @@
-import type {
-  HumanTouchpoints,
-  OrchestratorConfig,
-  ParticipationPolicy,
-  ParticipationProfile
-} from "../types.js";
+import type { HumanTouchpoints, OrchestratorConfig, ParticipationPolicy, ParticipationProfile } from "../config-types.js";
 
 type DiagnosisConfidence = "low" | "medium" | "high";
 

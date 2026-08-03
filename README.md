@@ -151,6 +151,7 @@ Press **Esc** to return to the Mission Control dashboard, or **Esc** again to cl
 /orchestrator-cancel
 /orchestrator-settings
 /orchestrator-inspect
+/requirements
 /orchestrator-memory inspect [lesson-id]
 /orchestrator-memory pending [run-id]
 /orchestrator-memory approve <run-id> <candidate-id>
@@ -316,3 +317,29 @@ Candidates move through durable machine-review, pending, declined, promotion, du
 - Tool and diff restrictions do not provide an operating-system sandbox.
 
 Recommended follow-ups are token/cost/model-quality telemetry and safe parallelization of independent read-only work.
+
+## Development
+
+Prerequisites: Node.js `>=22.19.0` and npm.
+
+```bash
+npm install
+npm run prepack      # dashboard build + both typechecks + full test suite
+npm run lint         # ESLint (flat config: eslint.config.mjs)
+npm run lint:fix     # autofix lint violations
+npm run coverage     # vitest with v8 coverage + thresholds (vitest.config.ts)
+npm run build:dashboard  # regenerate committed src/dashboard-dist/ assets
+```
+
+`npm run prepack` is the full verification gate used before publishing; CI runs the same steps. Coverage thresholds are set slightly below the measured baseline — raise them as coverage improves. Lint is not part of prepack; run it in CI and locally.
+
+Architecture at a glance (full contracts in `AGENTS.md`):
+
+- `src/index.ts` — Pi extension entrypoint: lifecycle hooks and slash-command registration.
+- `src/orchestrator.ts` — thin public facade over `src/orchestration/` (mutable state, workflow phases, resume continuations, finalization).
+- `src/commands/` — interactive command flows (`/orchestrate` route+request collection, `/requirements` interview session).
+- `src/agents/` — in-memory Pi SDK agent sessions, role capabilities, output validation; `src/checks/` and `src/workspace/` — check execution and workspace policy.
+- `src/ui/` and `src/dashboard-client/` — TUI mission control and the Vite-built browser dashboard (prebuilt assets committed under `src/dashboard-dist/`).
+- `src/persistence/`, `src/config/`, `src/memory/` — durable state: checkpoints, config, project memory.
+
+Type modules are leaf modules imported directly by consumers (no barrel). After structural changes, refresh the GitNexus index with `node .gitnexus/run.cjs analyze` and verify `gitnexus check` reports zero import cycles.

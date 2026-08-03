@@ -1,7 +1,6 @@
 import type { AgentInvocationMode, AgentName, AgentUsage } from "./agent-types.js";
 import type { WorkflowRoute } from "./agent-task-types.js";
 import type { Stage, StepRecord, WorkflowMilestone, WorkflowState } from "./workflow-types.js";
-import type { InvocationFileDiff } from "./workspace/git-tree-diff.js";
 import type { HumanDecisionAction } from "./orchestration/human-decision-types.js";
 
 export const UI_PHASE_LABELS = [
@@ -210,6 +209,30 @@ export interface DashboardRunHistoryItem {
   updatedAt: string;
   completedAt?: string;
   active: boolean;
+}
+
+export interface InvocationFileChange {
+  status: string;
+  oldPath?: string;
+  newPath?: string;
+  oldMode: string;
+  newMode: string;
+  oldBlob: string;
+  newBlob: string;
+  binary: boolean;
+}
+
+export interface InvocationFileDiff {
+  schemaVersion: 1;
+  status: "available" | "unavailable";
+  unavailableReason?: string;
+  beforeTree?: string;
+  afterTree?: string;
+  changedFiles: string[];
+  files: InvocationFileChange[];
+  patchArtifact?: string;
+  patchBytes: number;
+  patchDigest?: string;
 }
 
 export interface InvocationDiffView {

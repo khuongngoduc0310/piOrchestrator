@@ -1,8 +1,9 @@
 import type { ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
-import type { DashboardDecisionAction, DashboardDecisionQuestion, InterviewAnswer, InterviewQuestion, InterviewerAssessment } from "../types.js";
+import type { DashboardDecisionAction, DashboardDecisionQuestion } from "../dashboard-types.js";
+import type { InterviewAnswer, InterviewQuestion, InterviewerAssessment } from "../agent-task-types.js";
 import { beginDecisionRace, type RaceWinner } from "../ui/decision-race.js";
 import { RequirementsArrowTranslator } from "./requirements-keys.js";
-import type { Deferred, InterviewActionResult, InterviewPresentation, QuestionChannel, TuiPrompt } from "./requirements-channel-types.js";
+import type { Deferred, InterviewActionResult, QuestionChannel, TuiPrompt } from "./requirements-channel-types.js";
 import {
   BACK_ACTION_LABEL,
   CANCEL_ACTION_LABEL,

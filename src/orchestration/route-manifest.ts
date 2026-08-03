@@ -1,4 +1,5 @@
-import type { AgentName, WorkflowRoute } from "../types.js";
+import type { AgentName } from "../agent-types.js";
+import type { WorkflowRoute } from "../workflow-shared.js";
 
 export type RouteKind = "mutation" | "read_only" | "planning_only";
 

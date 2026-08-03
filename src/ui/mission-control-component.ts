@@ -1,6 +1,7 @@
-import { Key, matchesKey, visibleWidth, truncateToWidth } from "@earendil-works/pi-tui";
-import type { AgentName, OrchestratorViewModel } from "../types.js";
-import { AGENT_NAMES } from "../types.js";
+import { Key, matchesKey, visibleWidth } from "@earendil-works/pi-tui";
+import type { AgentName } from "../agent-types.js";
+import type { OrchestratorViewModel } from "../dashboard-types.js";
+import { AGENT_NAMES } from "../agent-types.js";
 import { elapsedText, phaseProgress } from "./ui-model.js";
 import type { AgentSessionEvent, AgentSessionView } from "./agent-session.js";
 import { renderInspectorScreen } from "./agent-session-inspector.js";
@@ -364,7 +365,7 @@ function pathBase(value: string): string {
   return idx >= 0 ? value.slice(idx + 1) : value;
 }
 
-function formatActivityEvent(event: AgentSessionEvent, theme: WidgetTheme): string {
+function formatActivityEvent(event: AgentSessionEvent, _theme: WidgetTheme): string {
   switch (event.type) {
     case "assistant": return `\u25d8 ${event.text.replace(/\n/g, " ").trim()}`;
     case "tool_call": return `\u2192 ${event.tool}${event.args ? " " + event.args : ""}`;
@@ -375,7 +376,6 @@ function formatActivityEvent(event: AgentSessionEvent, theme: WidgetTheme): stri
 }
 
 function modeLabel(mode: string, theme: WidgetTheme, elapsed: string, vm: OrchestratorViewModel): string {
-  const aa = (s: string) => theme.fg("accent", s);
   const ss = (s: string) => theme.fg("success", s);
   const ee = (s: string) => theme.fg("error", s);
   const ww = (s: string) => theme.fg("warning", s);

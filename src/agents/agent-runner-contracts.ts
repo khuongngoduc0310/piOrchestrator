@@ -3,16 +3,8 @@ import type {
   ModelRuntime,
   ResolveCliModelResult
 } from "@earendil-works/pi-coding-agent";
-import type {
-  AgentConfig,
-  AgentName,
-  AgentResult,
-  AgentTranscript,
-  AgentUsage,
-  AgentUsageSnapshot,
-  OrchestratorConfig,
-  ThinkingLevel
-} from "../types.js";
+import type { AgentConfig, AgentName, AgentResult, AgentTranscript, AgentUsage, AgentUsageSnapshot, ThinkingLevel } from "../agent-types.js";
+import type { OrchestratorConfig } from "../config-types.js";
 
 export interface AgentEventMetadata {
   type: string;

@@ -5,7 +5,8 @@ import { CONFIG_DIR_NAME } from "@earendil-works/pi-coding-agent";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import { handleResumeCommand } from "./resume-command.js";
-import { AGENT_NAMES, SCHEMA_VERSION, type WorkflowState } from "../types.js";
+import { AGENT_NAMES } from "../agent-types.js";
+import { SCHEMA_VERSION, type WorkflowState } from "../workflow-types.js";
 
 const roots: string[] = [];
 

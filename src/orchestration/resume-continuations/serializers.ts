@@ -12,7 +12,7 @@ import type { SerializedLessonPreparation } from "../orchestrator-lessons.js";
 import { automatedCriteria } from "../acceptance-criteria.js";
 import { validateCheckResults } from "../../persistence/checkpoint-validation.js";
 import { assertDocumenterComplete, assertTesterComplete } from "../mutation-completion.js";
-import type { AgentResolutionRequest, ReviewApprovalSource } from "../../types.js";
+import type { AgentResolutionRequest, ReviewApprovalSource } from "../../agent-task-types.js";
 import {
   validateDebuggerOutput,
   validateDocumenterOutput,
@@ -21,7 +21,7 @@ import {
   validateReviewOutput,
   validateTesterOutput
 } from "../../validation.js";
-import { arrayValue, nonNegativeInteger, objectValue, positiveInteger, stringValue } from "./shared.js";
+import { arrayValue, nonNegativeInteger, objectValue, stringValue } from "./shared.js";
 
 function approvalSource(value: unknown): ReviewApprovalSource {
   if (value !== "reviewer" && value !== "user_override") throw new Error("reviewApprovalSource is invalid");

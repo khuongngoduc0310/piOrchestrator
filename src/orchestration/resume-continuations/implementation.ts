@@ -1,9 +1,8 @@
 import type { CheckpointCursorKind } from "../../persistence/checkpoint-types.js";
-import { validateCheckResults, validateCheckResultsAgainstCommands } from "../../persistence/checkpoint-validation.js";
+import { validateCheckResults } from "../../persistence/checkpoint-validation.js";
 import {
   validateDebuggerOutput,
   validateDocumenterOutput,
-  validateExplorerOutput,
   validatePlannerOutput,
   validateReviewOutput,
   validateTesterOutput
@@ -19,20 +18,20 @@ import { saveWorkflowCheckpoint } from "../orchestrator-checkpoints.js";
 import { assertTesterComplete } from "../mutation-completion.js";
 import { requiresHumanDecision, resolveParticipationPolicy } from "../participation-policy.js";
 import { implementationPlanningResult, implementationResult, planningResult, reviewResult, serializedLessonPreparation } from "./serializers.js";
-import { arrayValue, nonNegativeInteger, objectValue, positiveInteger, preflightRemainingRoute, stringValue, type ContinuationModule } from "./shared.js";
+import { arrayValue, nonNegativeInteger, objectValue, positiveInteger, preflightRemainingRoute, type ContinuationModule } from "./shared.js";
 
 export const implementationContinuations = {
   mutation_ready: {
     validate(value) {
       implementationPlanningResult(value);
     },
-    async continue(runtime, workflow, checkpoint) {
-      const planning = implementationPlanningResult(checkpoint.cursor.continuation);
+    async continue(runtime, workflow, _checkpoint) {
+      const planning = implementationPlanningResult(_checkpoint.cursor.continuation);
       await runSelectedRoute(runtime, workflow, planning, { prepared: true });
     }
   },
   bug_diagnosis_ready: {
-    validate(value, checkpoint) {
+    validate(value, _checkpoint) {
       const item = objectValue(value, "bug diagnosis-ready checkpoint");
       const planning = implementationPlanningResult(item.planning);
       if (planning.plan.route !== "bug_fix") throw new Error("Bug diagnosis-ready checkpoint requires the bug_fix route");

@@ -1,52 +1,14 @@
-import type {
-  BuilderOutput,
-  BaselineContext,
-  BaselineReviewContext,
-  CheckResult,
-  DebuggerOutput,
-  DocumenterOutput,
-  ExplorerOutput,
-  PlannerOutput,
-  ResolutionRecord,
-  ReviewApprovalSource,
-  ReviewOutput,
-  TesterOutput,
-  WorkflowState,
-  OrchestratorConfig
-} from "../types.js";
+import type { BuilderOutput, DocumenterOutput, ExplorerOutput, PlannerOutput, ResolutionRecord, ReviewApprovalSource, ReviewOutput, TesterOutput } from "../agent-task-types.js";
+import type { BaselineContext, BaselineReviewContext, CheckResult, WorkflowState } from "../workflow-types.js";
+import type { DebuggerOutput } from "../workflow-shared.js";
+import type { OrchestratorConfig } from "../config-types.js";
 import type { WorktreeHandle } from "../workspace/worktree.js";
 import type { PendingHumanDecision, RecordedHumanDecision } from "../orchestration/human-decision-types.js";
 import type { ValidatedFileAttestation } from "../workspace/workspace-attestation.js";
 
 export const CHECKPOINT_SCHEMA_VERSION = 6 as const;
 
-export const CHECKPOINT_CURSOR_KINDS = [
-  "plan_approved",
-  "checks_configured",
-  "mutation_ready",
-  "bug_diagnosis_ready",
-  "bug_diagnosed",
-  "tester_completed",
-  "builder_completed",
-  "scope_revision_approved",
-  "implementation_verified",
-  "review_fix_completed",
-  "review_approved",
-  "documenter_completed",
-  "lessons_screened",
-  "final_checks_passed",
-  "human_decision_pending",
-  "human_decision_recorded",
-  "repository_reviewed",
-  "investigation_completed",
-  "route_agent_completed",
-  "route_final_checks_passed",
-  "resolution_pending",
-  "resolution_resolved",
-  "environment_retry_pending"
-] as const;
-
-export type CheckpointCursorKind = (typeof CHECKPOINT_CURSOR_KINDS)[number];
+export { CHECKPOINT_CURSOR_KINDS, type CheckpointCursorKind } from "../workflow-shared.js";
 
 export interface CheckpointContinuationMap {
   plan_approved: unknown;

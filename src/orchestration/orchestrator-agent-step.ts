@@ -5,7 +5,9 @@ import { createHash } from "node:crypto";
 import { AgentCancelledError, AgentIncompleteResponseError, type AgentRunOptions } from "../agents/agent-runner.js";
 import { type SpawnExplorerResult, isSpawningRole } from "../agents/agent-runner-contracts.js";
 import { agentRemainingTimeoutMs, spawnExplorerRunOptions } from "../agents/explorer-spawn.js";
-import { AGENT_TASK_SCHEMA_VERSION, type AgentOutputMap, type AgentResult, type AgentTaskEnvelope, type AgentTaskMap, type AgentInvocationRecord, type AgentName, type AgentTranscript, type AgentTranscriptArtifact, type PlannerOutput, type Stage } from "../types.js";
+import { AGENT_TASK_SCHEMA_VERSION, type AgentOutputMap, type AgentTaskEnvelope, type AgentTaskMap, type PlannerOutput } from "../agent-task-types.js";
+import { type AgentResult, type AgentInvocationRecord, type AgentName, type AgentTranscript, type AgentTranscriptArtifact } from "../agent-types.js";
+import { type Stage } from "../workflow-types.js";
 import { ValidationError } from "../validation.js";
 import { compareWorkspaceSnapshots, createWorkspaceSnapshot, deriveRoleMutationPaths, validateReportedFileSet } from "../workspace/workspace-guard.js";
 import type { OrchestratorRuntime } from "./orchestrator-runtime.js";
@@ -253,7 +255,7 @@ export async function runAgentStep<A extends AgentName>(
         return { afterWorkspace, delta };
       })() : undefined;
       const rawPath = validationError instanceof ValidationError ? validationError.path : undefined;
-      const fieldPath = rawPath && /^[a-zA-Z0-9_.\[\]-]+$/.test(rawPath) ? rawPath : undefined;
+      const fieldPath = rawPath && /^[a-zA-Z0-9_.[\]-]+$/.test(rawPath) ? rawPath : undefined;
       const correctionEnvelope: AgentTaskEnvelope<AgentTaskMap[A]> = {
         taskSchemaVersion: AGENT_TASK_SCHEMA_VERSION,
         mode: "correct_output",
@@ -313,7 +315,7 @@ export async function runAgentStep<A extends AgentName>(
         const initialReported = changedFilesOf(output);
         try {
           validateReportedFileSet(initialReported, delta);
-        } catch (reportError) {
+        } catch {
           const correctionEnvelope: AgentTaskEnvelope<AgentTaskMap[A]> = {
             taskSchemaVersion: AGENT_TASK_SCHEMA_VERSION,
             mode: "correct_output",

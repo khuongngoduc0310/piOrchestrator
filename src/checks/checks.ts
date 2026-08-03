@@ -1,4 +1,4 @@
-import type { CheckResult } from "../types.js";
+import type { CheckResult } from "../workflow-types.js";
 
 export interface ExecAdapterOptions {
   signal?: AbortSignal;

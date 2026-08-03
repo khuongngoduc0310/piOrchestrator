@@ -1,6 +1,6 @@
 import { access, readFile } from "node:fs/promises";
 import path from "node:path";
-import type { CheckDiscoveryResult, PackageManager } from "../types.js";
+import type { CheckDiscoveryResult, PackageManager } from "../config-types.js";
 
 const SCRIPT_ORDER = ["test", "typecheck", "lint", "build"] as const;
 const LOCKFILES: Record<PackageManager, string[]> = {

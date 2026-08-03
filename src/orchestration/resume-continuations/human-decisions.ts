@@ -25,7 +25,7 @@ import { continueScopeRevisionDecision, type ScopeRevisionDecisionContext } from
 import { saveWorkflowCheckpoint } from "../orchestrator-checkpoints.js";
 import { validateFailureScopeRevision } from "../plan-revision.js";
 import { WorkflowPausedError } from "../workflow-errors.js";
-import { builderBlocker, implementationPlanningResult, implementationResult, reviewResult, serializedLessonPreparation, specializedMutationResult } from "./serializers.js";
+import { builderBlocker, implementationPlanningResult, reviewResult, serializedLessonPreparation, specializedMutationResult } from "./serializers.js";
 import { arrayValue, hydrateCandidates, nonNegativeInteger, objectValue, positiveInteger, preflightRemainingRoute, stringValue, type ContinuationModule } from "./shared.js";
 
 async function continueHumanDecision(

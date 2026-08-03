@@ -33,3 +33,30 @@ export interface DebuggerOutput {
   affectedFiles: string[];
   confidence: "low" | "medium" | "high";
 }
+
+export const CHECKPOINT_CURSOR_KINDS = [
+  "plan_approved",
+  "checks_configured",
+  "mutation_ready",
+  "bug_diagnosis_ready",
+  "bug_diagnosed",
+  "tester_completed",
+  "builder_completed",
+  "scope_revision_approved",
+  "implementation_verified",
+  "review_fix_completed",
+  "review_approved",
+  "documenter_completed",
+  "lessons_screened",
+  "final_checks_passed",
+  "human_decision_pending",
+  "human_decision_recorded",
+  "repository_reviewed",
+  "investigation_completed",
+  "route_agent_completed",
+  "route_final_checks_passed",
+  "resolution_pending",
+  "resolution_resolved",
+  "environment_retry_pending"
+] as const;
+export type CheckpointCursorKind = (typeof CHECKPOINT_CURSOR_KINDS)[number];

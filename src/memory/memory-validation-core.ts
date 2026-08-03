@@ -5,7 +5,8 @@ import {
   type MemoryEvidence,
   type MemoryLesson
 } from "./memory-types.js";
-import { AGENT_NAMES, LESSON_CATEGORIES, type AgentName } from "../types.js";
+import { AGENT_NAMES, type AgentName } from "../agent-types.js";
+import { LESSON_CATEGORIES } from "../agent-task-types.js";
 import { normalizeRepositoryPath, RepositoryPathError } from "../workspace/path-validation.js";
 
 export class MemoryValidationError extends Error {

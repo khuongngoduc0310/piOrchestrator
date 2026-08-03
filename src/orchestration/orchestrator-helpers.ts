@@ -1,5 +1,5 @@
 import type { ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
-import type { CheckResult } from "../types.js";
+import type { CheckResult } from "../workflow-types.js";
 import type { CandidateLesson, CandidateLedger, CandidateState } from "../memory/memory-types.js";
 import { WorkflowCancelledError } from "./workflow-errors.js";
 

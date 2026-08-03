@@ -1,4 +1,5 @@
-import type { DashboardDecisionAction, DashboardDecisionQuestion, InterviewQuestion } from "../types.js";
+import type { DashboardDecisionAction, DashboardDecisionQuestion } from "../dashboard-types.js";
+import type { InterviewQuestion } from "../agent-task-types.js";
 
 /** A user action chosen from an interview presentation's decision. */
 export interface InterviewActionResult {

@@ -1,7 +1,7 @@
 import { visibleWidth, truncateToWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
-import type { AgentName } from "../types.js";
+import type { AgentName } from "../agent-types.js";
 import { elapsedText } from "./ui-model.js";
-import type { AgentSessionEvent, AgentSessionView, StructuredResponseEvent } from "./agent-session.js";
+import type { AgentSessionEvent, AgentSessionView } from "./agent-session.js";
 import { isAssistantJson } from "./agent-session.js";
 import { renderStructuredAgentResponse } from "./structured-agent-response.js";
 
@@ -31,6 +31,7 @@ function eventSymbol(event: AgentSessionEvent, th: Th): string {
         case "succeeded": return success(th, "\u2713");
         case "failed": return errorCol(th, "\u2717");
       }
+      break;
     }
     case "system": {
       if (event.kind === "retry") {

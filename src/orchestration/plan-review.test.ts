@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { PlannerOutput } from "../types.js";
+import type { PlannerOutput } from "../agent-task-types.js";
 import { formatPlanForReview } from "./plan-review.js";
 
 function plan(overrides: Partial<PlannerOutput> = {}): PlannerOutput {

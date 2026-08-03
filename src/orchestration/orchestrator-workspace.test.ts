@@ -6,7 +6,8 @@ import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-c
 import { afterEach, describe, expect, it } from "vitest";
 import { DEFAULT_CONFIG } from "../config/config.js";
 import { RunStore } from "../persistence/store.js";
-import { AGENT_NAMES, SCHEMA_VERSION, type CheckResult, type StepRecord, type WorkflowState } from "../types.js";
+import { AGENT_NAMES } from "../agent-types.js";
+import { SCHEMA_VERSION, type CheckResult, type StepRecord, type WorkflowState } from "../workflow-types.js";
 import { createFileAttestations } from "../workspace/workspace-attestation.js";
 import { compareWorkspaceSnapshots, createWorkspaceSnapshot } from "../workspace/workspace-guard.js";
 import { createWorktree } from "../workspace/worktree.js";

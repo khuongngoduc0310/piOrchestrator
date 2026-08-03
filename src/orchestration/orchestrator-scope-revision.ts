@@ -1,4 +1,6 @@
-import type { AgentResolutionRequest, CheckResult, DebuggerOutput, DocumenterOutput, HumanPlanReviewResult, PlannerOutput, ReviewOutput, TesterOutput } from "../types.js";
+import type { AgentResolutionRequest, DocumenterOutput, PlannerOutput, ReviewOutput, TesterOutput } from "../agent-task-types.js";
+import type { CheckResult, HumanPlanReviewResult } from "../workflow-types.js";
+import type { DebuggerOutput } from "../workflow-shared.js";
 import type { ImplementationPlanningResult, ImplementationResult, WorkflowContext } from "./orchestrator-context.js";
 import type { SerializedLessonPreparation } from "./orchestrator-lessons.js";
 import type { OrchestratorRuntime } from "./orchestrator-runtime.js";

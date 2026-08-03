@@ -1,4 +1,4 @@
-import type { PlannerOutput } from "../types.js";
+import type { PlannerOutput } from "../agent-task-types.js";
 import { normalizeRepositoryPath } from "../workspace/path-validation.js";
 import { deriveMutationPathScope } from "../workspace/workspace-guard.js";
 

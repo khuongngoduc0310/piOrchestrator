@@ -1,4 +1,6 @@
-import { AGENT_NAMES, type AgentName, type OrchestratorConfig, type WorkflowRoute } from "../types.js";
+import { AGENT_NAMES, type AgentName } from "../agent-types.js";
+import { type OrchestratorConfig } from "../config-types.js";
+import { type WorkflowRoute } from "../workflow-shared.js";
 import type { CheckpointCursorKind } from "../persistence/checkpoint-types.js";
 import { resolveParticipationPolicy, requiresHumanDecision } from "./participation-policy.js";
 import { ROUTE_ADDITIONAL_AGENTS } from "./route-manifest.js";

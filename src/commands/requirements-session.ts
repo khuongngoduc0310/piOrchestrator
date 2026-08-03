@@ -12,19 +12,10 @@ import type {
   PendingQuestionInfo,
   RequirementsSummary
 } from "../dashboard-types.js";
-import {
-  MAX_INTERVIEW_ROUNDS,
-  type AgentInvocationRecord,
-  type AgentName,
-  type AgentTranscript,
-  type AgentTranscriptArtifact,
-  type AgentUsage,
-  type InterviewQAndA,
-  type OrchestratorConfig,
-  type Stage,
-  type StepRecord,
-  type WorkflowRequest
-} from "../types.js";
+import { MAX_INTERVIEW_ROUNDS, type InterviewQAndA, type WorkflowRequest } from "../agent-task-types.js";
+import { type AgentInvocationRecord, type AgentName, type AgentTranscript, type AgentTranscriptArtifact, type AgentUsage } from "../agent-types.js";
+import { type OrchestratorConfig } from "../config-types.js";
+import { type Stage, type StepRecord } from "../workflow-types.js";
 
 export interface RequirementsCommandDependencies {
   extensionRoot: string;

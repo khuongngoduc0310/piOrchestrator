@@ -172,7 +172,7 @@ describe("dashboard state", () => {
   });
 
   it("resets the question focus to the first question when a new set arrives", () => {
-    let state = dashboardReducer(INITIAL_STATE, {
+    const state = dashboardReducer(INITIAL_STATE, {
       type: "questionSetUpdated",
       questions: [questionInfo("q1", "d1"), questionInfo("q2", "d2"), questionInfo("q3", "d3")],
     });

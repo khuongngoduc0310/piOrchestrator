@@ -1,17 +1,10 @@
 import type { ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import type { WorktreeHandle } from "../workspace/worktree.js";
 import type { RunStore } from "../persistence/store.js";
-import type {
-  CheckResult,
-  DebuggerOutput,
-  DocumenterOutput,
-  ExplorerOutput,
-  OrchestratorConfig,
-  PlannerOutput,
-  ReviewApprovalSource,
-  ReviewOutput,
-  TesterOutput
-} from "../types.js";
+import type { CheckResult } from "../workflow-types.js";
+import type { DebuggerOutput } from "../workflow-shared.js";
+import type { DocumenterOutput, ExplorerOutput, PlannerOutput, ReviewApprovalSource, ReviewOutput, TesterOutput } from "../agent-task-types.js";
+import type { OrchestratorConfig } from "../config-types.js";
 import type { WorkflowRoute } from "../agent-task-types.js";
 
 export interface WorkflowContext {

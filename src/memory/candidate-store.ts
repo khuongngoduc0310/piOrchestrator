@@ -6,7 +6,6 @@ import {
   CANDIDATE_LEDGER_SCHEMA_VERSION,
   MAX_CANDIDATE_LEDGER_BYTES,
   type CandidateLedger,
-  type CandidateLedgerEntry,
   type CandidateLesson,
   type CandidateState,
 } from "./memory-types.js";

@@ -1,14 +1,13 @@
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
-import { configureAgentModels } from "./agents/agent-settings.js";
 import { openSettings } from "./config/config-settings.js";
 import { inspectRun } from "./commands/inspect.js";
 import { handleMemoryCommand } from "./memory/memory-commands.js";
 import { openBrowser } from "./commands/open-browser.js";
 import { Orchestrator } from "./orchestrator.js";
 import { UiController } from "./ui/ui-controller.js";
-import { AGENT_NAMES, THINKING_LEVELS, type AgentName, type ThinkingLevel } from "./types.js";
+import { AGENT_NAMES, THINKING_LEVELS, type AgentName, type ThinkingLevel } from "./agent-types.js";
 import { handleResumeCommand } from "./commands/resume-command.js";
 import { collectWorkflowRequest, ORCHESTRATE_USAGE } from "./commands/route-selection.js";
 import { runRequirementsCommand } from "./commands/requirements-command.js";

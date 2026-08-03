@@ -1,5 +1,8 @@
 import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
-import type { AgentModelUpdates, AgentName, OrchestratorConfig, ThinkingLevel, WorkflowRequest, WorkflowState } from "./types.js";
+import type { AgentModelUpdates, AgentName, ThinkingLevel } from "./agent-types.js";
+import type { OrchestratorConfig } from "./config-types.js";
+import type { WorkflowRequest } from "./agent-task-types.js";
+import type { WorkflowState } from "./workflow-types.js";
 import { OrchestratorRuntime } from "./orchestration/orchestrator-runtime.js";
 import { runWorkflow } from "./orchestration/orchestrator-workflow.js";
 import type { OrchestratorDependencies } from "./orchestration/orchestrator-contracts.js";

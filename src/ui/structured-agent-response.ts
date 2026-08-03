@@ -1,5 +1,6 @@
-import { truncateToWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
-import type { BuilderOutput, DebuggerOutput, DocumenterOutput, ExplorerOutput, PlannerOutput, ReviewOutput, TesterOutput } from "../types.js";
+import { wrapTextWithAnsi } from "@earendil-works/pi-tui";
+import type { BuilderOutput, DocumenterOutput, ExplorerOutput, PlannerOutput, ReviewOutput, TesterOutput } from "../agent-task-types.js";
+import type { DebuggerOutput } from "../workflow-shared.js";
 import type { StructuredAgentResponse } from "./agent-session.js";
 
 type Th = { fg(color: string, text: string): string; bold(text: string): string };
@@ -9,27 +10,9 @@ function success(th: Th, t: string) { return th.fg("success", t); }
 function errorCol(th: Th, t: string) { return th.fg("error", t); }
 function muted(th: Th, t: string) { return th.fg("muted", t); }
 function dim(th: Th, t: string) { return th.fg("dim", t); }
-function border(th: Th, t: string) { return th.fg("borderMuted", t); }
 
 function heading(th: Th, label: string): string {
   return accent(th, label);
-}
-
-function bool(th: Th, value: boolean): string {
-  return value ? success(th, "Yes") : dim(th, "No");
-}
-
-function bullet(th: Th, item: string, indent: number): string[] {
-  const prefix = " ".repeat(indent) + "\u2022 ";
-  const maxInner = 76 - visibleWidth(prefix);
-  const lines: string[] = [];
-  const wrapped = wrapTextWithAnsi(item, Math.max(1, maxInner));
-  if (wrapped.length === 0) return [prefix + dim(th, "(empty)")];
-  const cont = " ".repeat(indent + 2);
-  for (let i = 0; i < wrapped.length; i++) {
-    lines.push(i === 0 ? prefix + wrapped[i] : cont + wrapped[i]);
-  }
-  return lines;
 }
 
 function numbered(th: Th, index: number, text: string, indent: number): string[] {

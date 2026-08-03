@@ -114,7 +114,7 @@ async function inspectRunSteps(cwd: string, runId: string, stepFilter: string, c
   }
 
   // List steps
-  const stepLabels = steps.map((step: any, index: number) => {
+  const stepLabels = steps.map((step: any) => {
     const status = step.status === "succeeded" ? "✓" : step.status === "failed" ? "!" : step.status === "cancelled" ? "⊘" : step.status === "running" ? "→" : "·";
     const cancellation = step.status === "cancelled" && step.message ? ` — ${truncate(String(step.message), 60)}` : "";
     return `${status} ${step.label}${step.agent ? ` (${step.agent})` : ""}${cancellation}${step.artifact ? ` [output]` : ""}${step.rawArtifact ? ` [raw]` : ""}`;

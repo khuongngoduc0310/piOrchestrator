@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { IndexedAcceptanceCriterion } from "./types.js";
+import type { IndexedAcceptanceCriterion } from "./agent-task-types.js";
 import {
   parseInterviewerOutput,
   parsePlannerOutput,
@@ -15,15 +15,8 @@ import {
   ValidationError
 } from "./validation.js";
 import { MAX_EVIDENCE_DETAIL_BYTES } from "./memory/memory-types.js";
-import {
-  MAX_INTERVIEW_OPTIONS,
-  MAX_INTERVIEW_OPTION_BYTES,
-  MAX_INTERVIEW_QUESTIONS,
-  MAX_INTERVIEW_QUESTION_BYTES,
-  MIN_INTERVIEW_OPTIONS,
-  MIN_INTERVIEW_QUESTIONS,
-  WORKFLOW_ROUTES
-} from "./types.js";
+import { MAX_INTERVIEW_OPTIONS, MAX_INTERVIEW_OPTION_BYTES, MAX_INTERVIEW_QUESTIONS, MAX_INTERVIEW_QUESTION_BYTES, MIN_INTERVIEW_OPTIONS, MIN_INTERVIEW_QUESTIONS } from "./agent-task-types.js";
+import { WORKFLOW_ROUTES } from "./workflow-shared.js";
 
 const validPlan = {
   route: "implementation",

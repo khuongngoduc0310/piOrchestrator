@@ -1,5 +1,6 @@
 import type { HumanDecisionAction } from "../orchestration/human-decision-types.js";
-import type { DashboardDecisionAction, DashboardDecisionQuestion, InterviewerAssessment, InterviewQuestion } from "../types.js";
+import type { DashboardDecisionAction } from "../dashboard-types.js";
+import type { InterviewerAssessment, InterviewQuestion } from "../agent-task-types.js";
 import type { InterviewActionResult, InterviewPresentation } from "./requirements-channel-types.js";
 
 export const CUSTOM_ACTION_LABEL = "✏️ Type my own answer";

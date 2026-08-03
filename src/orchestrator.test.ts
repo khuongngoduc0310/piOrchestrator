@@ -18,7 +18,10 @@ import { MAX_EVIDENCE_DETAIL_BYTES } from "./memory/memory-types.js";
 import { RunStore } from "./persistence/store.js";
 import { CheckpointStore } from "./persistence/checkpoint-store.js";
 import type { CheckpointWrite } from "./persistence/checkpoint-types.js";
-import type { AgentResult, CheckResult, OrchestratorConfig, WorkflowRoute, WorkflowState } from "./types.js";
+import type { AgentResult } from "./agent-types.js";
+import type { CheckResult, WorkflowState } from "./workflow-types.js";
+import type { OrchestratorConfig } from "./config-types.js";
+import type { WorkflowRoute } from "./workflow-shared.js";
 
 const directories: string[] = [];
 afterEach(async () => {
@@ -1575,7 +1578,7 @@ describe("Orchestrator", () => {
     const openBrowser2 = vi.fn();
     const pi2 = { appendEntry: vi.fn(), exec: vi.fn(), sendMessage: vi.fn() } as unknown as ExtensionAPI;
     let resumedDecisionId: string | undefined;
-    let engine2: Orchestrator;
+    const engine2 = new Orchestrator(pi2, path.resolve("."), { agentExecutor: resumedAgent, checkRunner, openBrowser: openBrowser2, enforceWorkspacePolicy: false });
     const ctx2 = {
       cwd,
       hasUI: true,
@@ -1592,7 +1595,6 @@ describe("Orchestrator", () => {
         setWidget: vi.fn()
       }
     } as unknown as ExtensionCommandContext;
-    engine2 = new Orchestrator(pi2, path.resolve("."), { agentExecutor: resumedAgent, checkRunner, openBrowser: openBrowser2, enforceWorkspacePolicy: false });
     await engine2.resume(paused.runId, ctx2);
 
     expect(engine2.getState()?.status).toBe("completed");
@@ -1940,7 +1942,7 @@ describe("Orchestrator", () => {
         }
       ]
     });
-    const { engine, agent, notifications } = await scenario(
+    const { engine, agent } = await scenario(
       [explorer, routePlan("quick_implementation"), approved, builder, diagnosis, revisedPlan, approved, builder, approved, documenter, approved],
       [true, false, true, true],
       config => { config.limits.implementationRetries = 2; config.humanInTheLoop.importantDecisions = false; },

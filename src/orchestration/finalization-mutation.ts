@@ -1,4 +1,6 @@
-import type { CheckResult, CompletionSummary, DebuggerOutput, DocumenterOutput, PlannerOutput } from "../types.js";
+import type { CheckResult, CompletionSummary } from "../workflow-types.js";
+import type { DebuggerOutput } from "../workflow-shared.js";
+import type { DocumenterOutput, PlannerOutput } from "../agent-task-types.js";
 import type { ImplementationPlanningResult, ReviewResult, SpecializedMutationResult, WorkflowContext } from "./orchestrator-context.js";
 import type { OrchestratorRuntime } from "./orchestrator-runtime.js";
 import { allGreen, messageOf } from "./orchestrator-helpers.js";
@@ -42,7 +44,7 @@ async function runDocumenterWithScopeExpansion(
 ): Promise<{ review: ReviewResult; documentation: DocumenterOutput }> {
   let currentReview = review;
   const { request, ctx, config } = workflow;
-  const { plan, baseline, codeReview, reviewApprovalSource, finalImplChecks, tester } = currentReview;
+  const { codeReview, reviewApprovalSource, tester } = currentReview;
   for (let attempts = 0; attempts <= config.limits.planRevisions; attempts++) {
     let documentation: DocumenterOutput;
     if (restoredDocumentation) {

@@ -1,4 +1,4 @@
-import { BUILT_IN_TOOLS, type AgentName, type BuiltInToolName } from "../types.js";
+import { BUILT_IN_TOOLS, type AgentName, type BuiltInToolName } from "../agent-types.js";
 
 export const MUTATION_KINDS = ["none", "tests", "plan_files", "documentation"] as const;
 export type MutationKind = (typeof MUTATION_KINDS)[number];

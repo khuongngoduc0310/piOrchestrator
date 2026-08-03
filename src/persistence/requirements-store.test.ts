@@ -3,7 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { CONFIG_DIR_NAME } from "@earendil-works/pi-coding-agent";
-import type { RequirementsDocument } from "../types.js";
+import type { RequirementsDocument } from "../agent-task-types.js";
 import { RequirementsStore, renderRequirementsMarkdown } from "./requirements-store.js";
 
 const directories: string[] = [];

@@ -1,4 +1,6 @@
-import type { BuilderOutput, CheckResult, CompletionSummary, DebuggerOutput, DocumenterOutput, PlannerOutput, ReviewApprovalSource, ReviewOutput, WorkflowRoute } from "../types.js";
+import type { BuilderOutput, DocumenterOutput, PlannerOutput, ReviewApprovalSource, ReviewOutput } from "../agent-task-types.js";
+import type { CheckResult, CompletionSummary } from "../workflow-types.js";
+import type { DebuggerOutput, WorkflowRoute } from "../workflow-shared.js";
 import { formatPlanForReview } from "../orchestration/plan-review.js";
 
 const MAX_BYTES = 8192;
@@ -82,8 +84,8 @@ export function formatVerifiedImplementation(
   plan: PlannerOutput,
   builderOutputs: BuilderOutput[],
   checks: CheckResult[],
-  worktreeIsolation: boolean,
-  artifactPath: string
+  _worktreeIsolation: boolean,
+  _artifactPath: string
 ): string {
   const allChanged = builderOutputs.flatMap(b => b.changedFiles);
   const uniqueChanged = [...new Set(allChanged)];

@@ -3,8 +3,8 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { CheckpointStore, LATEST_CHECKPOINT_FILE, readSafeArtifact } from "./checkpoint-store.js";
-import { SCHEMA_VERSION } from "../types.js";
-import type { WorkflowState } from "../types.js";
+import { SCHEMA_VERSION } from "../workflow-types.js";
+import type { WorkflowState } from "../workflow-types.js";
 
 const directories: string[] = [];
 

@@ -6,14 +6,9 @@ import {
 } from "../agents/agent-runner.js";
 import type { SpawnExplorerResult } from "../agents/agent-runner-contracts.js";
 import { agentRemainingTimeoutMs, spawnExplorerRunOptions } from "../agents/explorer-spawn.js";
-import {
-  AGENT_TASK_SCHEMA_VERSION,
-  type AgentTaskEnvelope,
-  type AgentUsageSnapshot,
-  type InterviewerOutput,
-  type InterviewerTask,
-  type OrchestratorConfig
-} from "../types.js";
+import { AGENT_TASK_SCHEMA_VERSION, type AgentTaskEnvelope, type InterviewerOutput, type InterviewerTask } from "../agent-task-types.js";
+import { type AgentUsageSnapshot } from "../agent-types.js";
+import { type OrchestratorConfig } from "../config-types.js";
 import { parseInterviewerOutput, ValidationError } from "../validation.js";
 import type { InterviewerCallRecord, RequirementsSession } from "./requirements-session.js";
 
@@ -71,7 +66,7 @@ export async function interviewerCall(
         throw new Error(`Interviewer returned invalid output: ${messageOf(error)}`);
       }
       attempt += 1;
-      const fieldPath = error instanceof ValidationError && /^[a-zA-Z0-9_.\[\]-]+$/.test(error.path) ? error.path : undefined;
+      const fieldPath = error instanceof ValidationError && /^[a-zA-Z0-9_.[\]-]+$/.test(error.path) ? error.path : undefined;
       const corrected = await runInterviewer(session, executor, config, "correct_output", task, {
         attempt: attempt as 1 | 2,
         reason: "schema_validation_failed",

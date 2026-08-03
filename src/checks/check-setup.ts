@@ -1,7 +1,7 @@
 import type { ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import { discoverProjectChecks } from "./check-discovery.js";
 import { configPath, saveConfig } from "../config/config.js";
-import type { CheckDiscoveryResult, OrchestratorConfig } from "../types.js";
+import type { CheckDiscoveryResult, OrchestratorConfig } from "../config-types.js";
 
 const APPROVE = "Approve suggested checks";
 const EDIT = "Edit commands";

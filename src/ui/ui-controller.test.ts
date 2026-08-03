@@ -1,7 +1,8 @@
 import { describe, expect, it } from "vitest";
 import { renderViewModelLines, statusText, visibleWidth, type WidgetTheme } from "./terminal-ui.js";
-import type { AgentSummary, ConfigSummary, OrchestratorViewModel, RunSummary, StepRecord } from "../types.js";
-import { AGENT_NAMES } from "../types.js";
+import type { AgentSummary, ConfigSummary, OrchestratorViewModel, RunSummary } from "../dashboard-types.js";
+import type { StepRecord } from "../workflow-types.js";
+import { AGENT_NAMES } from "../agent-types.js";
 
 function ansiTheme(): WidgetTheme {
   return {
