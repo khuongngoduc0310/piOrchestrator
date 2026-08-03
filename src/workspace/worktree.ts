@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { access, copyFile, lstat, realpath, rm } from "node:fs/promises";
+import { access, lstat, realpath, rm } from "node:fs/promises";
 import path from "node:path";
 import { CONFIG_DIR_NAME } from "@earendil-works/pi-coding-agent";
 import { GitError, gitText, runGit } from "./git.js";
@@ -88,11 +88,6 @@ async function withTemporaryIndex<T>(cwd: string, action: (env: NodeJS.ProcessEn
   const sourceIndex = (await gitText(cwd, ["rev-parse", "--path-format=absolute", "--git-path", "index"])).trim();
   const temporaryIndex = `${sourceIndex}.pi-orchestrator-${process.pid}-${randomUUID()}`;
   try {
-    try {
-      await copyFile(sourceIndex, temporaryIndex);
-    } catch (error) {
-      if (!isMissing(error)) throw error;
-    }
     return await action({ GIT_INDEX_FILE: temporaryIndex });
   } finally {
     await Promise.all([
@@ -121,13 +116,8 @@ async function stageWorkspaceSnapshot(cwd: string, env: NodeJS.ProcessEnv): Prom
 
 async function snapshotCommit(cwd: string, parent: string | undefined, message: string): Promise<string> {
   return withTemporaryIndex(cwd, async env => {
-    // Seed from the real index so tracked ignored files remain tracked, then capture
-    // the working filesystem without ever writing the real index.
-    try {
-      await access(env.GIT_INDEX_FILE!);
-    } catch {
-      await runGit(cwd, ["read-tree", "--empty"], { env });
-    }
+    // Seed from the parent tree to retain tracked ignored files without inheriting stale stat data.
+    await runGit(cwd, parent ? ["read-tree", parent] : ["read-tree", "--empty"], { env });
     await stageWorkspaceSnapshot(cwd, env);
     const tree = (await gitText(cwd, ["write-tree"], { env })).trim();
     const args = ["commit-tree", tree];

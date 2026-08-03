@@ -35,7 +35,7 @@ describe("Git invocation tree diffs", () => {
     const root = await repository();
     const indexBefore = git(root, "diff", "--cached");
     const before = await captureGitTree(root);
-    await writeFile(path.join(root, "modify.txt"), "after\n");
+    await writeFile(path.join(root, "modify.txt"), "after!\n");
     await rm(path.join(root, "delete.txt"));
     await rename(path.join(root, "rename.txt"), path.join(root, "renamed.txt"));
     await writeFile(path.join(root, "added.txt"), "added\n");

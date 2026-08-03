@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { copyFile, realpath, rm } from "node:fs/promises";
+import { realpath, rm } from "node:fs/promises";
 import path from "node:path";
 import type { InvocationFileChange, InvocationFileDiff } from "../dashboard-types.js";
 import { GitError, gitText, runGit } from "./git.js";
@@ -27,10 +27,6 @@ interface GitProjectContext {
 
 const projectContextCache = new Map<string, Promise<GitProjectContext | { reason: string }>>();
 
-function isMissing(error: unknown): boolean {
-  return error instanceof Error && "code" in error && error.code === "ENOENT";
-}
-
 function splitNul(buffer: Buffer): string[] {
   const values: string[] = [];
   let start = 0;
@@ -47,12 +43,6 @@ async function withTemporaryIndex<T>(repositoryRoot: string, action: (env: NodeJ
   const sourceIndex = (await gitText(repositoryRoot, ["rev-parse", "--path-format=absolute", "--git-path", "index"])).trim();
   const temporaryIndex = `${sourceIndex}.pi-orchestrator-diff-${process.pid}-${randomUUID()}`;
   try {
-    try {
-      await copyFile(sourceIndex, temporaryIndex);
-    } catch (error) {
-      if (!isMissing(error)) throw error;
-      await runGit(repositoryRoot, ["read-tree", "--empty"], { env: { GIT_INDEX_FILE: temporaryIndex } });
-    }
     return await action({ GIT_INDEX_FILE: temporaryIndex });
   } finally {
     await Promise.all([
@@ -75,6 +65,9 @@ export async function captureGitTree(cwd: string, excludedRoots: readonly string
     const tree = await withTemporaryIndex(repositoryRoot, async env => {
       const projectPath = projectRelativePath || ".";
       const exclusions = excludedRoots.map(root => repositoryPath(projectRelativePath, root)).filter(Boolean);
+      const sourceTree = (await gitText(repositoryRoot, ["write-tree"])).trim();
+      // A fresh index avoids reusing stat metadata that can miss same-size rapid writes.
+      await runGit(repositoryRoot, ["read-tree", sourceTree], { env });
       await runGit(repositoryRoot, ["add", "-A", "--", projectPath], { env });
       if (exclusions.length > 0) {
         await runGit(repositoryRoot, ["rm", "-r", "-f", "--cached", "--ignore-unmatch", "--", ...exclusions], { env });
