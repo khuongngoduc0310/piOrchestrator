@@ -105,6 +105,7 @@ describe("role prompt contracts", () => {
     const planner = await prompt("planner");
     expect(planner).toContain("Every primary mutation or inspection target");
     expect(planner).toContain("`files` plus the narrowly classified Tester support paths in `testSupportFiles`");
+    expect(planner).toContain("must be listed in `files`, never `testSupportFiles`");
   });
 
   it("defines changedFiles as invocation-local for every mutation agent", async () => {

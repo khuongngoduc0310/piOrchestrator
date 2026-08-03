@@ -10,6 +10,7 @@ import { publishSessionMessage } from "./orchestrator-state.js";
 import { assertBuilderComplete } from "./mutation-completion.js";
 import { resolveParticipationPolicy, requiresHumanDecision } from "./participation-policy.js";
 import { validateFinalPlanRevision } from "./plan-revision.js";
+import { deriveMutationPathScope } from "../workspace/workspace-guard.js";
 
 export type ResolutionResult = {
   planning: ImplementationPlanningResult;
@@ -175,6 +176,7 @@ export async function runBaselineRepairSubworkflow(
   if (baselineFixPlan.route !== "implementation") {
     throw new Error("Baseline repair plan must use the implementation route");
   }
+  deriveMutationPathScope(baselineFixPlan);
   const policy = resolveParticipationPolicy(config);
   if (requiresHumanDecision(policy, "baseline_repair")) {
     const approved = await ctx.ui.confirm(

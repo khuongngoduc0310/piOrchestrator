@@ -133,7 +133,9 @@ export async function continuePlanningDecision(
     }
   }
   if (!planApproved) throw new Error("Plan was not approved within the revision limit");
-  if (plan.route === "tests_only" || plan.route === "documentation_only") deriveMutationPathScope(plan);
+  if (["implementation", "bug_fix", "quick_implementation", "tests_only", "documentation_only"].includes(plan.route)) {
+    deriveMutationPathScope(plan);
+  }
   await store.saveJson("plan.json", plan);
   const planMilestoneId = `plan-approved:${canonicalSha256(plan)}`;
   const planMilestoneExisted = runtime.requireState().milestones?.some(entry => entry.id === planMilestoneId) === true;
@@ -245,6 +247,7 @@ export async function continueBaselineRepair(
   recordedMutationConfirmation = false
 ): Promise<ImplementationPlanningResult> {
   const { request, ctx, store } = workflow;
+  deriveMutationPathScope(baselineFixPlan);
   await store.saveJson("baseline-fix-plan.json", baselineFixPlan);
   const fixDecision = recordedDecision ?? await runDurableHumanGate(
     runtime,

@@ -132,7 +132,7 @@ describe("mutation path scopes", () => {
     expect(deriveMutationPathScope(testsPlan).testSupportFiles).toEqual(["fixtures/example.json", "vitest.config.ts"]);
   });
 
-  it("rejects arbitrary production files declared as Tester support", () => {
+  it("rejects production and test files declared as Tester support", () => {
     const implementationPlan = plan(["src/code.ts", "test/code.test.ts"]);
     implementationPlan.tasks[0].testSupportFiles = ["src/runtime.ts"];
 
@@ -143,6 +143,10 @@ describe("mutation path scopes", () => {
     implementationPlan.tasks[0].testSupportFiles = ["src/setup.ts"];
     expect(() => deriveMutationPathScope(implementationPlan))
       .toThrow("testSupportFiles may contain only classified test-support files: src/setup.ts");
+
+    implementationPlan.tasks[0].testSupportFiles = ["test/theme.test.js"];
+    expect(() => deriveMutationPathScope(implementationPlan))
+      .toThrow("testSupportFiles may contain only classified test-support files: test/theme.test.js");
   });
 
   it("requires exact normalized reported and actual sets", () => {

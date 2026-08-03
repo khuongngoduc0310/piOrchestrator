@@ -109,6 +109,19 @@ const tester = json({
   unresolvedIssues: []
 });
 const builder = json({ summary: "built", changedFiles: ["src/index.ts"], commands: [], assumptions: [], unresolvedIssues: [] });
+const baselineRepairBlocker = json({
+  summary: "baseline repair needed",
+  changedFiles: [],
+  commands: [],
+  assumptions: [],
+  unresolvedIssues: [],
+  blocker: {
+    kind: "baseline_repair",
+    reason: "repair the baseline",
+    failedCheckCommands: ["check"],
+    evidence: [{ path: "src/index.ts", detail: "baseline failure" }]
+  }
+});
 const debuggerOutput = json({
   category: "implementation_defect",
   rootCause: "missing implementation",
@@ -400,6 +413,24 @@ describe("Orchestrator", () => {
       expect(agent.calls.map(call => call.name)).toEqual(["explorer", "planner", "reviewer"]);
     }
   );
+
+  it("rejects invalid Tester support before running a quick implementation baseline", async () => {
+    const invalidPlan = JSON.parse(routePlan("quick_implementation"));
+    invalidPlan.tasks[0].testSupportFiles = ["test/theme.test.js"];
+    const { engine, agent } = await scenario(
+      [explorer, json(invalidPlan), approved],
+      [],
+      undefined,
+      {},
+      "quick_implementation"
+    );
+
+    expect(engine.getState()?.status).toBe("failed");
+    expect(engine.getState()?.message)
+      .toContain("testSupportFiles may contain only classified test-support files: test/theme.test.js");
+    expect(engine.getState()?.steps.map(step => step.stage)).toEqual(["exploring", "planning", "reviewing_plan"]);
+    expect(agent.calls.map(call => call.name)).toEqual(["explorer", "planner", "reviewer"]);
+  });
 
   it("resumes final delivery approval for a tests-only route", async () => {
     const initial = await scenario(
@@ -1409,6 +1440,37 @@ describe("Orchestrator", () => {
     expect(engine.getState()?.status).toBe("paused");
     expect(engine.getState()?.pendingDecision?.kind).toBe("baseline_repair_approval");
     expect(agent.calls.some(call => call.name === "tester" || call.name === "builder")).toBe(false);
+  });
+
+  it("rejects an invalid initial baseline repair plan before approval", async () => {
+    const invalidRepairPlan = JSON.parse(plan);
+    invalidRepairPlan.tasks[0].testSupportFiles = ["test/fix.test.js"];
+    const { engine, agent } = await scenario(
+      [explorer, plan, approved, debuggerOutput, json(invalidRepairPlan)],
+      [false]
+    );
+
+    expect(engine.getState()?.status).toBe("failed");
+    expect(engine.getState()?.message)
+      .toContain("testSupportFiles may contain only classified test-support files: test/fix.test.js");
+    expect(engine.getState()?.pendingDecision).toBeUndefined();
+    expect(agent.calls.map(call => call.name)).toEqual(["explorer", "planner", "reviewer", "debugger", "planner"]);
+  });
+
+  it("rejects an invalid Builder-requested baseline repair plan before approval", async () => {
+    const invalidRepairPlan = JSON.parse(plan);
+    invalidRepairPlan.tasks[0].testSupportFiles = ["test/fix.test.js"];
+    const { engine, agent } = await scenario(
+      [explorer, plan, approved, tester, baselineRepairBlocker, debuggerOutput, json(invalidRepairPlan)],
+      [true, true, true]
+    );
+
+    expect(engine.getState()?.status).toBe("failed");
+    expect(engine.getState()?.message)
+      .toContain("testSupportFiles may contain only classified test-support files: test/fix.test.js");
+    expect(agent.calls.map(call => call.name)).toEqual([
+      "explorer", "planner", "reviewer", "tester", "builder", "debugger", "planner"
+    ]);
   });
 
   it("proposes a baseline repair plan and continues after human approval", async () => {
