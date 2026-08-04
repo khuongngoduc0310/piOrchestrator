@@ -23,7 +23,7 @@ import { createFileAttestations } from "../workspace/workspace-attestation.js";
 const OUTPUT_CORRECTABLE_AGENTS = new Set<AgentName>(["explorer", "planner", "reviewer", "debugger"]);
 const CORRECTION_TOOLS = new Set(["read", "grep", "find", "ls"]);
 
-export async function runAgentStep<A extends AgentName>(
+export async function runAgentStep<A extends AgentName, O extends AgentOutputMap[A]>(
   runtime: OrchestratorRuntime,
   agent: A,
   stage: Stage,
@@ -31,9 +31,9 @@ export async function runAgentStep<A extends AgentName>(
   payload: AgentTaskMap[A],
   cwd: string,
   ctx: ExtensionCommandContext,
-  validate: (text: string) => AgentOutputMap[A],
+  validate: (text: string) => O,
   qualifier: { attempt?: number; revision?: number; mutationPlan?: PlannerOutput } = {}
-): Promise<AgentOutputMap[A]> {
+): Promise<O> {
   const config = runtime.requireConfig();
   const controller = runtime.requireController();
   const state = runtime.requireState();
@@ -234,7 +234,7 @@ export async function runAgentStep<A extends AgentName>(
     };
     let result = await executeInvocation("execute", runBase.config, JSON.stringify(executeEnvelope, null, 2));
     rawText = result.text;
-    let output: AgentOutputMap[A];
+    let output: O;
     try {
       output = validate(result.text);
     } catch (validationError) {
@@ -329,7 +329,7 @@ export async function runAgentStep<A extends AgentName>(
             }
           };
           const correctionConfig = { ...runBase.config, tools: runBase.config.tools.filter(tool => CORRECTION_TOOLS.has(tool)) };
-          let correctedOutput: AgentOutputMap[A];
+          let correctedOutput: O;
           try {
             result = await executeInvocation("correct_output", correctionConfig, JSON.stringify(correctionEnvelope, null, 2));
             rawText = result.text;

@@ -44,3 +44,27 @@ Return exactly one raw JSON object with no prose or Markdown fence:
 ```
 
 `evidence` must be non-empty. Use empty arrays for categories with no findings. Do not propose unrelated cleanup.
+
+## Check discovery task
+
+When `task.action` is `discover_checks`, your job is to determine the project's baseline validation commands that the orchestrator will run before any mutation. Return exactly one raw JSON object with no prose or Markdown fence, using only this output contract:
+
+```json
+{
+  "packageManager": "npm",
+  "commands": ["npm run build:desktop"],
+  "scripts": ["build:desktop"],
+  "diagnostics": ["build:desktop is the full build (from package.json); AGENTS.md documents it for packaged builds"],
+  "worktreeSetupCandidates": [{"command": "npm --prefix frontend ci", "evidence": "frontend/package-lock.json"}]
+}
+```
+
+Rules:
+
+1. Inspect the repository to find the commands a baseline must run: the root `package.json` scripts (and workspace or sub-package manifests when the project is a monorepo), `AGENTS.md` and README for documented validation commands, CI workflows (`.github/workflows/*.yml`, `.gitlab-ci.yml`, and similar), and tool configuration files.
+2. Copy commands verbatim from repository configuration only. Never invent a command, never infer one from a tool you did not see configured, and never run anything.
+3. Prefer the documented full validation set, ordered test → typecheck → lint → build, or the order the repository itself documents. When a command already runs another candidate (for example `build:desktop` runs `build:renderer` first), propose only the outer command.
+4. Put one short rationale per proposed command in `diagnostics`, citing the inspected source. `packageManager` is the detected manager; omit it when unclear.
+5. If no usable validation command exists in the repository, return `commands: []` and explain what you inspected in `diagnostics`. The user may still enter commands manually.
+6. `commands`, `scripts`, and `diagnostics` may be empty arrays; `commands` must never contain duplicates.
+7. For every inspected package root with a lockfile, propose its exact lockfile-backed dependency setup command in `worktreeSetupCandidates`. Cite the lockfile in `evidence`. These are suggestions for user approval, not commands you may run.

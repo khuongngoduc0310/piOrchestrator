@@ -1,5 +1,6 @@
 import { ACCEPTANCE_COVERAGE_STATUSES, COMMAND_STATUSES, INTERVIEW_QUESTION_KINDS, LESSON_CATEGORIES, MAX_INTERVIEW_CUSTOM_BYTES, MAX_INTERVIEW_OPTIONS, MAX_INTERVIEW_OPTION_BYTES, MAX_INTERVIEW_QUESTIONS, MAX_INTERVIEW_QUESTION_BYTES, MIN_INTERVIEW_OPTIONS, MIN_INTERVIEW_QUESTIONS, PRE_IMPLEMENTATION_RESULTS, type AcceptanceCoverage, type BuilderOutput, type CommandReport, type DocumenterOutput, type ExplorerOutput, type IndexedAcceptanceCriterion, type InterviewAnswer, type InterviewQAndA, type InterviewQuestion, type InterviewerOutput, type InterviewOption, type PlanTask, type PlannerOutput, type ProposedLesson, type RequirementsDocument, type ReviewOutput, type TesterOutput } from "../agent-task-types.js";
 import { AGENT_NAMES, SUPPORTED_HANDOFF_ROLES } from "../agent-types.js";
+import type { CheckDiscoveryResult, PackageManager, WorktreeSetupCandidate } from "../config-types.js";
 import { DEBUGGER_CATEGORIES, WORKFLOW_ROUTES, type DebuggerOutput, type RepositoryEvidence } from "../workflow-shared.js";
 import { validateAutomatedCriterionIndexes } from "../orchestration/acceptance-criteria.js";
 import {
@@ -59,6 +60,44 @@ export function validateExplorerOutput(value: unknown, path = "explorer"): Explo
     risks: strings(item.risks, `${path}.risks`),
     knownLessons: strings(item.knownLessons, `${path}.knownLessons`),
     evidence: evidenceList(item.evidence, `${path}.evidence`)
+  };
+}
+
+const MAX_CHECK_COMMANDS = 16 as const;
+const CHECK_DISCOVERY_PACKAGE_MANAGERS: readonly PackageManager[] = ["npm", "pnpm", "yarn", "bun"];
+
+function worktreeSetupCandidate(value: unknown, path: string): WorktreeSetupCandidate {
+  const item = record(value, path);
+  return {
+    command: boundedString(item.command, `${path}.command`, MAX_EVIDENCE_DETAIL_BYTES),
+    evidence: boundedString(item.evidence, `${path}.evidence`, MAX_EVIDENCE_DETAIL_BYTES)
+  };
+}
+
+export function validateCheckDiscoveryOutput(value: unknown, path = "check discovery"): CheckDiscoveryResult {
+  const item = record(value, path);
+  const commands = uniqueStrings(item.commands, `${path}.commands`, MAX_CHECK_COMMANDS);
+  const diagnostics = array(item.diagnostics, `${path}.diagnostics`, (entry, entryPath) =>
+    boundedString(entry, entryPath, MAX_EVIDENCE_DETAIL_BYTES)
+  );
+  if (diagnostics.length > MAX_CHECK_COMMANDS) {
+    throw new ValidationError(`${path}.diagnostics`, `must not contain more than ${MAX_CHECK_COMMANDS} items`);
+  }
+  const scripts = item.scripts === undefined ? [] : uniqueStrings(item.scripts, `${path}.scripts`, MAX_CHECK_COMMANDS);
+  const worktreeSetupCandidates = item.worktreeSetupCandidates === undefined
+    ? undefined
+    : array(item.worktreeSetupCandidates, `${path}.worktreeSetupCandidates`, worktreeSetupCandidate);
+  if (worktreeSetupCandidates && worktreeSetupCandidates.length > MAX_CHECK_COMMANDS) {
+    throw new ValidationError(`${path}.worktreeSetupCandidates`, `must not contain more than ${MAX_CHECK_COMMANDS} items`);
+  }
+  return {
+    ...(item.packageManager === undefined
+      ? {}
+      : { packageManager: enumValue(item.packageManager, `${path}.packageManager`, CHECK_DISCOVERY_PACKAGE_MANAGERS) }),
+    commands,
+    scripts,
+    diagnostics,
+    ...(worktreeSetupCandidates ? { worktreeSetupCandidates } : {})
   };
 }
 
@@ -314,6 +353,7 @@ export function validateDocumenterOutput(value: unknown, path = "documenter"): D
 }
 
 export function parseExplorerOutput(text: string): ExplorerOutput { return validateExplorerOutput(parseStructuredJson(text, "explorer output")); }
+export function parseCheckDiscoveryOutput(text: string): CheckDiscoveryResult { return validateCheckDiscoveryOutput(parseStructuredJson(text, "check discovery output")); }
 export function parsePlannerOutput(text: string): PlannerOutput { return validatePlannerOutput(parseStructuredJson(text, "planner output")); }
 export function parseReviewOutput(text: string): ReviewOutput { return validateReviewOutput(parseStructuredJson(text, "reviewer output")); }
 export function parseBuilderOutput(text: string): BuilderOutput { return validateBuilderOutput(parseStructuredJson(text, "builder output")); }

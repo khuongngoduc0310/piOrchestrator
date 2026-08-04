@@ -12,6 +12,7 @@ import { intersectRoleTools } from "../agents/role-capabilities.js";
 export const DEFAULT_CONFIG: OrchestratorConfig = {
   schemaVersion: SCHEMA_VERSION,
   checks: [],
+  worktreeSetup: { mode: "prompt", commands: [] },
   dashboard: { enabled: true, port: 0 },
   limits: {
     planRevisions: 2,

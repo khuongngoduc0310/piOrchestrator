@@ -147,6 +147,7 @@ function config() {
   return {
     schemaVersion: 1,
     checks: ["check"],
+    worktreeSetup: { mode: "prompt", commands: [] },
     dashboard: { enabled: false, port: 0 },
     limits: { planRevisions: 1, implementationRetries: 1, reviewRevisions: 1, agentTimeoutMs: 1, checkTimeoutMs: 1, maxOutputBytes: 1, worktreeIsolation: false },
     agents: Object.fromEntries(["explorer", "planner", "reviewer", "tester", "builder", "debugger", "documenter", "interviewer"].map(name => [name, { model: "test/model", tools: name === "tester" || name === "builder" || name === "documenter" ? ["read", "write"] : ["read"], promptFile: `${name}.md` }])),

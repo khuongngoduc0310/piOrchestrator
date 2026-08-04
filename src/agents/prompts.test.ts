@@ -6,6 +6,7 @@ import { DEBUGGER_CATEGORIES } from "../workflow-shared.js";
 import { LESSON_CATEGORIES } from "../agent-task-types.js";
 import { MAX_EVIDENCE_DETAIL_BYTES } from "../memory/memory-types.js";
 import { validateInterviewerOutput } from "./agent-output-validation.js";
+import { parseCheckDiscoveryOutput } from "../validation.js";
 
 const promptRoot = path.resolve("prompts");
 
@@ -163,6 +164,19 @@ describe("role prompt contracts", () => {
       expect(validateInterviewerOutput(JSON.parse(example) as unknown)).toMatchObject({ action: "assess" });
     }
     expect(interviewer).toContain('"assessment": {');
+  });
+
+  it("documents the explorer check discovery contract the validator accepts", async () => {
+    const explorer = await prompt("explorer");
+    expect(explorer).toContain("`discover_checks`");
+    expect(explorer).toContain("Copy commands verbatim from repository configuration only");
+    expect(explorer).toContain("propose only the outer command");
+    const discoveryExamples = fencedJsonExamples(explorer)
+      .filter(example => example.includes('"scripts"'));
+    expect(discoveryExamples.length).toBeGreaterThanOrEqual(1);
+    for (const example of discoveryExamples) {
+      expect(parseCheckDiscoveryOutput(example)).toMatchObject({ commands: ["npm run build:desktop"] });
+    }
   });
 
   it("documents the interviewer correct_output correction envelope", async () => {

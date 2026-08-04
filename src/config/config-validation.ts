@@ -1,6 +1,6 @@
 import { AGENT_NAMES, BUILT_IN_TOOLS, THINKING_LEVELS, type AgentConfig, type AgentName } from "../agent-types.js";
 import { SCHEMA_VERSION } from "../workflow-types.js";
-import { type OrchestratorConfig } from "../config-types.js";
+import { type OrchestratorConfig, type WorktreeSetupConfig } from "../config-types.js";
 import { RoleCapabilityError, validateRoleTools } from "../agents/role-capabilities.js";
 import {
   ValidationError,
@@ -15,6 +15,7 @@ import {
 } from "../validation-core.js";
 
 const DIAGNOSIS_APPROVAL_VALUES = ["never", "low_confidence", "always"] as const;
+const WORKTREE_SETUP_MODES = ["prompt", "commands", "manual"] as const;
 
 function agentConfig(name: AgentName, value: unknown, path: string): AgentConfig {
   const item = record(value, path);
@@ -40,6 +41,19 @@ function agentConfig(name: AgentName, value: unknown, path: string): AgentConfig
   return result;
 }
 
+function worktreeSetupConfig(value: unknown, path: string): WorktreeSetupConfig {
+  const item = record(value, path);
+  const mode = enumValue(item.mode, `${path}.mode`, WORKTREE_SETUP_MODES);
+  const commands = strings(item.commands, `${path}.commands`);
+  if (mode === "commands" && commands.length === 0) {
+    throw new ValidationError(`${path}.commands`, "must not be empty when mode is commands");
+  }
+  if (mode !== "commands" && commands.length > 0) {
+    throw new ValidationError(`${path}.commands`, "must be empty unless mode is commands");
+  }
+  return { mode, commands };
+}
+
 export function validateOrchestratorConfig(value: unknown, path = "config"): OrchestratorConfig {
   const item = record(value, path);
   const dashboard = record(item.dashboard, `${path}.dashboard`);
@@ -48,6 +62,7 @@ export function validateOrchestratorConfig(value: unknown, path = "config"): Orc
   const agents = {} as Record<AgentName, AgentConfig>;
   for (const name of AGENT_NAMES) agents[name] = agentConfig(name, agentsValue[name], `${path}.agents.${name}`);
   const checks = strings(item.checks, `${path}.checks`);
+  const worktreeSetup = worktreeSetupConfig(item.worktreeSetup, `${path}.worktreeSetup`);
   const schemaVersion = integer(item.schemaVersion, `${path}.schemaVersion`, 1);
   if (schemaVersion > SCHEMA_VERSION) {
     throw new ValidationError(`${path}.schemaVersion`, `unsupported future version ${schemaVersion}`);
@@ -58,6 +73,7 @@ export function validateOrchestratorConfig(value: unknown, path = "config"): Orc
   return {
     schemaVersion,
     checks,
+    worktreeSetup,
     dashboard: {
       enabled: boolean(dashboard.enabled, `${path}.dashboard.enabled`),
       port

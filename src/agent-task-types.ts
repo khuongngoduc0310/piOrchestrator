@@ -1,4 +1,5 @@
 import type { AgentName, SupportedHandoffRole } from "./agent-types.js";
+import type { CheckDiscoveryResult } from "./config-types.js";
 import type { MemoryContext } from "./memory/memory-types.js";
 import type { BaselineReviewContext, CheckResult } from "./workflow-types.js";
 import {
@@ -122,10 +123,9 @@ export interface PlannerOutput {
   risks: string[];
 }
 
-export interface ExplorerTask {
-  route: WorkflowRoute;
-  request: string;
-}
+export type ExplorerTask =
+  | { route: WorkflowRoute; request: string }
+  | { action: "discover_checks" };
 
 export type PlannerTask =
   | { action: "create_plan"; route: WorkflowRoute; request: string; exploration: ExplorerOutput }
@@ -371,7 +371,7 @@ export interface AgentTaskMap {
 }
 
 export interface AgentOutputMap {
-  explorer: ExplorerOutput;
+  explorer: ExplorerOutput | CheckDiscoveryResult;
   planner: PlannerOutput;
   reviewer: ReviewOutput;
   tester: TesterOutput;

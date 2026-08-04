@@ -5,6 +5,7 @@ import {
   parsePlannerOutput,
   parseStructuredJson,
   validateBuilderOutput,
+  validateCheckDiscoveryOutput,
   validateDebuggerOutput,
   validateDocumenterOutput,
   validateExplorerOutput,
@@ -30,6 +31,38 @@ const validPlan = {
   ],
   risks: []
 };
+
+describe("check discovery output validation", () => {
+  it("accepts a valid check discovery result", () => {
+    const result = {
+      packageManager: "npm",
+      commands: ["npm run build:desktop"],
+      scripts: ["build:desktop"],
+      diagnostics: ["full build from package.json"]
+    };
+    expect(validateCheckDiscoveryOutput(result)).toEqual(result);
+  });
+
+  it("accepts empty commands and omitted optional fields", () => {
+    expect(validateCheckDiscoveryOutput({ commands: [], scripts: [], diagnostics: [] })).toEqual({
+      commands: [],
+      scripts: [],
+      diagnostics: []
+    });
+  });
+
+  it("rejects duplicate commands, unknown package managers, and oversized diagnostics", () => {
+    expect(() => validateCheckDiscoveryOutput({ commands: ["npm test", "npm test"], scripts: [], diagnostics: [] }))
+      .toThrow("duplicates");
+    expect(() => validateCheckDiscoveryOutput({ commands: [], scripts: [], diagnostics: [], packageManager: "pip" }))
+      .toThrow("expected one of");
+    const tooLong = "x".repeat(MAX_EVIDENCE_DETAIL_BYTES + 1);
+    expect(() => validateCheckDiscoveryOutput({ commands: [], scripts: [], diagnostics: [tooLong] }))
+      .toThrow("bytes");
+    expect(() => validateCheckDiscoveryOutput({ commands: [""], scripts: [], diagnostics: [] }))
+      .toThrow("must not be empty");
+  });
+});
 
 describe("structured output validation", () => {
   it("accepts raw JSON and exactly one fenced JSON block", () => {

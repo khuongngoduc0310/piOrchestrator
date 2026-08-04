@@ -7,6 +7,17 @@ export interface CheckDiscoveryResult {
   commands: string[];
   scripts: string[];
   diagnostics: string[];
+  worktreeSetupCandidates?: WorktreeSetupCandidate[];
+}
+
+export interface WorktreeSetupCandidate {
+  command: string;
+  evidence: string;
+}
+
+export interface WorktreeSetupConfig {
+  mode: "prompt" | "commands" | "manual";
+  commands: string[];
 }
 
 export interface HumanTouchpoints {
@@ -37,6 +48,7 @@ export interface ParticipationPolicy {
 export interface OrchestratorConfig {
   schemaVersion: number;
   checks: string[];
+  worktreeSetup: WorktreeSetupConfig;
   dashboard: { enabled: boolean; port: number };
   limits: {
     planRevisions: number;

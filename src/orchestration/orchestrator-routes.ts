@@ -16,6 +16,7 @@ import { consumeScopeRevision } from "./scope-revision-budget.js";
 import { runInvestigationPhase } from "./orchestrator-investigation.js";
 import { resolveParticipationPolicy, requiresHumanDecision } from "./participation-policy.js";
 import { requestBugDiagnosisApproval } from "./orchestrator-human-gates.js";
+import { verifyIsolatedWorktreeReadiness } from "./worktree-readiness.js";
 
 export async function runSelectedRoute(
   runtime: OrchestratorRuntime,
@@ -26,6 +27,7 @@ export async function runSelectedRoute(
   switch (workflow.route) {
     case "implementation": {
       const prepared = options.prepared ? planning as ImplementationPlanningResult : await prepareImplementationPhase(runtime, workflow, planning);
+      await verifyIsolatedWorktreeReadiness(runtime, workflow);
       const implementation = await runImplementationPhase(runtime, workflow, prepared);
       const review = await runReviewPhase(runtime, workflow, implementation);
       await runFinalizationPhase(runtime, workflow, review);
@@ -37,8 +39,9 @@ export async function runSelectedRoute(
         : await prepareImplementationPhase(runtime, workflow, planning, {
             allowBaselineRepair: false,
             deferMutation: true
-          });
+      });
       if (options.bugDiagnosis) {
+        await verifyIsolatedWorktreeReadiness(runtime, workflow);
         await runBugFixImplementation(runtime, workflow, prepared, options.bugDiagnosis);
         return;
       }
@@ -65,6 +68,7 @@ export async function runSelectedRoute(
         : await prepareImplementationPhase(runtime, workflow, planning, {
             allowBaselineRepair: false
           });
+      await verifyIsolatedWorktreeReadiness(runtime, workflow);
       const implementation = await runImplementationPhase(runtime, workflow, prepared, undefined, { skipTester: true });
       const review = await runReviewPhase(runtime, workflow, implementation);
       await runFinalizationPhase(runtime, workflow, review);
@@ -75,6 +79,7 @@ export async function runSelectedRoute(
       const prepared = options.prepared
         ? planning as ImplementationPlanningResult
         : await prepareImplementationPhase(runtime, workflow, planning, { allowBaselineRepair: false });
+      await verifyIsolatedWorktreeReadiness(runtime, workflow);
       await runSpecializedMutationRoute(runtime, workflow, prepared);
       return;
     }
@@ -135,6 +140,7 @@ export async function continueBugFixAfterDiagnosis(
     bindings
   });
   await saveWorkflowCheckpoint(runtime, workflow, "bug_diagnosed", { planning, diagnosis }, bindings);
+  await verifyIsolatedWorktreeReadiness(runtime, workflow);
   await runBugFixImplementation(runtime, workflow, planning, diagnosis);
 }
 

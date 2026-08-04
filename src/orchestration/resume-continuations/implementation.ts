@@ -10,6 +10,7 @@ import {
 import { automatedCriteria } from "../acceptance-criteria.js";
 import { requestBugDiagnosisApproval } from "../orchestrator-human-gates.js";
 import { continueBugFixAfterDiagnosis, runSelectedRoute } from "../orchestrator-routes.js";
+import { runApprovedBaselineRepair } from "../orchestrator-planning.js";
 import { runImplementationPhase, type ImplementationContinuation } from "../orchestrator-implementation.js";
 import { runReviewPhase, type ReviewContinuation } from "../orchestrator-review.js";
 import { runFinalizationPhase } from "../orchestrator-finalization.js";
@@ -21,6 +22,26 @@ import { implementationPlanningResult, implementationResult, planningResult, rev
 import { arrayValue, nonNegativeInteger, objectValue, positiveInteger, preflightRemainingRoute, type ContinuationModule } from "./shared.js";
 
 export const implementationContinuations = {
+  baseline_repair_ready: {
+    validate(value) {
+      const item = objectValue(value, "baseline repair-ready checkpoint");
+      planningResult(item.planning);
+      validateCheckResults(item.failedBaseline);
+      validateDebuggerOutput(item.baselineDiagnosis);
+      validatePlannerOutput(item.baselineFixPlan);
+    },
+    async continue(runtime, workflow, checkpoint) {
+      const value = objectValue(checkpoint.cursor.continuation, "baseline repair-ready checkpoint");
+      await runApprovedBaselineRepair(
+        runtime,
+        workflow,
+        planningResult(value.planning),
+        validateCheckResults(value.failedBaseline),
+        validateDebuggerOutput(value.baselineDiagnosis),
+        validatePlannerOutput(value.baselineFixPlan)
+      );
+    }
+  },
   mutation_ready: {
     validate(value) {
       implementationPlanningResult(value);

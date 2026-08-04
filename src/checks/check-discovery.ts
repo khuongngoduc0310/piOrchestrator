@@ -1,6 +1,6 @@
-import { access, readFile } from "node:fs/promises";
+import { access, readdir, readFile } from "node:fs/promises";
 import path from "node:path";
-import type { CheckDiscoveryResult, PackageManager } from "../config-types.js";
+import type { CheckDiscoveryResult, PackageManager, WorktreeSetupCandidate } from "../config-types.js";
 
 const SCRIPT_ORDER = ["test", "typecheck", "lint", "build"] as const;
 const LOCKFILES: Record<PackageManager, string[]> = {
@@ -9,6 +9,22 @@ const LOCKFILES: Record<PackageManager, string[]> = {
   yarn: ["yarn.lock"],
   bun: ["bun.lock", "bun.lockb"]
 };
+
+/** Read the non-empty scripts of the root package.json; an empty record means no manifest or no scripts. */
+export async function readPackageScripts(cwd: string): Promise<Record<string, string>> {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(await readFile(path.join(cwd, "package.json"), "utf8")) as unknown;
+  } catch {
+    return {};
+  }
+  if (!isRecord(parsed) || !isRecord(parsed.scripts)) return {};
+  const scripts: Record<string, string> = {};
+  for (const [name, value] of Object.entries(parsed.scripts)) {
+    if (typeof value === "string" && value.trim()) scripts[name] = value;
+  }
+  return scripts;
+}
 
 export async function discoverProjectChecks(cwd: string): Promise<CheckDiscoveryResult> {
   const diagnostics: string[] = [];
@@ -47,7 +63,44 @@ export async function discoverProjectChecks(cwd: string): Promise<CheckDiscovery
     commands.push(buildCommand(packageManager, scriptName, script));
   }
   if (commands.length === 0) diagnostics.push("No supported test, typecheck, lint, or build scripts were found");
-  return { packageManager, commands, scripts, diagnostics };
+  return {
+    packageManager,
+    commands,
+    scripts,
+    diagnostics,
+    worktreeSetupCandidates: await discoverWorktreeSetupCandidates(cwd)
+  };
+}
+
+/** Discover lockfile-backed, user-reviewable dependency setup commands for isolated worktrees. */
+export async function discoverWorktreeSetupCandidates(cwd: string): Promise<WorktreeSetupCandidate[]> {
+  const directories = [""];
+  try {
+    const entries = await readdir(cwd, { withFileTypes: true });
+    for (const entry of entries) {
+      if (entry.isDirectory() && ![".git", ".pi", "node_modules", "dist", "build"].includes(entry.name)) {
+        directories.push(entry.name);
+      }
+    }
+  } catch {
+    return [];
+  }
+
+  const candidates: WorktreeSetupCandidate[] = [];
+  for (const directory of directories) {
+    const root = path.join(cwd, directory);
+    const manifest = await readPackageManifest(root);
+    if (!manifest) continue;
+    const manager = await detectPackageManager(root, manifest.packageManager, []);
+    if (!manager) continue;
+    const lockfile = await lockfileFor(root, manager);
+    if (!lockfile) continue;
+    candidates.push({
+      command: installCommand(manager, directory),
+      evidence: path.posix.join(directory.replace(/\\/g, "/") || ".", lockfile)
+    });
+  }
+  return candidates;
 }
 
 async function detectPackageManager(
@@ -77,6 +130,37 @@ async function detectPackageManager(
     return undefined;
   }
   return detected[0] ?? "npm";
+}
+
+async function readPackageManifest(cwd: string): Promise<Record<string, unknown> | undefined> {
+  try {
+    const parsed = JSON.parse(await readFile(path.join(cwd, "package.json"), "utf8")) as unknown;
+    return isRecord(parsed) ? parsed : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+async function lockfileFor(cwd: string, manager: PackageManager): Promise<string | undefined> {
+  for (const lockfile of LOCKFILES[manager]) {
+    try {
+      await access(path.join(cwd, lockfile));
+      return lockfile;
+    } catch {
+      // Try the next lockfile alias.
+    }
+  }
+  return undefined;
+}
+
+function installCommand(manager: PackageManager, directory: string): string {
+  const prefix = directory ? ` ${JSON.stringify(directory)}` : "";
+  switch (manager) {
+    case "npm": return directory ? `npm --prefix${prefix} ci` : "npm ci";
+    case "pnpm": return directory ? `pnpm --dir${prefix} install --frozen-lockfile` : "pnpm install --frozen-lockfile";
+    case "yarn": return directory ? `yarn --cwd${prefix} install --frozen-lockfile` : "yarn install --frozen-lockfile";
+    case "bun": return directory ? `bun --cwd${prefix} install --frozen-lockfile` : "bun install --frozen-lockfile";
+  }
 }
 
 function buildCommand(manager: PackageManager, scriptName: (typeof SCRIPT_ORDER)[number], script: string): string {

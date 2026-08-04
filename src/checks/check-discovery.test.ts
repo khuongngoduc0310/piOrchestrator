@@ -1,8 +1,8 @@
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { discoverProjectChecks } from "./check-discovery.js";
+import { discoverProjectChecks, discoverWorktreeSetupCandidates, readPackageScripts } from "./check-discovery.js";
 import type { PackageManager } from "../config-types.js";
 
 const directories: string[] = [];
@@ -74,5 +74,41 @@ describe("project check discovery", () => {
     expect((await discoverProjectChecks(missing)).commands).toEqual([]);
     await writeFile(path.join(missing, "package.json"), "{broken");
     expect((await discoverProjectChecks(missing)).diagnostics.join(" ")).toContain("Could not parse");
+  });
+});
+
+describe("readPackageScripts", () => {
+  it("returns non-empty scripts keyed by name", async () => {
+    const cwd = await project({
+      scripts: { test: "vitest run", build: " ", "build:desktop": "vite build" }
+    });
+    expect(await readPackageScripts(cwd)).toEqual({ test: "vitest run", "build:desktop": "vite build" });
+  });
+
+  it("returns an empty record for missing or malformed manifests and non-script objects", async () => {
+    const missing = await mkdtemp(path.join(os.tmpdir(), "pi-check-discovery-"));
+    directories.push(missing);
+    expect(await readPackageScripts(missing)).toEqual({});
+    await writeFile(path.join(missing, "package.json"), "{broken");
+    expect(await readPackageScripts(missing)).toEqual({});
+    await writeFile(path.join(missing, "package.json"), JSON.stringify({ name: "x" }));
+    expect(await readPackageScripts(missing)).toEqual({});
+  });
+});
+
+describe("isolated worktree setup discovery", () => {
+  it("proposes only lockfile-backed root and child dependency installs", async () => {
+    const cwd = await project({ packageManager: "npm@11", scripts: { test: "vitest run" } });
+    await writeFile(path.join(cwd, "package-lock.json"), "{}");
+    await mkdir(path.join(cwd, "desktop"));
+    await writeFile(path.join(cwd, "desktop", "package.json"), JSON.stringify({ packageManager: "pnpm@10" }));
+    await writeFile(path.join(cwd, "desktop", "pnpm-lock.yaml"), "lockfileVersion: '9.0'");
+    await mkdir(path.join(cwd, "web"));
+    await writeFile(path.join(cwd, "web", "package.json"), JSON.stringify({ packageManager: "npm@11" }));
+
+    expect(await discoverWorktreeSetupCandidates(cwd)).toEqual([
+      { command: "npm ci", evidence: "package-lock.json" },
+      { command: "pnpm --dir \"desktop\" install --frozen-lockfile", evidence: "desktop/pnpm-lock.yaml" }
+    ]);
   });
 });

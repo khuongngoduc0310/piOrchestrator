@@ -1,6 +1,7 @@
 export { ValidationError, isRecord, parseStructuredJson } from "./validation-core.js";
 export {
   parseBuilderOutput,
+  parseCheckDiscoveryOutput,
   parseDebuggerOutput,
   parseDocumenterOutput,
   parseExplorerOutput,
@@ -9,6 +10,7 @@ export {
   parseReviewOutput,
   parseTesterOutput,
   validateBuilderOutput,
+  validateCheckDiscoveryOutput,
   validateDebuggerOutput,
   validateDocumenterOutput,
   validateExplorerOutput,

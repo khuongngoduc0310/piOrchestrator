@@ -1,10 +1,11 @@
-import { ensureChecksConfigured } from "../checks/check-setup.js";
+import { ensureChecksConfigured, ensureWorktreeSetupConfigured, suggestCheckConfigRepair } from "../checks/check-setup.js";
+import { discoverProjectChecks } from "../checks/check-discovery.js";
 import { formatApprovedPlan, formatBaselineReport } from "../ui/session-messages.js";
 import { formatPlanForReview } from "./plan-review.js";
-import { parseBuilderOutput, parseDebuggerOutput, parseExplorerOutput, parsePlannerOutput, parseReviewOutput } from "../validation.js";
+import { parseBuilderOutput, parseCheckDiscoveryOutput, parseDebuggerOutput, parseExplorerOutput, parsePlannerOutput, parseReviewOutput } from "../validation.js";
 import type { CheckResult, HumanPlanReviewResult } from "../workflow-types.js";
 import type { DebuggerOutput } from "../workflow-shared.js";
-import type { OrchestratorConfig } from "../config-types.js";
+import type { CheckDiscoveryResult, OrchestratorConfig } from "../config-types.js";
 import type { PlannerOutput } from "../agent-task-types.js";
 import type { ImplementationPlanningResult, PlanningResult, WorkflowContext } from "./orchestrator-context.js";
 import type { OrchestratorRuntime } from "./orchestrator-runtime.js";
@@ -20,6 +21,31 @@ import { canonicalSha256, deriveMutationPathScope } from "../workspace/workspace
 import { assertBuilderComplete } from "./mutation-completion.js";
 import { requiredAgentsForRoute } from "./route-preflight.js";
 import { resolveParticipationPolicy, requiresHumanDecision } from "./participation-policy.js";
+import { AgentCancelledError } from "../agents/agent-runner.js";
+import { provisionIsolatedWorktreeDependencies } from "./worktree-readiness.js";
+
+async function discoverCheckCommands(
+  runtime: OrchestratorRuntime,
+  workflow: WorkflowContext,
+  ctx: WorkflowContext["ctx"]
+): Promise<CheckDiscoveryResult> {
+  try {
+    return await runAgentStep(
+      runtime,
+      "explorer",
+      "preflight",
+      "Discover project check commands",
+      { action: "discover_checks" },
+      workflow.cwd,
+      ctx,
+      parseCheckDiscoveryOutput
+    );
+  } catch (error) {
+    if (error instanceof AgentCancelledError) throw error;
+    ctx.ui.notify("Agent check discovery failed; using static detection.", "warning");
+    return discoverProjectChecks(workflow.cwd);
+  }
+}
 
 export async function runPlanningPhase(runtime: OrchestratorRuntime, workflow: WorkflowContext): Promise<PlanningResult> {
   const { request, ctx, cwd, config, controller } = workflow;
@@ -173,24 +199,40 @@ export async function prepareImplementationPhase(
     await persist(runtime, ctx);
   }
   let configured: OrchestratorConfig;
+  let discovery: Promise<CheckDiscoveryResult> | undefined;
+  const discover = (): Promise<CheckDiscoveryResult> => discovery ??= discoverCheckCommands(runtime, workflow, ctx);
   try {
-    const result = await ensureChecksConfigured(cwd, workflow.config, ctx);
+    const result = await ensureChecksConfigured(cwd, workflow.config, ctx, {
+      discover
+    });
     if (!result) throw new WorkflowCancelledError("Workflow cancelled during project check setup", "human_gate");
-    configured = result;
+    configured = await ensureWorktreeSetupConfigured(cwd, result, ctx, { discover });
   } finally {
     runtime.requireState().waitingFor = undefined;
   }
   workflow.config = configured;
   runtime.config = configured;
-  const config = configured;
+  let config = configured;
   await saveWorkflowCheckpoint(runtime, workflow, "checks_configured", planning, {
     exploration: planning.exploration,
     plan: planning.plan
   });
 
-  const baseline = await runCheckStep(runtime, "baseline", "Run green baseline", cwd, ctx, { requireGreen: false });
+  let baseline = await runCheckStep(runtime, "baseline", "Run green baseline", cwd, ctx, { requireGreen: false });
   let baselineDiagnosis;
   if (!allGreen(baseline, config.checks.length)) {
+    const repairedConfig = await suggestCheckConfigRepair(cwd, config, baseline, ctx);
+    if (repairedConfig) {
+      workflow.config = repairedConfig;
+      runtime.config = repairedConfig;
+      config = repairedConfig;
+      await saveWorkflowCheckpoint(runtime, workflow, "checks_configured", planning, {
+        exploration: planning.exploration,
+        plan: planning.plan
+      });
+      baseline = await runCheckStep(runtime, "baseline", "Verify baseline after check update", cwd, ctx, { requireGreen: false });
+    }
+    if (!allGreen(baseline, config.checks.length)) {
     if (options.allowBaselineRepair === false) throw new Error(`${workflow.route} requires a green baseline before mutation`);
     else {
     ctx.ui.notify("Baseline checks are not all green. Diagnosing failures...", "warning");
@@ -219,6 +261,7 @@ export async function prepareImplementationPhase(
     }
     return continueBaselineRepair(runtime, workflow, planning, baseline, baselineDiagnosis, baselineFixPlan);
     }
+    }
   }
   const result = { ...planning, baseline, scopeRevisionCount: 0, ...(baselineDiagnosis ? { baselineDiagnosis } : {}) };
   if (!options.deferMutation) {
@@ -246,7 +289,7 @@ export async function continueBaselineRepair(
   recordedDecision?: HumanPlanReviewResult,
   recordedMutationConfirmation = false
 ): Promise<ImplementationPlanningResult> {
-  const { request, ctx, store } = workflow;
+  const { ctx, store } = workflow;
   deriveMutationPathScope(baselineFixPlan);
   await store.saveJson("baseline-fix-plan.json", baselineFixPlan);
   const fixDecision = recordedDecision ?? await runDurableHumanGate(
@@ -292,6 +335,33 @@ export async function continueBaselineRepair(
       diagnosis: baselineDiagnosis
     }
   }, recordedMutationConfirmation);
+  const bindings = {
+    exploration: planning.exploration,
+    plan: planning.plan,
+    proposedPlan: baselineFixPlan,
+    baselineChecks: failedBaseline,
+    diagnosis: baselineDiagnosis
+  };
+  await saveWorkflowCheckpoint(runtime, workflow, "baseline_repair_ready", {
+    planning,
+    failedBaseline,
+    baselineDiagnosis,
+    baselineFixPlan
+  }, bindings);
+  return runApprovedBaselineRepair(runtime, workflow, planning, failedBaseline, baselineDiagnosis, baselineFixPlan);
+}
+
+/** Continue a baseline repair after its approval and worktree creation were checkpointed. */
+export async function runApprovedBaselineRepair(
+  runtime: OrchestratorRuntime,
+  workflow: WorkflowContext,
+  planning: PlanningResult,
+  failedBaseline: CheckResult[],
+  baselineDiagnosis: DebuggerOutput,
+  baselineFixPlan: PlannerOutput
+): Promise<ImplementationPlanningResult> {
+  const { request, ctx } = workflow;
+  await provisionIsolatedWorktreeDependencies(runtime, workflow);
   const repairOutput = await runAgentStep(
     runtime,
     "builder",

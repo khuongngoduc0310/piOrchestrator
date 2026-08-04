@@ -14,6 +14,7 @@ export interface CheckpointContinuationMap {
   plan_approved: unknown;
   checks_configured: unknown;
   mutation_ready: unknown;
+  baseline_repair_ready: unknown;
   bug_diagnosis_ready: unknown;
   bug_diagnosed: unknown;
   tester_completed: unknown;

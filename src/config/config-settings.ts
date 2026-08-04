@@ -82,6 +82,7 @@ async function configureWorkflowSettings(
       "Retry limits  — plan, implementation, and review cycles",
       "Timeouts & output  — agent, check, and output size limits",
       "Mutation isolation  — verify the complete mutation phase in a git worktree",
+      "Worktree setup  — dependency commands for isolated worktrees",
       "Human review  — plan approval, revision review, mutation guard, important decisions",
       "Dashboard  — enable/disable and port",
       SAVE_ALL,
@@ -111,6 +112,8 @@ async function configureWorkflowSettings(
       await editTimeouts(ctx, staged);
     } else if (choice.startsWith("Mutation isolation")) {
       await editIsolation(ctx, staged);
+    } else if (choice.startsWith("Worktree setup")) {
+      await editWorktreeSetup(ctx, staged);
     } else if (choice.startsWith("Human review")) {
       await editHumanReview(ctx, staged);
     } else if (choice.startsWith("Dashboard")) {
@@ -195,6 +198,44 @@ async function editIsolation(ctx: ExtensionCommandContext, staged: StagedConfig)
   if (!choice || choice === BACK) return;
   cfg.limits.worktreeIsolation = !current;
   ctx.ui.notify(`Mutation isolation ${cfg.limits.worktreeIsolation ? "enabled" : "disabled"}`, "info");
+}
+
+async function editWorktreeSetup(ctx: ExtensionCommandContext, staged: StagedConfig): Promise<void> {
+  const cfg = staged.config;
+  while (true) {
+    const setup = cfg.worktreeSetup;
+    const choice = await ctx.ui.select("Isolated worktree setup", [
+      `Mode: ${setup.mode}`,
+      `Commands: ${setup.commands.length}`,
+      BACK
+    ]);
+    if (!choice || choice === BACK) return;
+    if (choice.startsWith("Mode:")) {
+      const mode = await ctx.ui.select("Worktree setup mode", [
+        "Prompt — discover and review commands before a new workflow",
+        "Commands — run the approved commands after mutation approval",
+        "Manual — never run setup commands automatically",
+        BACK
+      ]);
+      if (!mode || mode === BACK) continue;
+      if (mode.startsWith("Prompt")) cfg.worktreeSetup = { mode: "prompt", commands: [] };
+      else if (mode.startsWith("Manual")) cfg.worktreeSetup = { mode: "manual", commands: [] };
+      else if (cfg.worktreeSetup.commands.length === 0) {
+        ctx.ui.notify("Add at least one command before selecting commands mode.", "warning");
+      } else {
+        cfg.worktreeSetup.mode = "commands";
+      }
+    } else if (choice.startsWith("Commands:")) {
+      const edited = await ctx.ui.editor("Edit isolated worktree setup commands (one command per line)", setup.commands.join("\n"));
+      if (edited === undefined) continue;
+      const commands = normalizeCommandLines(edited);
+      if (commands.length === 0) {
+        ctx.ui.notify("Use Prompt or Manual mode when no setup commands are needed.", "warning");
+        continue;
+      }
+      cfg.worktreeSetup = { mode: "commands", commands };
+    }
+  }
 }
 
 async function editHumanReview(ctx: ExtensionCommandContext, staged: StagedConfig): Promise<void> {
@@ -305,6 +346,7 @@ function buildSettingsSummary(cfg: OrchestratorConfig): string {
     `Retries: plan=${cfg.limits.planRevisions} impl=${cfg.limits.implementationRetries} review=${cfg.limits.reviewRevisions}`,
     `Timeouts: agent=${fmtMs(cfg.limits.agentTimeoutMs)} · check=${fmtMs(cfg.limits.checkTimeoutMs)} · output=${fmtBytes(cfg.limits.maxOutputBytes)}`,
     `Isolation: ${cfg.limits.worktreeIsolation ? "worktree" : "off"}`,
+    `Worktree setup: ${cfg.worktreeSetup.mode}${cfg.worktreeSetup.commands.length ? ` (${cfg.worktreeSetup.commands.length} command${cfg.worktreeSetup.commands.length === 1 ? "" : "s"})` : ""}`,
     summaryLine,
     `Dashboard: ${cfg.dashboard.enabled ? `on (port ${cfg.dashboard.port})` : "off"}`
   ].join("\n");
@@ -316,6 +358,7 @@ function changedFields(cfg: OrchestratorConfig): string[] {
   changes.push(`Timeouts: agent=${fmtMs(cfg.limits.agentTimeoutMs)} · check=${fmtMs(cfg.limits.checkTimeoutMs)}`);
   changes.push(`Output: ${fmtBytes(cfg.limits.maxOutputBytes)}`);
   changes.push(`Worktree: ${cfg.limits.worktreeIsolation ? "on" : "off"}`);
+  changes.push(`Worktree setup: ${cfg.worktreeSetup.mode}${cfg.worktreeSetup.commands.length ? ` (${cfg.worktreeSetup.commands.length})` : ""}`);
   const profile = inferParticipationProfile(cfg.humanInTheLoop);
   changes.push(`Participation: ${profile === "custom" ? "Custom" : PROFILE_DESCRIPTIONS[profile].label}`);
   changes.push(`Dashboard: ${cfg.dashboard.enabled ? `port ${cfg.dashboard.port}` : "off"}`);
@@ -327,6 +370,10 @@ function fmtMs(ms: number): string {
   if (seconds >= 3600) return `${(seconds / 3600).toFixed(1)}h`;
   if (seconds >= 60) return `${Math.round(seconds / 60)}m`;
   return `${seconds}s`;
+}
+
+function normalizeCommandLines(value: string): string[] {
+  return [...new Set(value.split(/\r?\n/).map(command => command.trim()).filter(Boolean))];
 }
 
 function fmtBytes(bytes: number): string {

@@ -38,6 +38,7 @@ export const CHECKPOINT_CURSOR_KINDS = [
   "plan_approved",
   "checks_configured",
   "mutation_ready",
+  "baseline_repair_ready",
   "bug_diagnosis_ready",
   "bug_diagnosed",
   "tester_completed",
